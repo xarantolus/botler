@@ -28,7 +28,8 @@ fn backup_archives_facts_not_derived_state() {
     for want in ["hub.db", "secrets.key", "repo.git", "repo.git/HEAD", "sessions", "workspaces", "homes", "uploads"] {
         assert!(list.iter().any(|e| e == want), "{want} missing from {list:?}");
     }
-    for derived in ["exports", "worktrees", "logs", "agent-dirs", "assets"] {
+    assert!(data.join("search.db").exists(), "the hub creates its search index");
+    for derived in ["exports", "worktrees", "logs", "agent-dirs", "assets", "search.db"] {
         assert!(!list.iter().any(|e| e.starts_with(derived)), "{derived} archived: {list:?}");
     }
     assert!(!dir.path().join("b.staging").exists());

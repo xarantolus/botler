@@ -267,7 +267,7 @@ async fn template_status(paths: Paths) -> anyhow::Result<()> {
 }
 
 /// Data directory entries that are facts. Everything else (exports, worktrees, logs, agent-dirs,
-/// assets, images) is derived and rebuilt by the hub.
+/// assets, images, the search index `search.db`) is derived and rebuilt by the hub.
 const BACKUP_DIRS: &[&str] = &["repo.git", "memory.git", "sessions", "workspaces", "homes", "shared-homes", "uploads"];
 
 async fn backup(paths: &Paths, dest: &std::path::Path, with_key: bool) -> anyhow::Result<()> {

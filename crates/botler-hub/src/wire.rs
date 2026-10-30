@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::api::{Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, RevertRequest, SecretValue, UserMessage};
 use crate::ops::{GetRunLogs, IdArg, ProposalDetail, RunLogs};
 use crate::phase::WakePhase;
+use crate::search::{SearchQuery, SearchResults};
 use crate::secret_requests::{NewField, Submission};
 use crate::sessions::Item;
 
@@ -265,6 +266,7 @@ routes! {
     submit_secrets: POST "/api/v1/dialogs/{id}/secrets", body: Submission => SecretsOutcome;
     events: GET "/api/v1/events", query: EventsQuery => Vec<Event>;
     trace: GET "/api/v1/events/{id}/trace" => Trace;
+    search: GET "/api/v1/search", query: SearchQuery => SearchResults;
     instances: GET "/api/v1/instances" => Vec<Instance>;
     session: GET "/api/v1/sessions/{instance}" => SessionView;
     new_chat: POST "/api/v1/chats", body: NewChat => ChatCreated;

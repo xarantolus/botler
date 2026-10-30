@@ -18,6 +18,10 @@ impl Paths {
     pub fn db(&self) -> PathBuf {
         self.root.join("hub.db")
     }
+    /// The full-text search index: derived data only, rebuilt when deleted (never backed up).
+    pub fn search_db(&self) -> PathBuf {
+        self.root.join("search.db")
+    }
     pub fn secret_key(&self) -> PathBuf {
         self.root.join("secrets.key")
     }
