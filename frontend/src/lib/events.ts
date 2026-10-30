@@ -14,6 +14,7 @@ const BUILTIN = {
   "agent.idle": true,
   timer: true,
   schedule: true,
+  "access.changed": true,
 } as const satisfies Record<BuiltinPayload["type"], true>;
 
 /** The typed payload of a built-in event, or null for agent-defined event types. */
@@ -34,6 +35,7 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   "agent.idle": "i-lucide-moon",
   timer: "i-lucide-alarm-clock",
   schedule: "i-lucide-calendar-clock",
+  "access.changed": "i-lucide-shield-plus",
 };
 
 /** An icon for an event type (agent-defined types get a generic one). */
@@ -82,6 +84,8 @@ export function eventSummary(ev: BotlerEvent): string {
       return `timer ${b.payload.timer_id}${b.payload.note ? `: ${b.payload.note}` : ""}`;
     case "schedule":
       return `schedule ${b.payload.trigger}${b.payload.skipped ? ` (${b.payload.skipped} missed)` : ""}`;
+    case "access.changed":
+      return `${b.payload.resource} ${b.payload.change}`;
   }
 }
 

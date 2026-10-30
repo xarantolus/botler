@@ -15,11 +15,12 @@ export const SOURCE_LABELS: Record<SearchSource, string> = {
   memory: "Memory",
   event: "Events",
   repo: "Monorepo",
+  event_type: "Event types",
 };
 
 /** Hits per source, in a fixed order, keeping the ranking within each source. */
 export function groupHits(hits: SearchHit[]): { source: SearchSource; hits: SearchHit[] }[] {
-  const order: SearchSource[] = ["session", "memory", "event", "repo"];
+  const order: SearchSource[] = ["session", "memory", "event", "repo", "event_type"];
   return order
     .map((source) => ({ source, hits: hits.filter((h) => h.source === source) }))
     .filter((g) => g.hits.length);

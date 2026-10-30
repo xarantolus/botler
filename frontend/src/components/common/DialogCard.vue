@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// One dialog (a question, a credentials request or an approval), shown inline in its chat and in
+// One dialog (a question, a credentials request, an access request or an approval), shown inline in its chat and in
 // the requests inbox. Open dialogs are interactive; answered, aborted and expired ones show their
 // outcome read-only.
 import { computed, reactive, ref } from "vue";
@@ -26,6 +26,7 @@ const KIND = {
   question: { label: "Question", icon: "i-lucide-message-circle-question", color: "info" },
   approval: { label: "Approval", icon: "i-lucide-shield-question", color: "primary" },
   credentials: { label: "Secrets", icon: "i-lucide-key-round", color: "info" },
+  access: { label: "Access", icon: "i-lucide-shield-plus", color: "warning" },
 } as const;
 const kind = computed(() => KIND[d.value.kind]);
 
@@ -64,11 +65,18 @@ async function submitSecrets(decline: boolean) {
   }
 }
 
+/** How a secret is delivered; keys under `~/.ssh` are called what they are. */
+function fieldKind(file: string | null | undefined): string {
+  if (!file) return "Environment variable";
+  return file.includes("/.ssh/") ? `SSH private key at ${file}` : `File ${file}`;
+}
+
 const formComplete = computed(() => (view.value.form ?? []).every((f) => values[f.name]));
 
 function ctaButton(c: string) {
-  if (c === "approve") return { color: "primary" as const, variant: "solid" as const, icon: "i-lucide-check" };
-  if (c === "reject") return { color: "error" as const, variant: "soft" as const, icon: "i-lucide-x" };
+  if (c === "approve" || c === "allow for this chat")
+    return { color: "primary" as const, variant: "solid" as const, icon: "i-lucide-check" };
+  if (c === "reject" || c === "deny") return { color: "error" as const, variant: "soft" as const, icon: "i-lucide-x" };
   return { color: "neutral" as const, variant: "outline" as const, icon: undefined };
 }
 
@@ -136,7 +144,7 @@ function onFreeKey(e: KeyboardEvent) {
           v-for="f in view.form ?? []"
           :key="f.name"
           :name="f.name"
-          :description="[f.file ? `File ${f.file}` : 'Environment variable', f.description].filter(Boolean).join(' · ')"
+          :description="[fieldKind(f.file), f.description].filter(Boolean).join(' · ')"
           :ui="{ label: 'font-mono' }"
           :label="f.name"
           required
