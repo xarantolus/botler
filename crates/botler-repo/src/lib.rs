@@ -301,6 +301,15 @@ impl Repo {
         self.git(&["diff", "--no-color", "--stat", "--patch", base, head]).await
     }
 
+    /// What `head` changes since its merge base with `base`, with renames detected, as git
+    /// reports it: `--numstat -z` (counts and paths) and the patch, files in the same order.
+    pub async fn diff_files(&self, base: &str, head: &str) -> Result<(String, String)> {
+        let range = format!("{base}...{head}");
+        let numstat = self.git(&["diff", "--no-color", "--no-ext-diff", "-M", "--numstat", "-z", &range]).await?;
+        let patch = self.git(&["diff", "--no-color", "--no-ext-diff", "-M", "--patch", &range]).await?;
+        Ok((numstat, patch))
+    }
+
     pub async fn log_subjects(&self, base: &str, head: &str) -> Result<Vec<String>> {
         let out = self.git(&["log", "--format=%h %s", &format!("{base}..{head}")]).await?;
         Ok(out.lines().map(String::from).collect())

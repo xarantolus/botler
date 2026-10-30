@@ -9,8 +9,8 @@ export interface ConfirmOptions {
   description?: string;
   confirmLabel: string;
   color?: "primary" | "warning" | "error";
-  /** Ask for an optional reason (returned in the result). */
-  reason?: { label: string; placeholder?: string };
+  /** Ask for a reason (returned in the result); optional unless `required`. */
+  reason?: { label: string; placeholder?: string; required?: boolean };
 }
 
 let modal: ReturnType<ReturnType<typeof useOverlay>["create"]> | null = null;
@@ -20,4 +20,25 @@ export async function confirm(o: ConfirmOptions): Promise<{ reason: string } | n
   modal ??= useOverlay().create(ConfirmModal);
   const result: unknown = await modal.open(o);
   return result && typeof result === "object" && "reason" in result ? (result as { reason: string }) : null;
+}
+
+/** The user's decision on a proposal: approving takes an optional comment, rejecting a reason.
+ * Both reach the proposing agent. */
+export function confirmDecision(approve: boolean, title?: string): Promise<{ reason: string } | null> {
+  return confirm(
+    approve
+      ? {
+          title: title ? `Approve "${title}"?` : "Approve this change?",
+          description: "It merges into main and is applied right away.",
+          confirmLabel: "Approve",
+          reason: { label: "Comment for the agent", placeholder: "Anything it should know" },
+        }
+      : {
+          title: title ? `Reject "${title}"?` : "Reject this change?",
+          description: "Its checks stop where they are. The agent reads your reason before trying again.",
+          confirmLabel: "Reject",
+          color: "error",
+          reason: { label: "Reason", placeholder: "What is wrong, or what should change", required: true },
+        },
+  );
 }
