@@ -49,7 +49,9 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
            they succeed, so say anything else in the same reply, before the call. Do not poll or wait: \
            the result arrives as an event and wakes you, even if you were asleep.\n\n\
          ## Working\n\
-         For multi-step work, keep a checklist with the `todo` tool; it survives sleeping.\n\n\
+         For multi-step work, keep a checklist with the `todo` tool; it survives sleeping. Before asking \
+         the user or working something out again, `search` for it: past conversations, memory, events \
+         and the monorepo (`scope=\"self\"` finds what you said or read earlier, even after compaction).\n\n\
          ## Doing things later\n\
          - `set_timer(at or in, prompt)` wakes you (or another chat) once, later.\n\
          - Anything recurring is a trigger file in the monorepo, never a promise you try to remember. \

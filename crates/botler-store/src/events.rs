@@ -56,6 +56,17 @@ impl Store {
         rows.iter().map(|r| decode(r.get::<&str, _>("body"))).collect()
     }
 
+    /// Events journaled after `after` (all when `None`), oldest first: ids are UUIDv7, so they
+    /// sort by time. What the search indexer reads.
+    pub async fn events_after(&self, after: Option<&str>, limit: u32) -> Result<Vec<Event>> {
+        let rows = sqlx::query("SELECT body FROM events WHERE id > ? ORDER BY id LIMIT ?")
+            .bind(after.unwrap_or(""))
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(|r| decode(r.get::<&str, _>("body"))).collect()
+    }
+
     pub async fn mark_routed(&self, id: &str) -> Result<()> {
         sqlx::query("UPDATE events SET routed = 1 WHERE id = ?").bind(id).execute(&self.pool).await?;
         Ok(())

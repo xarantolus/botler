@@ -131,9 +131,6 @@ fn everyone(_: &Caller) -> bool {
 fn agents(c: &Caller) -> bool {
     !matches!(c.principal, Principal::Run { .. })
 }
-fn session_readers(c: &Caller) -> bool {
-    c.may(Capability::ReadSessions)
-}
 fn incident_handlers(c: &Caller) -> bool {
     c.may(Capability::Incidents)
 }
@@ -249,9 +246,15 @@ pub const OPS: &[OpSpec] = &[
     },
     OpSpec {
         name: "read_session",
-        description: "Read the recent messages of another instance's session (what it has been doing).",
+        description: "Read the recent messages of a session: your own, or another instance's (what it has been doing) if you may. `around` (an entry id from `search`) reads the messages around that entry instead.",
         schema: schema::<ReadSession>,
-        visible: session_readers,
+        visible: agents,
+    },
+    OpSpec {
+        name: "search",
+        description: "Full-text search over sessions, memory notes, the event journal and the monorepo, best matches first. `scope=\"self\"` searches only your own conversation (including what was compacted away) and your memory. Session results: read the context with `read_session(instance=owner, around=ref)`.",
+        schema: schema::<crate::search::Search>,
+        visible: agents,
     },
     OpSpec {
         name: "memory_write",
@@ -474,6 +477,12 @@ pub struct ReadSession {
     /// How many of the most recent messages (default 20, max 200).
     #[serde(default)]
     pub last: Option<u32>,
+    /// An entry id (from `search`): read the messages around it instead of the latest.
+    #[serde(default)]
+    pub around: Option<String>,
+    /// With `around`: how many messages before and after it (default 5, max 50).
+    #[serde(default)]
+    pub n: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -710,7 +719,8 @@ pub async fn call(hub: &std::sync::Arc<Hub>, caller: &Caller, name: &str, input:
             Ok(json!({ "cancelled": closed, "id": a.id }))
         }
         n if n.starts_with("memory_") => crate::memory::call(hub, caller, n, input).await,
-        "read_session" => read_session(hub, args(input)?).await,
+        "read_session" => read_session(hub, caller, args(input)?).await,
+        "search" => to_json(&crate::search::search(hub, caller, args(input)?).await?),
         "get_events" => get_events(hub, args(input)?).await,
         "ask_user" => ask_user(hub, caller, args(input)?).await,
         "get_run_logs" => get_run_logs(hub, args(input)?).await,
@@ -975,39 +985,54 @@ async fn list_chats(hub: &Hub) -> OpResult {
     Ok(json!({ "chats": instances, "agent_definitions": defs }))
 }
 
-async fn read_session(hub: &Hub, a: ReadSession) -> OpResult {
+async fn read_session(hub: &Hub, caller: &Caller, a: ReadSession) -> OpResult {
     let inst = hub
         .store
         .resolve_instance(&a.instance)
         .await?
         .ok_or_else(|| OpError::BadRequest(format!("no chat named {}", a.instance)))?;
+    if caller.instance() != Some(inst.name.as_str()) {
+        caller.require(Capability::ReadSessions)?;
+    }
     let path = hub.paths.sessions(&inst.name).join(&inst.session_file);
-    let last = a.last.unwrap_or(20).min(200) as usize;
     let text = match tokio::fs::read_to_string(&path).await {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(json!({ "messages": [] })),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(json!({ "instance": inst.name, "messages": [] }));
+        }
         Err(e) => return Err(HubError::Io(e).into()),
     };
+    // Every entry in file order: compaction keeps the history, so this includes what was compacted.
     let msgs: Vec<Value> = text
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|e| e.get("type").and_then(Value::as_str) == Some("message"))
-        .filter_map(|e| {
-            let m = e.get("message")?;
-            let role = m.get("role")?.as_str()?;
-            if role == "system" {
-                return None;
-            }
-            let text: String = m
-                .get("content")
-                .and_then(Value::as_array)
-                .map(|c| c.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"))
-                .unwrap_or_default();
-            Some(json!({ "role": role, "text": text.chars().take(4000).collect::<String>(), "at": e.get("timestamp") }))
+        .filter_map(|e| crate::sessions::parse_entry(&e))
+        .filter_map(|item| {
+            use crate::sessions::Item;
+            let (id, at, role, text) = match item {
+                Item::User { id, at, text, .. } => (id, at, "user", text),
+                Item::Assistant { id, at, text, .. } => (id, at, "assistant", text),
+                Item::ToolResult { id, at, text, .. } => (id, at, "toolResult", text),
+                Item::Note { id, at, text, .. } => (id, at, "note", text),
+                Item::Compaction { id, at, summary } => (id, at, "compaction", summary),
+            };
+            (!text.is_empty()).then(
+                || json!({ "id": id, "role": role, "text": text.chars().take(4000).collect::<String>(), "at": at }),
+            )
         })
         .collect();
-    let start = msgs.len().saturating_sub(last);
-    Ok(json!({ "instance": inst.name, "messages": msgs[start..] }))
+    let range = match &a.around {
+        Some(entry) => {
+            let i = msgs
+                .iter()
+                .position(|m| m["id"] == entry.as_str())
+                .ok_or_else(|| OpError::BadRequest(format!("no message {entry} in {}'s current session", inst.name)))?;
+            let n = a.n.unwrap_or(5).min(50) as usize;
+            i.saturating_sub(n)..(i + n + 1).min(msgs.len())
+        }
+        None => msgs.len().saturating_sub(a.last.unwrap_or(20).min(200) as usize)..msgs.len(),
+    };
+    Ok(json!({ "instance": inst.name, "messages": msgs[range] }))
 }
 
 async fn get_events(hub: &Hub, a: GetEvents) -> OpResult {
