@@ -18,6 +18,7 @@ For "check once a day", use a oneshot job with a `cron` trigger instead.
 # packages/shared/src/shared/events.py (or your own package)
 class MailReceived(botler.Event):
     """A new mail arrived in a watched folder."""
+
     type: ClassVar[str] = "mail.received"
     folder: str
     sender: str
@@ -86,6 +87,7 @@ To keep a service defined but not running, set `enabled = false` (as the example
 ```python
 """Watch an IMAP folder; emit mail.received per new mail. Secrets (group `imap`): IMAP_HOST,
 IMAP_USER, IMAP_PASSWORD."""
+
 import imaplib, os, time
 from email.parser import BytesHeaderParser
 from email.utils import parseaddr
@@ -94,6 +96,7 @@ from shared.events import MailReceived
 
 FOLDER = "INBOX"
 
+
 def poll(conn: imaplib.IMAP4_SSL) -> None:
     last = int(botler.state.get("uid") or "0")
     conn.select(FOLDER, readonly=True)
@@ -101,10 +104,13 @@ def poll(conn: imaplib.IMAP4_SSL) -> None:
     for uid in sorted(int(u) for u in data[0].split() if int(u) > last):
         _, msg = conn.uid("FETCH", str(uid), "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
         h = BytesHeaderParser().parsebytes(msg[0][1])
-        botler.emit(MailReceived(folder=FOLDER, sender=parseaddr(h["From"])[1],
-                                 subject=h["Subject"] or "", uid=uid), provenance="untrusted")
-        botler.state.set("uid", str(uid))   # after the emit
+        botler.emit(
+            MailReceived(folder=FOLDER, sender=parseaddr(h["From"])[1], subject=h["Subject"] or "", uid=uid),
+            provenance="untrusted",
+        )
+        botler.state.set("uid", str(uid))  # after the emit
     botler.health.ok()
+
 
 def main() -> None:
     conn = imaplib.IMAP4_SSL(os.environ["IMAP_HOST"])
