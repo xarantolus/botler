@@ -61,15 +61,17 @@ impl SecretKey {
 
 impl Store {
     pub async fn set_secret(&self, key: &SecretKey, name: &str, value: &str) -> Result<()> {
+        self.set_secret_bytes(key, name, value.as_bytes()).await
+    }
+
+    /// Store a value that need not be text (file secrets such as keystores).
+    pub async fn set_secret_bytes(&self, key: &SecretKey, name: &str, value: &[u8]) -> Result<()> {
         let cipher = XChaCha20Poly1305::new(&key.0);
         let mut nonce = [0u8; 24];
         rand::rng().fill_bytes(&mut nonce);
         // The name is bound as associated data so a ciphertext cannot be moved to another name.
         let ct = cipher
-            .encrypt(
-                &XNonce::from(nonce),
-                chacha20poly1305::aead::Payload { msg: value.as_bytes(), aad: name.as_bytes() },
-            )
+            .encrypt(&XNonce::from(nonce), chacha20poly1305::aead::Payload { msg: value, aad: name.as_bytes() })
             .map_err(|_| Error::Encrypt(name.into()))?;
         sqlx::query(
             "INSERT INTO secrets (name, nonce, ciphertext, updated_at) VALUES (?, ?, ?, ?)
@@ -84,7 +86,16 @@ impl Store {
         Ok(())
     }
 
+    /// A text value (env vars). Binary values fail with [`Error::NotUtf8`].
     pub async fn secret(&self, key: &SecretKey, name: &str) -> Result<Option<String>> {
+        match self.secret_bytes(key, name).await? {
+            None => Ok(None),
+            Some(b) => String::from_utf8(b).map(Some).map_err(|_| Error::NotUtf8(name.into())),
+        }
+    }
+
+    /// The exact stored bytes (file secrets).
+    pub async fn secret_bytes(&self, key: &SecretKey, name: &str) -> Result<Option<Vec<u8>>> {
         let Some(r) = sqlx::query("SELECT nonce, ciphertext FROM secrets WHERE name = ?")
             .bind(name)
             .fetch_optional(&self.pool)
@@ -101,7 +112,7 @@ impl Store {
         let pt = cipher
             .decrypt(&XNonce::from(nonce), chacha20poly1305::aead::Payload { msg: &ct, aad: name.as_bytes() })
             .map_err(|_| Error::Decrypt(name.into()))?;
-        String::from_utf8(pt).map(Some).map_err(|_| Error::NotUtf8(name.into()))
+        Ok(Some(pt))
     }
 
     /// Names that have a stored value (never the values).

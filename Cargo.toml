@@ -34,6 +34,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 clap = { version = "4", features = ["derive", "env"] }
 tempfile = "3"
+# TypeScript bindings for the web app, generated from the API types (see frontend/README.md).
+ts-rs = { version = "12.0.1", features = ["serde-json-impl", "chrono-impl", "uuid-impl", "no-serde-warnings"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

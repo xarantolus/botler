@@ -1,12 +1,11 @@
 //! Failures of runnables become incidents, and incidents go to an agent.
 
-use botler_core::event::kinds;
+use botler_core::payloads::{BuiltinPayload, RunnableFailedPayload};
 use botler_core::routing::{Action, Dispatch};
 use botler_core::{Event, Provenance, Source};
 use chrono::Utc;
-use serde_json::json;
 
-use crate::hub::{Hub, Result};
+use crate::hub::{Hub, HubError, Result};
 use crate::router;
 
 /// What went wrong with a runnable.
@@ -30,17 +29,19 @@ pub async fn report(hub: &Hub, f: Failure) -> Result<()> {
     if !is_new && f.kind != "crashloop" {
         return Ok(());
     }
-    let ev = Event::new(kinds::RUNNABLE_FAILED, Source::Hub, Provenance::Trusted, Utc::now()).payload(json!({
-        "runnable": f.runnable,
-        "kind": f.kind,
-        "exit_code": f.exit_code,
-        "run_id": f.run_id,
-        "incident_id": incident.id,
-        "count": incident.count,
-        "logs_tail": f.logs_tail,
-        "commit": f.commit,
-        "event_id": f.event_id,
-    }));
+    let payload = BuiltinPayload::RunnableFailed(RunnableFailedPayload {
+        runnable: f.runnable.clone(),
+        kind: f.kind.into(),
+        exit_code: f.exit_code,
+        run_id: f.run_id.clone(),
+        incident_id: incident.id.clone(),
+        count: incident.count,
+        logs_tail: f.logs_tail.clone(),
+        commit: f.commit.clone(),
+        event_id: f.event_id.clone(),
+    });
+    let ev = Event::builtin(payload, Source::Hub, Provenance::Trusted, Utc::now())
+        .map_err(|e| HubError::Io(std::io::Error::other(e)))?;
     let applied = hub.applied().await;
     let target = applied.defs.failure_target(&f.runnable);
     // Without a triage agent the failure still reaches the user through main.

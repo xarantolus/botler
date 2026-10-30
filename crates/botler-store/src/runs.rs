@@ -29,7 +29,7 @@ impl RunStatus {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct Run {
     pub id: String,
     pub runnable: String,

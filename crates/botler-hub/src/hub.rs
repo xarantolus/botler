@@ -55,7 +55,7 @@ pub struct Applied {
 pub enum Live {
     Event { event: Event },
     Pi { instance: String, event: serde_json::Value },
-    Instance { instance: String, state: String },
+    Instance { instance: String, status: crate::phase::AgentStatus },
     Dialog { notice: crate::notify::DialogNotice },
 }
 

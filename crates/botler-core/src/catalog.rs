@@ -85,7 +85,14 @@ pub const BUILTIN: &[BuiltinEvent] = &[
     BuiltinEvent {
         kind: kinds::DIALOG_ANSWERED,
         summary: "The user answered a question you asked.",
-        fields: &[("dialog_id", "the dialog"), ("question", "what you asked"), ("answer", "the chosen answer")],
+        fields: &[
+            ("dialog_id", "the dialog"),
+            ("question", "what you asked"),
+            ("answer", "the chosen answer"),
+            ("group", "credentials requests: the secret group"),
+            ("outcome", "credentials requests: declined, or which fields were added, filled and removed"),
+            ("note", "guidance from the hub, if any"),
+        ],
         follow_up: &[],
         guidance: "Continue the work that was waiting on this answer.",
     },
@@ -101,6 +108,7 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         summary: "A change you proposed moved forward: gate result, review verdict, user decision, or merge.",
         fields: &[
             ("proposal_id", "the proposal"),
+            ("title", "its title"),
             ("status", "gating | reviewing | awaiting_user | merged | rejected | failed"),
             ("detail", "gate failures, reviewer notes, or the reason for the decision"),
             ("summary", "the deployment summary of the change"),
@@ -132,7 +140,12 @@ pub const BUILTIN: &[BuiltinEvent] = &[
     BuiltinEvent {
         kind: kinds::BREAKER_TRIPPED,
         summary: "A circuit breaker paused something that was running away (message ping-pong, event storm, or wake churn).",
-        fields: &[("subject", "what was paused"), ("breaker", "cycle | rate | wake"), ("reason", "what triggered it")],
+        fields: &[
+            ("subject", "what was paused"),
+            ("breaker", "cycle | rate | wake"),
+            ("reason", "what triggered it"),
+            ("correlation", "the conversation chain, for cycles"),
+        ],
         follow_up: &[FollowUp {
             tool: "get_events",
             args: &[("correlation", "correlation")],
@@ -157,6 +170,7 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         fields: &[
             ("instance", "the chat"),
             ("title", "its title, if it named itself"),
+            ("slug", "its alias, if it has one"),
             ("last_reply", "its last answer"),
         ],
         follow_up: &[FollowUp {

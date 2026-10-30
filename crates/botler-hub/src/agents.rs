@@ -18,6 +18,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::auth::Principal;
 use crate::hub::{Hub, HubError, Live, Result};
+use crate::phase::{AgentStatus, WakePhase, WakeStep};
 use crate::{images, plumbing, prompt};
 
 /// Attempts before a delivery pi keeps rejecting is dropped.
@@ -71,7 +72,7 @@ pub struct Agents {
     /// Consecutive unexpected exits per instance, and when the next start is allowed.
     crashes: Mutex<HashMap<String, (u32, DateTime<Utc>)>>,
     /// What waking is doing right now, or why the last wake failed (for viewers).
-    phases: Mutex<HashMap<String, String>>,
+    phases: Mutex<HashMap<String, WakePhase>>,
     /// Serialises waking per hub so one instance is never started twice.
     waking: Mutex<()>,
 }
@@ -92,7 +93,7 @@ impl Agents {
     }
 
     /// The current wake phase or last wake error of an instance, if any.
-    pub async fn phase(&self, instance: &str) -> Option<String> {
+    pub async fn phase(&self, instance: &str) -> Option<WakePhase> {
         self.phases.lock().await.get(instance).cloned()
     }
 
@@ -187,9 +188,9 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
     }
 }
 
-async fn set_phase(hub: &Hub, instance: &str, phase: &str) {
-    hub.agents.phases.lock().await.insert(instance.to_string(), phase.to_string());
-    broadcast_state(hub, instance, &format!("starting: {phase}"));
+async fn set_phase(hub: &Hub, instance: &str, step: WakeStep) {
+    hub.agents.phases.lock().await.insert(instance.to_string(), WakePhase::Waking { step });
+    broadcast_state(hub, instance, AgentStatus::Waking { step });
 }
 
 /// Return the live agent for `instance`, starting its container if needed. Progress and the
@@ -205,11 +206,11 @@ pub async fn ensure_awake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<Liv
         }
         Err(e) => {
             let msg = format!("could not start: {e}");
-            hub.agents.phases.lock().await.insert(instance.name.clone(), msg.clone());
+            hub.agents.phases.lock().await.insert(instance.name.clone(), WakePhase::Failed { error: msg.clone() });
             if let Err(err) = hub.store.set_instance_state(&instance.name, InstanceState::Dormant, None).await {
                 tracing::error!(instance = %instance.name, error = %err, "could not reset instance state");
             }
-            broadcast_state(hub, &instance.name, &msg);
+            broadcast_state(hub, &instance.name, AgentStatus::Failed { error: msg });
             Err(e)
         }
     }
@@ -241,11 +242,11 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     }
 
     hub.store.set_instance_state(&instance.name, InstanceState::Starting, None).await?;
-    set_phase(hub, &instance.name, "building image").await;
+    set_phase(hub, &instance.name, WakeStep::BuildingImage).await;
     let image = images::ensure_agent_image(hub, &def.spec.image, &applied.commit).await?;
-    set_phase(hub, &instance.name, "preparing workspace").await;
+    set_phase(hub, &instance.name, WakeStep::PreparingWorkspace).await;
     let branch = prepare_workspace(hub, instance, def).await?;
-    set_phase(hub, &instance.name, "starting container").await;
+    set_phase(hub, &instance.name, WakeStep::StartingContainer).await;
     let wake = uuid::Uuid::now_v7().simple().to_string();
     let spec = container_spec(hub, instance, def, &applied, image, branch.as_deref(), &wake).await?;
     tracing::info!(instance = %instance.name, %wake, "waking agent");
@@ -270,7 +271,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     });
     hub.agents.live.lock().await.insert(instance.name.clone(), agent.clone());
     hub.store.set_instance_state(&instance.name, InstanceState::Running, Some(&spec.name)).await?;
-    broadcast_state(hub, &instance.name, "running");
+    broadcast_state(hub, &instance.name, AgentStatus::Running);
     tokio::spawn(pump(hub.clone(), agent.clone(), events));
     tokio::spawn(watch_exit(hub.clone(), agent.clone(), attached.exited, attached.stderr));
     Ok(agent)
@@ -550,7 +551,7 @@ async fn on_provider_error(hub: &Hub, agent: &LiveAgent, err: &str) -> Result<()
         tracing::error!(instance = %agent.instance, incident = %incident.id, %reason, "agent paused: provider rejected requests");
         if hub
             .live
-            .send(Live::Instance { instance: agent.instance.clone(), state: format!("paused: {reason}") })
+            .send(Live::Instance { instance: agent.instance.clone(), status: AgentStatus::Paused { reason } })
             .is_err()
         {
             tracing::trace!("no live viewers");
@@ -659,7 +660,7 @@ async fn watch_exit(
     if let Err(e) = hub.store.set_instance_state(&agent.instance, state, None).await {
         tracing::error!(instance = %agent.instance, error = %e, "could not record agent exit");
     }
-    broadcast_state(&hub, &agent.instance, state.as_str());
+    broadcast_state(&hub, &agent.instance, AgentStatus::Dormant);
     if !deliberate {
         let tail = stderr.text();
         tracing::warn!(instance = %agent.instance, ?code, stderr = %tail, "agent container exited unexpectedly");
@@ -765,8 +766,8 @@ pub async fn reconcile_on_boot(hub: &Hub) -> Result<()> {
     Ok(())
 }
 
-fn broadcast_state(hub: &Hub, instance: &str, state: &str) {
-    if hub.live.send(Live::Instance { instance: instance.into(), state: state.into() }).is_err() {
+fn broadcast_state(hub: &Hub, instance: &str, status: AgentStatus) {
+    if hub.live.send(Live::Instance { instance: instance.into(), status }).is_err() {
         tracing::trace!("no live viewers");
     }
 }

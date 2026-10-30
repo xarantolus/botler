@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use botler_core::change::{ChangeSummary, Decision, Verdict, decide, preview};
-use botler_core::event::kinds;
+use botler_core::payloads::{BuiltinPayload, ProposalUpdatedPayload};
 use botler_core::{Event, Provenance, Source};
 use botler_runtime::{ContainerSpec, Mount, NetworkMode};
 use botler_store::{DialogKind, NewDialog, NewProposal, Priority, Proposal, ProposalKind, ProposalStatus};
@@ -100,28 +100,32 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     let old = hub.applied().await;
     let changed = hub.repo.changed_paths(&base, &head).await?;
     let summary = preview(&old.defs, &new.defs, &changed, Utc::now());
-    let summary_json = serde_json::to_value(&summary).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
-    hub.store.set_proposal_gate(id, &head, &summary_json, "").await?;
+    hub.store.set_proposal_gate(id, &head, &summary, "").await?;
     // The proposal records the main it was checked against; merge requires main to be unchanged.
     hub.store.set_proposal_base(id, &base).await?;
     let md = summary.to_markdown(new.defs.timezone);
     update(hub, id, "gating", &format!("Validated. Deployment summary:\n\n{md}\nRunning the gate…")).await?;
 
     let (ok, report) = run_gate(hub, id, &head).await?;
-    hub.store.set_proposal_gate(id, &head, &summary_json, &report).await?;
+    hub.store.set_proposal_gate(id, &head, &summary, &report).await?;
     if !ok {
         return fail(hub, id, &format!("the gate failed; fix and propose again:\n```\n{report}\n```")).await;
     }
 
-    hub.store.set_proposal_status(id, ProposalStatus::Reviewing).await?;
     let reviewer = start_review(hub, id, &base, &head, &md, &report).await?;
     match reviewer {
         Some(name) => {
+            // Record the reviewer before the status says "reviewing", so readers never see one
+            // without the other. The reviewer only acts once it wakes, well after this.
             hub.store.set_proposal_reviewer(id, &name).await?;
+            hub.store.set_proposal_status(id, ProposalStatus::Reviewing).await?;
             update(hub, id, "reviewing", &format!("Gate passed. Reviewer `{name}` is looking at it.")).await
         }
         // No reviewer agent defined: the user decides.
-        None => decide_and_act(hub, id, Verdict::Escalate, "no reviewer agent is defined").await,
+        None => {
+            hub.store.set_proposal_status(id, ProposalStatus::Reviewing).await?;
+            decide_and_act(hub, id, Verdict::Escalate, "no reviewer agent is defined").await
+        }
     }
 }
 
@@ -255,8 +259,7 @@ async fn decide_and_act(hub: &Arc<Hub>, id: &str, verdict: Verdict, notes: &str)
 }
 
 fn summary_of(p: &Proposal) -> Result<ChangeSummary> {
-    let v = p.summary.clone().ok_or_else(|| HubError::Forbidden(format!("proposal {} has no summary yet", p.id)))?;
-    serde_json::from_value(v).map_err(|e| HubError::Io(std::io::Error::other(e)))
+    p.summary.clone().ok_or_else(|| HubError::Forbidden(format!("proposal {} has no summary yet", p.id)))
 }
 
 async fn ask_user(hub: &Hub, p: &Proposal, summary: &ChangeSummary, notes: &str) -> Result<()> {
@@ -339,9 +342,16 @@ async fn fail(hub: &Hub, id: &str, why: &str) -> Result<()> {
 /// Report progress to the proposing agent.
 async fn update(hub: &Hub, id: &str, status: &str, detail: &str) -> Result<()> {
     let p = hub.store.proposal(id).await?;
-    let ev = Event::new(kinds::PROPOSAL_UPDATED, Source::Hub, Provenance::Trusted, Utc::now())
-        .to(p.instance.clone())
-        .payload(json!({ "proposal_id": id, "title": p.title, "status": status, "detail": detail }));
+    let payload = BuiltinPayload::ProposalUpdated(ProposalUpdatedPayload {
+        proposal_id: id.into(),
+        title: p.title,
+        status: status.into(),
+        detail: detail.into(),
+        summary: None,
+    });
+    let ev = Event::builtin(payload, Source::Hub, Provenance::Trusted, Utc::now())
+        .map_err(|e| HubError::Io(std::io::Error::other(e)))?
+        .to(p.instance.clone());
     hub.emit(ev).await?;
     Ok(())
 }

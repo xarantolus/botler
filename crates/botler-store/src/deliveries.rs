@@ -12,7 +12,7 @@ text_enum!(DeliveryStatus {
     Dropped = "dropped",
 });
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct Delivery {
     pub id: String,
     pub event_id: String,

@@ -11,7 +11,7 @@ text_enum!(IncidentStatus {
     Resolved = "resolved",
 });
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct Incident {
     pub id: String,
     pub runnable: String,

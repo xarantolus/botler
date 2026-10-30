@@ -10,7 +10,7 @@ use uuid::Uuid;
 /// `Trusted` is reserved for the user and the hub itself. Anything an agent or job relays from the
 /// outside world is `External` (a known source such as a connector) or `Untrusted` (arbitrary
 /// content such as a web page or an inbound mail body).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Provenance {
     Trusted,
@@ -26,7 +26,7 @@ impl Provenance {
 }
 
 /// Who produced an event.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
 #[serde(tag = "kind", content = "name", rename_all = "snake_case")]
 pub enum Source {
     User,
@@ -52,7 +52,8 @@ impl Source {
 }
 
 /// An event. Immutable once journaled.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
+#[ts(rename = "BotlerEvent")]
 pub struct Event {
     pub id: Uuid,
     /// Dotted type, e.g. `message`, `runnable.failed`, `mail.received`.
@@ -62,9 +63,11 @@ pub struct Event {
     pub provenance: Provenance,
     /// Direct address: an agent instance name. `None` means "route by subscription".
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub to: Option<String>,
     /// Correlation chain root: replies carry the id of the event that started the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub correlation: Option<Uuid>,
     /// How many hops this correlation chain has taken; used by the cycle breaker.
     #[serde(default)]

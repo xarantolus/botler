@@ -6,17 +6,16 @@
 use std::collections::BTreeMap;
 
 use botler_core::defs::{Definitions, SecretClass};
-use botler_core::event::kinds;
+use botler_core::payloads::{BuiltinPayload, DialogAnsweredPayload, SecretsOutcome};
 use botler_core::{Event, Provenance, Source};
 use botler_store::{Dialog, DialogKind, DialogStatus};
 use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::hub::{Hub, HubError, load_at};
 
-#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, ts_rs::TS)]
 pub struct NewField {
     /// UPPER_SNAKE_CASE, unique across all groups; the env var name unless `file` is set.
     pub name: String,
@@ -51,10 +50,59 @@ pub struct SecretRequest {
     pub remove: Vec<String>,
 }
 
+/// A secret value as the web app sends it: text (typed, pasted, or a text file read in the
+/// browser), or a file's exact bytes as base64.
+#[derive(Clone, Debug, Deserialize, ts_rs::TS)]
+#[serde(untagged)]
+pub enum SecretInput {
+    Text(String),
+    Bytes { base64: String },
+}
+
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum InputError {
+    #[error("the value of {0} is not valid base64: {1}")]
+    Base64(String, String),
+    #[error("{0} is an environment variable, so its value must be text; binary values can only be delivered as files")]
+    BinaryEnv(String),
+}
+
+impl From<&str> for SecretInput {
+    fn from(s: &str) -> Self {
+        Self::Text(s.into())
+    }
+}
+
+impl SecretInput {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Text(t) => t.is_empty(),
+            Self::Bytes { base64 } => base64.is_empty(),
+        }
+    }
+
+    /// The bytes to store for secret `name`, delivered as a file when `file` is true.
+    pub fn decode(&self, name: &str, file: bool) -> Result<Vec<u8>, InputError> {
+        use base64::Engine;
+        let bytes = match self {
+            Self::Text(t) => return Ok(t.as_bytes().to_vec()),
+            Self::Bytes { base64 } => base64::engine::general_purpose::STANDARD
+                .decode(base64.trim())
+                .map_err(|e| InputError::Base64(name.into(), e.to_string()))?,
+        };
+        if !file && std::str::from_utf8(&bytes).is_err() {
+            return Err(InputError::BinaryEnv(name.into()));
+        }
+        Ok(bytes)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RequestError {
     #[error("{0}")]
     Invalid(String),
+    #[error(transparent)]
+    Input(#[from] InputError),
     #[error(transparent)]
     Hub(#[from] HubError),
     #[error("secrets.toml could not be edited: {0}")]
@@ -258,16 +306,18 @@ pub async fn open(hub: &Hub, instance: &str, req: &SecretRequest) -> Result<Dial
 }
 
 /// What the user submitted for a credentials dialog.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ts_rs::TS)]
 pub struct Submission {
     #[serde(default)]
-    pub values: BTreeMap<String, String>,
+    #[ts(optional, as = "Option<BTreeMap<String, SecretInput>>")]
+    pub values: BTreeMap<String, SecretInput>,
     #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
     pub decline: bool,
 }
 
 /// Carry out a filled credentials form.
-pub async fn submit(hub: &Hub, dialog_id: &str, sub: Submission) -> Result<serde_json::Value, RequestError> {
+pub async fn submit(hub: &Hub, dialog_id: &str, sub: Submission) -> Result<SecretsOutcome, RequestError> {
     let d = hub.store.dialog(dialog_id).await?;
     if d.kind != DialogKind::Credentials {
         return Err(RequestError::Invalid("not a credentials request".into()));
@@ -280,36 +330,39 @@ pub async fn submit(hub: &Hub, dialog_id: &str, sub: Submission) -> Result<serde
 
     if sub.decline {
         hub.store.answer_dialog(dialog_id, "declined").await?;
-        emit_answer(hub, &d, &req, json!({ "declined": true })).await?;
-        return Ok(json!({ "declined": true }));
+        let outcome = SecretsOutcome { declined: true, added: vec![], filled: vec![], removed: vec![] };
+        emit_answer(hub, &d, &req, outcome.clone()).await?;
+        return Ok(outcome);
     }
 
     // The world may have changed since the agent asked.
     let applied = hub.applied().await;
     req.validate(&applied.defs)?;
     let form = req.form(&applied.defs);
+    let mut values = BTreeMap::new();
     for f in &form {
-        if sub.values.get(&f.name).is_none_or(|v| v.is_empty()) {
+        let Some(v) = sub.values.get(&f.name).filter(|v| !v.is_empty()) else {
             return Err(RequestError::MissingValue(f.name.clone()));
-        }
+        };
+        values.insert(f.name.clone(), v.decode(&f.name, f.file.is_some())?);
     }
 
     if req.changes_declarations() {
         declare(hub, &req, &d.instance).await?;
     }
     for f in &form {
-        hub.store.set_secret(&hub.secret_key, &f.name, &sub.values[&f.name]).await?;
+        hub.store.set_secret_bytes(&hub.secret_key, &f.name, &values[&f.name]).await?;
     }
     for n in &req.remove {
         hub.store.delete_secret(n).await?;
     }
     hub.store.answer_dialog(dialog_id, "provided").await?;
-    let outcome = json!({
-        "declined": false,
-        "added": req.add.iter().map(|f| &f.name).collect::<Vec<_>>(),
-        "filled": req.fill,
-        "removed": req.remove,
-    });
+    let outcome = SecretsOutcome {
+        declined: false,
+        added: req.add.iter().map(|f| f.name.clone()).collect(),
+        filled: req.fill.clone(),
+        removed: req.remove.clone(),
+    };
     emit_answer(hub, &d, &req, outcome.clone()).await?;
     // Agents waiting on a missing secret can start now.
     hub.dispatch_notify.notify_one();
@@ -340,17 +393,18 @@ async fn declare(hub: &Hub, req: &SecretRequest, instance: &str) -> Result<(), R
     Err(RequestError::Invalid("main kept moving; try again".into()))
 }
 
-async fn emit_answer(hub: &Hub, d: &Dialog, req: &SecretRequest, outcome: serde_json::Value) -> Result<(), HubError> {
-    let ev = Event::new(kinds::DIALOG_ANSWERED, Source::User, Provenance::Trusted, Utc::now())
-        .to(d.instance.clone())
-        .payload(json!({
-            "dialog_id": d.id,
-            "question": d.question,
-            "answer": if outcome["declined"] == true { "declined" } else { "provided" },
-            "group": req.group,
-            "outcome": outcome,
-            "note": "Values are stored by the hub and never shown to agents. To use the group in a container, grant it in an agent or job definition (`secrets = [\"<group>\"]`) and propose the change.",
-        }));
+async fn emit_answer(hub: &Hub, d: &Dialog, req: &SecretRequest, outcome: SecretsOutcome) -> Result<(), HubError> {
+    let payload = BuiltinPayload::DialogAnswered(DialogAnsweredPayload {
+        dialog_id: d.id.clone(),
+        question: d.question.clone(),
+        answer: if outcome.declined { "declined" } else { "provided" }.into(),
+        group: Some(req.group.clone()),
+        outcome: Some(outcome),
+        note: Some("Values are stored by the hub and never shown to agents. To use the group in a container, grant it in an agent or job definition (`secrets = [\"<group>\"]`) and propose the change.".into()),
+    });
+    let ev = Event::builtin(payload, Source::User, Provenance::Trusted, Utc::now())
+        .map_err(|e| HubError::Io(std::io::Error::other(e)))?
+        .to(d.instance.clone());
     hub.emit(ev).await?;
     Ok(())
 }

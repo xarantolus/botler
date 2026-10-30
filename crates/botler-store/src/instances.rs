@@ -14,7 +14,7 @@ text_enum!(InstanceState {
     Archived = "archived",
 });
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct Instance {
     pub name: String,
     pub definition: String,
@@ -31,10 +31,50 @@ pub struct Instance {
     pub slug: Option<String>,
     /// Set while the hub waits for the agent's handover before archiving.
     pub archive_requested_at: Option<DateTime<Utc>>,
-    /// The agent's handover report (summary, outstanding work, where state lives).
-    pub archive_report: Option<serde_json::Value>,
+    /// How it was archived, with the agent's handover report when it gave one.
+    pub archive_report: Option<ArchiveRecord>,
     pub created_at: DateTime<Utc>,
     pub last_active: DateTime<Utc>,
+}
+
+/// The record kept when a chat is archived.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+pub struct ArchiveRecord {
+    /// Whether the agent handed over (`archive_ready`) rather than being archived by force.
+    pub confirmed_by_agent: bool,
+    #[serde(default)]
+    pub forced: bool,
+    /// Why it was archived, if the user said.
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub report: Option<HandoverReport>,
+    /// The chat the outstanding work went to.
+    #[serde(default)]
+    pub handed_to: Option<String>,
+    pub at: DateTime<Utc>,
+}
+
+/// An agent's handover when its chat is archived.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+pub struct HandoverReport {
+    pub summary: String,
+    #[serde(default)]
+    pub outstanding: Vec<String>,
+    /// Where its state lives: branches, files, memory notes, external systems.
+    #[serde(default)]
+    pub state: Vec<String>,
+    #[serde(default)]
+    pub handoff: Option<Handoff>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+pub struct Handoff {
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub spawn: Option<String>,
+    pub message: String,
 }
 
 #[derive(Clone, Debug)]
@@ -185,7 +225,7 @@ impl Store {
     }
 
     /// Archive with the agent's (or a forced) handover report.
-    pub async fn archive_instance(&self, name: &str, report: &serde_json::Value) -> Result<()> {
+    pub async fn archive_instance(&self, name: &str, report: &ArchiveRecord) -> Result<()> {
         let r = sqlx::query(
             "UPDATE instances SET state = 'archived', container_id = NULL, archive_report = ?, archive_requested_at = NULL WHERE name = ?",
         )

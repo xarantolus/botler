@@ -233,7 +233,10 @@ async fn archive_hands_over_and_messaging_restores() {
     assert!(successor.starts_with("dev-") && successor != chat);
     let archived = e.hub.store.instance(&chat).await.unwrap();
     assert_eq!(archived.state, InstanceState::Archived);
-    assert_eq!(archived.archive_report.as_ref().unwrap()["report"]["outstanding"][0], "wire x into the scheduler");
+    assert_eq!(
+        archived.archive_report.as_ref().unwrap().report.as_ref().unwrap().outstanding[0],
+        "wire x into the scheduler"
+    );
     assert_eq!(e.hub.store.pending_deliveries(&successor).await.unwrap().len(), 1, "successor got the handoff");
     assert!(e.hub.paths.workspace(&chat).exists(), "nothing is deleted");
 
@@ -330,7 +333,7 @@ async fn parent_hears_when_a_spawned_chat_finishes_its_turn() {
 async fn secret_requests_are_async_and_declare_on_submit() {
     use botler_hub::auth::Principal;
     use botler_hub::ops::{self, Caller, OpError};
-    use botler_hub::secret_requests::{Submission, submit};
+    use botler_hub::secret_requests::{InputError, Submission, submit};
     let e = env().await;
     with_key(&e).await;
     e.hub
@@ -378,17 +381,37 @@ async fn secret_requests_are_async_and_declare_on_submit() {
     )
     .await;
     assert!(missing.is_err(), "every field needs a value");
+    // Binary values (uploaded files) are only accepted for file secrets.
+    let binary = botler_hub::secret_requests::SecretInput::Bytes { base64: "AJ+Slv8=".into() };
+    let env_binary = submit(
+        &e.hub,
+        &id,
+        Submission {
+            values: [("GITLAB_TOKEN_STATION".into(), binary.clone()), ("GITLAB_SSH_KEY".into(), "KEY".into())].into(),
+            decline: false,
+        },
+    )
+    .await;
+    assert!(
+        matches!(env_binary, Err(botler_hub::secret_requests::RequestError::Input(InputError::BinaryEnv(_)))),
+        "{env_binary:?}"
+    );
     let out = submit(
         &e.hub,
         &id,
         Submission {
-            values: [("GITLAB_TOKEN_STATION".into(), "glpat".into()), ("GITLAB_SSH_KEY".into(), "KEY".into())].into(),
+            values: [("GITLAB_TOKEN_STATION".into(), "glpat".into()), ("GITLAB_SSH_KEY".into(), binary)].into(),
             decline: false,
         },
     )
     .await
     .unwrap();
-    assert_eq!(out["added"].as_array().unwrap().len(), 2);
+    assert_eq!(out.added.len(), 2);
+    assert_eq!(
+        e.hub.store.secret_bytes(&e.hub.secret_key, "GITLAB_SSH_KEY").await.unwrap().as_deref(),
+        Some(&[0u8, 159, 146, 150, 255][..]),
+        "file secrets are stored byte-exact"
+    );
     let defs = &e.hub.applied().await.defs;
     assert_eq!(defs.secret_groups["gitlab"].secrets.len(), 2, "declared and applied");
     assert_eq!(e.hub.store.secret(&e.hub.secret_key, "GITLAB_TOKEN_STATION").await.unwrap().as_deref(), Some("glpat"));

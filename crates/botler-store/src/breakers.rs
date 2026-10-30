@@ -5,7 +5,7 @@ use sqlx::Row;
 
 use crate::{Result, Store, parse_ts, ts};
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct Breaker {
     pub subject: String,
     pub kind: String,
