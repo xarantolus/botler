@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { portUrl, proposalStatusColor, proposalStatusLabel, provenanceColor, runDuration, runStatusColor, serviceColor } from "./runs";
+import { portUrl, proposalStatusColor, proposalStatusLabel, provenanceColor, runDuration, runStatusColor } from "./runs";
 
 describe("status colors", () => {
   it("maps run, proposal and provenance states", () => {
@@ -15,9 +15,7 @@ describe("status colors", () => {
 });
 
 describe("services", () => {
-  it("colors by state and links ports through the page's host name", () => {
-    expect(serviceColor({ running: true, failed: true })).toBe("error");
-    expect(serviceColor({ running: true, failed: false })).toBe("success");
+  it("links ports through the page's host name", () => {
     expect(portUrl({ bind: "0.0.0.0", host_port: 8080, port: 80, url: "http://hub:8080" }, "box.tail")).toBe("http://box.tail:8080");
     expect(portUrl({ bind: "127.0.0.1", host_port: 8080, port: 80, url: "http://127.0.0.1:8080" }, "box.tail")).toBe(
       "http://127.0.0.1:8080",

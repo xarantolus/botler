@@ -11,6 +11,7 @@ import { shell } from "../../shell";
 import { SHORTCUTS } from "../../shortcuts";
 import AppSearch from "./AppSearch.vue";
 import ChatList from "./ChatList.vue";
+import ColorModeCycle from "./ColorModeCycle.vue";
 import HubMenu from "./HubMenu.vue";
 import NewChatModal from "./NewChatModal.vue";
 
@@ -63,7 +64,7 @@ const nav = computed((): NavigationMenuItem[] =>
           <img src="/favicon.svg" alt="" class="size-6 shrink-0" />
           <span v-if="!collapsed" class="truncate text-base font-semibold text-highlighted">botler</span>
         </RouterLink>
-        <UColorModeButton v-if="!collapsed" class="ms-auto" size="sm" />
+        <ColorModeCycle v-if="!collapsed" class="ms-auto" />
       </template>
 
       <template #default="{ collapsed }">

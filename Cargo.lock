@@ -321,6 +321,7 @@ name = "botler-repo"
 version = "0.1.0"
 dependencies = [
  "botler-core",
+ "chrono",
  "tempfile",
  "thiserror",
  "tokio",

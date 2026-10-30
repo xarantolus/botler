@@ -307,6 +307,19 @@ def ask_user(*, question: str, about: list[str] | None = None, detail: str | Non
     return call("ask_user", {"question": question, "about": about, "detail": detail, "expires_in": expires_in, "options": options, "priority": priority})
 
 
+def request_visit(*, host_port: int, instructions: str, title: str, expires_in: str | None = None, path: str | None = None) -> dict[str, Any]:
+    """Ask the user to open a page of a service in their browser (e.g. to log in) and tell you when done. `host_port` must be a port published by a service this chat may use. The answer (`done` or `cancel`) arrives as a `dialog.answered` event.
+
+    Args:
+        host_port: A host port published by a service this chat may use.
+        instructions: What the user should do there, step by step.
+        title: What the visit is for, e.g. "Log in to Home Assistant".
+        expires_in: Withdraw the request after this long, e.g. `1d`.
+        path: Path to open, e.g. `/login`. Defaults to `/`.
+    """
+    return call("request_visit", {"host_port": host_port, "instructions": instructions, "title": title, "expires_in": expires_in, "path": path})
+
+
 def get_run_logs(*, run_id: str, tail: int | None = None) -> dict[str, Any]:
     """Output of a job run.
 
@@ -384,3 +397,13 @@ def collect_garbage(*, logs_older_than: str | None = None) -> dict[str, Any]:
         logs_older_than: Delete run logs older than this (default `30d`).
     """
     return call("collect_garbage", {"logs_older_than": logs_older_than})
+
+
+def run_job(*, job: str) -> dict[str, Any]:
+    """Start a oneshot job now, with a `manual` event. Honours pause and the overlap policy of the job's trigger (skip by default)."""
+    return call("run_job", {"job": job})
+
+
+def restart_service(*, service: str) -> dict[str, Any]:
+    """Stop a service; the reconciler starts it again right away."""
+    return call("restart_service", {"service": service})

@@ -17,6 +17,7 @@ const BUILTIN = {
   "reply.overdue": true,
   timer: true,
   schedule: true,
+  manual: true,
   "access.changed": true,
   "chat.restored": true,
   "environment.updated": true,
@@ -43,6 +44,7 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   "reply.overdue": "i-lucide-hourglass",
   timer: "i-lucide-alarm-clock",
   schedule: "i-lucide-calendar-clock",
+  manual: "i-lucide-hand",
   "access.changed": "i-lucide-shield-plus",
   "chat.restored": "i-lucide-archive-restore",
   "environment.updated": "i-lucide-refresh-cw",
@@ -102,6 +104,8 @@ export function eventSummary(ev: BotlerEvent): string {
       return `schedule ${b.payload.trigger}${b.payload.skipped ? ` (${b.payload.skipped} missed)` : ""}`;
     case "chat.restored":
       return `restored; changed while archived: ${b.payload.changes.join("; ")}`;
+    case "manual":
+      return `${b.payload.runnable} started by hand`;
     case "access.changed":
       return `${b.payload.resource} ${b.payload.change}`;
     case "environment.updated":

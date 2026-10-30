@@ -14,7 +14,7 @@ export async function mountInApp(component: Component, props: Record<string, unk
       { path: "/", component: { render: () => null } },
       { path: "/chat/:instance", component: { render: () => null } },
       { path: "/events", name: "events", component: { render: () => null } },
-      { path: "/runs", name: "runs", component: { render: () => null } },
+      { path: "/system", name: "system", component: { render: () => null } },
     ],
   });
   await router.push("/");

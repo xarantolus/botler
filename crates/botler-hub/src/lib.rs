@@ -38,6 +38,7 @@ pub mod services;
 pub mod sessions;
 pub mod storage;
 pub mod supervisor;
+pub mod system;
 pub mod template;
 pub mod transactions;
 pub mod trials;
