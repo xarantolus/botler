@@ -328,7 +328,16 @@ async fn dialogs(State(hub): State<AppState>, Extension(p): Extension<Principal>
     let applied = hub.applied().await;
     let mut open = Vec::new();
     for d in hub.store.open_dialogs().await? {
-        let mut view = DialogView { dialog: d, form: None, remove: None, group: None, new_group: None };
+        let mut view = DialogView { dialog: d, form: None, remove: None, group: None, new_group: None, visit: None };
+        if view.dialog.kind == botler_store::DialogKind::Visit {
+            let spec = view.dialog.spec.clone().unwrap_or_default();
+            view.visit = Some(serde_json::from_value(spec).map_err(|e| {
+                ApiError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("visit request {} is unreadable: {e}", view.dialog.id),
+                )
+            })?);
+        }
         if view.dialog.kind == botler_store::DialogKind::Credentials {
             let spec = view.dialog.spec.clone().unwrap_or_default();
             let req: crate::secret_requests::SecretRequest = serde_json::from_value(spec).map_err(|e| {

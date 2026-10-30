@@ -91,7 +91,7 @@ pub const BUILTIN: &[BuiltinEvent] = &[
     },
     BuiltinEvent {
         kind: kinds::DIALOG_ANSWERED,
-        summary: "The user answered a question you asked.",
+        summary: "The user answered a request you made (a question, an access or credentials request, or a visit).",
         fields: &[
             ("dialog_id", "the dialog"),
             ("question", "what you asked"),
@@ -101,7 +101,9 @@ pub const BUILTIN: &[BuiltinEvent] = &[
             ("note", "guidance from the hub, if any"),
         ],
         follow_up: &[],
-        guidance: "Continue the work that was waiting on this answer.",
+        guidance: "Continue the work that was waiting on this answer. For a visit (`request_visit`), `done` \
+                   means the user says they did it: check that it worked (e.g. the service now has a session) \
+                   before relying on it; `cancel` means they will not, so do without it or explain why it matters.",
     },
     BuiltinEvent {
         kind: kinds::DIALOG_ABORTED,

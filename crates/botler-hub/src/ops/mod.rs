@@ -264,6 +264,7 @@ pub static OPS: &[OpSpec] = &[
     op::<memory::MemoryHistory>(),
     op::<GetEvents>(),
     op::<AskUser>(),
+    op::<RequestVisit>(),
     op::<GetRunLogs>(),
     op::<GetIncident>(),
     op::<GetIncidentHistory>(),

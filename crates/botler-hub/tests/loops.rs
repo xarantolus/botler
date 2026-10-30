@@ -223,14 +223,17 @@ async fn a_turn_ending_with_a_message_to_the_parent_sends_no_notice() {
     settle().await;
     e.fake.set_last_reply(&container, "Docs written in docs/parser.md.");
     assert!(e.fake.pi_event(&container, json!({"type": "agent_settled"})));
-    settle().await;
-    e.route().await;
-    let idle = e
-        .hub
-        .store
-        .events(&EventQuery { kind: Some(kinds::AGENT_IDLE.into()), limit: 5, ..Default::default() })
-        .await
-        .unwrap();
+    // The pump records the end of the turn in its own time: poll for the notice.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let idle = loop {
+        settle().await;
+        e.route().await;
+        let q = EventQuery { kind: Some(kinds::AGENT_IDLE.into()), limit: 5, ..Default::default() };
+        let idle = e.hub.store.events(&q).await.unwrap();
+        if !idle.is_empty() || std::time::Instant::now() > deadline {
+            break idle;
+        }
+    };
     assert_eq!(idle.len(), 1);
     assert_eq!(idle[0].to.as_deref(), Some(parent.as_str()));
     assert_eq!(idle[0].payload["last_reply"], "Docs written in docs/parser.md.");
