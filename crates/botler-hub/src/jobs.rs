@@ -38,6 +38,10 @@ pub async fn start(hub: &Hub, job: &str, trigger: Option<&str>, event: Option<&E
     if def.spec.lifetime != Lifetime::Oneshot {
         return Err(HubError::Forbidden(format!("{job} is a service; services are not triggered")));
     }
+    if !def.spec.enabled {
+        tracing::info!(job, trigger, "disabled (enabled = false); not started");
+        return Ok(None);
+    }
     let overlap = trigger.and_then(|t| applied.defs.triggers.get(t)).map_or(Overlap::Allow, |t| t.spec.overlap);
     let busy = hub.store.runs_for(job, 20).await?.iter().any(|r| !r.status.is_terminal());
     if busy && overlap == Overlap::Skip {

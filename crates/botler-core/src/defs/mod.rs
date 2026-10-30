@@ -83,8 +83,9 @@ impl Definitions {
         names.into_iter().filter_map(|n| self.secrets.get(n)).collect()
     }
 
+    /// The services that should run: enabled jobs with `lifetime = "service"`.
     pub fn services(&self) -> impl Iterator<Item = &JobDef> {
-        self.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Service)
+        self.jobs.values().filter(|j| j.spec.is_service())
     }
 
     pub fn persistent_agents(&self) -> impl Iterator<Item = &AgentDef> {
