@@ -16,8 +16,9 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION
 RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
 # Fixed paths the hub mounts into every agent container.
-#   /botler/agent-dir   rendered pi config (models.json, mcp.json, settings.json, AGENTS.md)  ro
+#   /botler/agent-dir   rendered pi config (models.json, mcp.json, tools.json, AGENTS.md)  ro
 #   /botler/extension   botler pi extension                                                    ro
+#   /monorepo           applied main commit, when the agent is granted Python tools            ro
 #   /opt/botler/sdk     botler Python SDK                                                      ro
 #   /botler/sessions    this instance's pi session files                                       rw
 #   /home/agent         the agent's persistent home ($HOME, working directory)                 rw

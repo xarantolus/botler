@@ -79,14 +79,16 @@
 
 **Injected botler SDK (how containers reach us).** Every container the hub starts (jobs, services and agents) gets:
 - `BOTLER_URL` and a short-lived, per-run, role-scoped `BOTLER_TOKEN`;
-- the pinned SDK bind-mounted read-only at `/opt/botler/sdk`, with `PYTHONPATH` set. It's a stdlib-only HTTP client, so it works in any image without being in the job's dependencies, and the hub version and SDK version always match. A `uv` path dependency on the same package is available for type checking in the monorepo.
+- the pinned SDK (`python/botler-sdk`, embedded in the hub binary) bind-mounted read-only at `/opt/botler/sdk`, with `PYTHONPATH` set. `import botler` is a stdlib-only client of `POST /api/v1/ops/{name}`, so it works in any image without being in the job's dependencies, and the hub version and SDK version always match. The monorepo declares it as a uv path dependency (`[tool.uv.sources] botler = { path = "/opt/botler/sdk", editable = true }`) for type checking and the gate. That path exists in every container the monorepo is used in (agent worktrees, the gate, tool calls); `uv.lock` records it relative (`../opt/botler/sdk`), so checkouts live one directory deep (`/workspace`, `/monorepo`).
 
 The SDK surface:
-- `emit(type, payload)`, `send_message(to, body)`, `set_timer(at, event)`;
+- `botler.ops.<op>(...)`: every hub operation, **generated** from the hub's `OPS` specs (`tests/sdk.rs` fails when `botler/_ops.py` is stale; `BOTLER_BLESS=1` rewrites it);
+- `emit(type, payload)` or `emit(EventInstance)`, `send_message(to, body)`, `set_timer(prompt, at=|after=)`;
 - `state.get/set` (a small per-runnable KV in SQLite for poller cursors and dedup keys);
-- `health.ok()/fail(reason)` (service heartbeats);
 - `log`;
-- the `@action` decorator and manifest helpers for connectors.
+- hub failures raise `BotlerError(code, status, message)`;
+- typed events: `botler.Event` (pydantic, `type: ClassVar[str]`); `python -m botler.events manifest` writes `events.manifest.json`;
+- later: `health.ok()/fail(reason)` (service heartbeats; no hub op yet) and the `@action` decorator for connectors.
 
 Agents reach the same hub endpoints via MCP. Scripts the agent writes inside its container can also use the SDK.
 
@@ -130,10 +132,10 @@ Agents reach the same hub endpoints via MCP. Scripts the agent writes inside its
 - `get_run_logs(run)` and `validate(branch)`.
 
 **Python tools for pi (agent-authored tools without TypeScript).**
-- **Where they live:** `tools/<pkg>/` in the monorepo, a uv workspace member with functions decorated `@tool` (from the botler SDK). Type hints and pydantic models give the JSON schema, and the docstring gives the description.
-- **Manifest:** the gate runs `python -m botler.tools manifest`, which writes `tools.manifest.json`. That makes tools part of the capability diff, with declared `effects` (e.g. `network`, `fs_write`, `secret:<name>`).
-- **Registration:** the core botler pi extension reads the manifest at session start and calls `pi.registerTool` for each tool the agent definition grants (`tools = ["github.*"]`).
-- **Execution:** `python -m botler.tools call <name>` runs as a subprocess in the agent's container, with JSON in and JSON out and a timeout. The result is returned to pi.
+- **Where they live:** `tools/<pkg>/` in the monorepo, a uv workspace member with functions decorated `@botler.tool(effects=[...])`, named `<package>.<function>`. Type hints and pydantic models give the JSON schema, and the docstring gives the description.
+- **Manifest:** `python -m botler.tools manifest` writes `tools.manifest.json` (committed; the gate runs it with `--check`). That makes tools part of the capability diff, with declared `effects` (e.g. `network`, `fs_write`, `secret:<name>`).
+- **Registration:** when starting an agent, the hub renders the manifest entries its `tools` globs grant (`tools = ["github.*"]`) into `/botler/agent-dir/tools.json` and mounts the applied main commit read-only at `/monorepo` (tool code, like pi resources, never comes from the agent's own branch). At session start the botler pi extension calls `pi.registerTool` for each, named with dots replaced (`github_issues`).
+- **Execution:** `uv run --frozen --no-dev --all-packages --project /monorepo python -m botler.tools call <name>` runs as a subprocess in the agent's container (venv in `/tmp`, dependencies from `uv.lock`), with JSON arguments on stdin, `{ok, result | error}` on stdout and a timeout. The result is returned to pi; an error becomes a failed tool result.
 - **What still needs approval:** tools needing a hub-class secret are `@action`s instead. Their pi tool calls `invoke_action`, so they go through approval.
 
 **pi packages.** Agents can propose adding community pi packages (skills/extensions) to `pi/`, pinned by version, through a normal transaction. The capability diff flags new extensions, since they run with full process rights inside the container.
@@ -153,7 +155,7 @@ Agents reach the same hub endpoints via MCP. Scripts the agent writes inside its
 
 **Monorepo transaction.** An agent works on branch `agents/<instance>/<slug>` in its worktree and calls `propose_change(branch, summary)`. The hub then:
 1. Rebases onto main or rejects.
-2. Runs the **gate** (a job in the dev image: ruff, format, pyright strict, pytest with no network, plus `botler validate`, which parses every definition with the hub's own parser and emits the action/capability manifest).
+2. Runs the **gate** (a job in the dev image: ruff, format, pyright strict, pytest with no network, and the `events.manifest.json`/`tools.manifest.json` staleness checks; the hub validates every definition with its own parser before the gate runs).
 3. Computes the **capability diff** in core: new secrets or grants, mounts, network, approval-tagged actions, protected paths, schedules.
 4. Runs the **reviewer**: a fresh ephemeral instance of `agents/reviewer`, with no secrets, a read-only diff, the `policies/reviewer.md` policy, and verdict via MCP `submit_review`.
 5. Applies the decision table: reviewer approve + no protected or capability changes → auto-merge; otherwise a dialog to you.
@@ -193,7 +195,7 @@ crates/botler-hub/         binary: scheduler, router, dispatcher, reconciler, tr
                            actions, axum API/WS, rmcp MCP server, embedded web assets
 crates/botler-cli/         `botler init|validate|status|secret set|logs|dev`
 pi-extension/              TypeScript @botler/pi-extension (tests with pi SDK in-process)
-python/botler-sdk/         job/connector SDK: emit events, @action decorator, health check, manifest
+python/botler-sdk/         Python SDK (stdlib runtime; pydantic events and @tool with manifests)
 images/agent-base/, images/job-base/
 web/                       stopgap index.html now; later Vue 3 + component library
 template/                  the monorepo template (below)

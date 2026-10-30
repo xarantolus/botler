@@ -111,7 +111,8 @@ impl Caller {
     }
 }
 
-/// One operation as advertised to agents.
+/// One operation as advertised to agents. The Python SDK's `botler/_ops.py` is generated from
+/// these; `tests/sdk.rs` fails until it is regenerated.
 pub struct OpSpec {
     pub name: &'static str,
     pub description: &'static str,

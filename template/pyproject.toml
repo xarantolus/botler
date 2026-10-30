@@ -1,18 +1,24 @@
 [project]
 name = "botler-monorepo"
 version = "0.0.0"
-requires-python = ">=3.12"
+# The agent and dev images' Python, so the gate needs no interpreter download.
+requires-python = ">=3.11"
 
 [tool.uv.workspace]
 # Every job, tool package and connector is a workspace member.
 members = ["packages/*", "tools/*", "connectors/*", "jobs/*"]
+
+[tool.uv.sources]
+# The botler SDK. The hub mounts the copy matching its own version at /opt/botler/sdk in every
+# container (agents, jobs, the gate), so members depend on `botler` and get it from there.
+botler = { path = "/opt/botler/sdk", editable = true }
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.8", "pyright>=1.1.390"]
 
 [tool.ruff]
 line-length = 110
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "ANN", "RUF", "S"]
@@ -23,4 +29,4 @@ typeCheckingMode = "strict"
 reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]
-addopts = "-q"
+addopts = "-q --import-mode=importlib"

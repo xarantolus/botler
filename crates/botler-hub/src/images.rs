@@ -33,7 +33,7 @@ pub async fn ensure_base(hub: &Hub) -> Result<()> {
 }
 
 /// The full tree of `commit`, exported once and reused as a build context.
-async fn export(hub: &Hub, commit: &str) -> Result<PathBuf> {
+pub async fn export(hub: &Hub, commit: &str) -> Result<PathBuf> {
     let dir = hub.paths.exports().join(commit);
     if dir.join(".complete").exists() {
         return Ok(dir);

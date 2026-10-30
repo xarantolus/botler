@@ -1,4 +1,6 @@
-# Declare your own event types here (one or more files in events/). Built-in hub events
+# Declare your own event types here (one or more files in events/), or better as typed
+# `botler.Event` subclasses in packages/ (see packages/shared/src/shared/events.py), from which
+# `python -m botler.events manifest` generates events.manifest.json. Built-in hub events
 # (message, runnable.failed, proposal.updated, ...) are documented by the hub and need no entry.
 version = 1
 
