@@ -136,6 +136,7 @@ async fn events_abort_dialogs_about_them() {
         about: vec![about.into()],
         priority: Priority::Blocking,
         proposal_id: None,
+        spec: None,
         expires_at: None,
     };
     let hit = e.hub.store.create_dialog(&new("proposal:p1")).await.unwrap();

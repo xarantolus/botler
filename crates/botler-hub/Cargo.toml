@@ -43,6 +43,7 @@ rmcp = { version = "3.8", default-features = false, features = ["server", "macro
 tokio-util = "0.7"
 futures = "0.3"
 include_dir = "0.7"
+toml_edit = "0.25"
 
 [dev-dependencies]
 tempfile.workspace = true

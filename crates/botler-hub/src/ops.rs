@@ -194,6 +194,24 @@ pub const OPS: &[OpSpec] = &[
         visible: agents,
     },
     OpSpec {
+        name: "request_secrets",
+        description: "Ask the user for secrets, asynchronously: create a group, add fields to one, re-enter values (`fill`) or remove fields. The user gets a form; you get a request id now and a `dialog.answered` event later saying what was provided (never the values). Do not continue work that needs the secrets until that event arrives. Using a group in a container still needs a grant (`secrets = [\"<group>\"]` in a definition, proposed as a change).",
+        schema: schema::<crate::secret_requests::SecretRequest>,
+        visible: agents,
+    },
+    OpSpec {
+        name: "list_requests",
+        description: "Your outstanding requests to the user (questions, secret requests) with their ids.",
+        schema: schema::<Empty>,
+        visible: agents,
+    },
+    OpSpec {
+        name: "cancel_request",
+        description: "Withdraw one of your outstanding requests by id (it disappears for the user; a late answer is rejected).",
+        schema: schema::<CancelRequest>,
+        visible: agents,
+    },
+    OpSpec {
         name: "archive_ready",
         description: "Hand over before this chat is archived (only after an archive.requested event): what you did, what is outstanding, where your state lives, and optionally who should continue.",
         schema: schema::<ArchiveReady>,
@@ -312,6 +330,13 @@ pub struct SetChatTitle {
     pub slug: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CancelRequest {
+    pub id: String,
+    /// Why it is no longer needed.
+    pub reason: String,
+}
+
 #[derive(Debug, Deserialize, JsonSchema, serde::Serialize)]
 pub struct ArchiveReady {
     /// Everything you did in this chat, for someone who has not read it.
@@ -420,6 +445,15 @@ pub struct StateSet {
     pub value: String,
 }
 
+fn request_error(e: crate::secret_requests::RequestError) -> OpError {
+    use crate::secret_requests::RequestError as R;
+    match e {
+        R::Invalid(m) | R::MissingValue(m) => OpError::BadRequest(m),
+        R::Hub(h) => OpError::Hub(h),
+        R::Toml(m) => OpError::Hub(HubError::Forbidden(format!("secrets.toml: {m}"))),
+    }
+}
+
 fn args<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, OpError> {
     serde_json::from_value(if v.is_null() { json!({}) } else { v }).map_err(|e| OpError::BadRequest(e.to_string()))
 }
@@ -457,6 +491,49 @@ pub async fn call(hub: &Hub, caller: &Caller, name: &str, input: Value) -> OpRes
         "list_chats" => list_chats(hub).await,
         "list_event_types" => list_event_types(hub).await,
         "archive_ready" => archive_ready(hub, caller, args(input)?).await,
+        "request_secrets" => {
+            let Some(instance) = caller.instance() else {
+                return Err(OpError::Forbidden("only agents request secrets".into()));
+            };
+            let req: crate::secret_requests::SecretRequest = args(input)?;
+            let d = crate::secret_requests::open(hub, instance, &req).await.map_err(request_error)?;
+            Ok(
+                json!({ "request_id": d.id, "status": "waiting for the user", "note": "Continue with other work or stop; the answer arrives as a dialog.answered event." }),
+            )
+        }
+        "list_requests" => {
+            let Some(instance) = caller.instance() else {
+                return Err(OpError::Forbidden("only agents have requests".into()));
+            };
+            let mine: Vec<Value> = hub
+                .store
+                .open_dialogs()
+                .await?
+                .into_iter()
+                .filter(|d| d.instance == instance)
+                .map(|d| json!({ "id": d.id, "kind": d.kind, "question": d.question, "created_at": d.created_at }))
+                .collect();
+            Ok(json!({ "requests": mine }))
+        }
+        "cancel_request" => {
+            let Some(instance) = caller.instance() else {
+                return Err(OpError::Forbidden("only agents have requests".into()));
+            };
+            let a: CancelRequest = args(input)?;
+            let d = hub.store.dialog(&a.id).await?;
+            if d.instance != instance {
+                return Err(OpError::Forbidden("that request is not yours".into()));
+            }
+            let closed = hub
+                .store
+                .close_dialog(
+                    &a.id,
+                    botler_store::DialogStatus::Aborted,
+                    &format!("cancelled by {instance}: {}", a.reason),
+                )
+                .await?;
+            Ok(json!({ "cancelled": closed, "id": a.id }))
+        }
         "read_session" => read_session(hub, args(input)?).await,
         "get_events" => get_events(hub, args(input)?).await,
         "ask_user" => ask_user(hub, caller, args(input)?).await,
@@ -752,6 +829,7 @@ async fn ask_user(hub: &Hub, caller: &Caller, a: AskUser) -> OpResult {
             about: a.about,
             priority,
             proposal_id: None,
+            spec: None,
             expires_at,
         })
         .await?;

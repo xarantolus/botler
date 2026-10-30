@@ -48,6 +48,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/messages", post(user_message))
         .route("/api/v1/dialogs", get(dialogs))
         .route("/api/v1/dialogs/{id}/answer", post(answer_dialog))
+        .route("/api/v1/dialogs/{id}/secrets", post(submit_secrets))
         .route("/api/v1/events", get(events))
         .route("/api/v1/events/{id}/trace", get(trace))
         .route("/api/v1/instances", get(instances))
@@ -212,7 +213,27 @@ async fn user_message(
 
 async fn dialogs(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
     user_only(&p)?;
-    Ok(Json(json!({ "open": hub.store.open_dialogs().await?, "recent": hub.store.recent_dialogs(50).await? })))
+    let applied = hub.applied().await;
+    let open: Vec<Value> = hub
+        .store
+        .open_dialogs()
+        .await?
+        .into_iter()
+        .map(|d| {
+            let mut v = json!(d);
+            if d.kind == botler_store::DialogKind::Credentials
+                && let Some(req) =
+                    d.spec.clone().and_then(|s| serde_json::from_value::<crate::secret_requests::SecretRequest>(s).ok())
+            {
+                v["form"] = json!(req.form(&applied.defs));
+                v["remove"] = json!(req.remove);
+                v["group"] = json!(req.group);
+                v["new_group"] = json!(!applied.defs.secret_groups.contains_key(&req.group));
+            }
+            v
+        })
+        .collect();
+    Ok(Json(json!({ "open": open, "recent": hub.store.recent_dialogs(50).await? })))
 }
 
 #[derive(Deserialize)]
@@ -227,6 +248,12 @@ async fn answer_dialog(
     Json(a): Json<Answer>,
 ) -> ApiResult {
     user_only(&p)?;
+    if hub.store.dialog(&id).await?.kind == botler_store::DialogKind::Credentials {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "credentials requests are answered with the secrets form".into(),
+        ));
+    }
     let d = hub.store.answer_dialog(&id, &a.answer).await?;
     debug_assert_eq!(d.status, DialogStatus::Answered);
     let ev = Event::new(kinds::DIALOG_ANSWERED, Source::User, Provenance::Trusted, Utc::now())
@@ -234,6 +261,23 @@ async fn answer_dialog(
         .payload(json!({ "dialog_id": d.id, "question": d.question, "answer": a.answer }));
     hub.emit(ev).await?;
     Ok(Json(json!({ "dialog": d })))
+}
+
+async fn submit_secrets(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+    Json(sub): Json<crate::secret_requests::Submission>,
+) -> ApiResult {
+    user_only(&p)?;
+    use crate::secret_requests::RequestError as R;
+    match crate::secret_requests::submit(&hub, &id, sub).await {
+        Ok(v) => Ok(Json(v)),
+        Err(R::Invalid(m)) => Err(ApiError(StatusCode::CONFLICT, m)),
+        Err(R::MissingValue(n)) => Err(ApiError(StatusCode::BAD_REQUEST, format!("enter a value for {n}"))),
+        Err(R::Toml(m)) => Err(ApiError(StatusCode::CONFLICT, format!("secrets.toml: {m}"))),
+        Err(R::Hub(h)) => Err(h.into()),
+    }
 }
 
 #[derive(Deserialize)]

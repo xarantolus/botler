@@ -309,6 +309,45 @@ impl Repo {
         result
     }
 
+    /// A commit on top of `base` that writes (`Some`) or deletes (`None`) files. Used by the hub
+    /// for changes the user approved directly (e.g. declaring secrets from a filled form).
+    pub async fn commit_files(&self, base: &str, files: &[(&str, Option<&str>)], message: &str) -> Result<String> {
+        let wt = self.scratch_worktree(base).await?;
+        let result = async {
+            for (rel, body) in files {
+                let path = wt.join(rel);
+                match body {
+                    Some(b) => {
+                        if let Some(dir) = path.parent() {
+                            tokio::fs::create_dir_all(dir).await?;
+                        }
+                        tokio::fs::write(&path, b).await?;
+                    }
+                    None => remove_file_if_exists(&path).await?,
+                }
+            }
+            self.git_in(&wt, &["add", "--all"]).await?;
+            self.git_in(&wt, &["commit", "--quiet", "--allow-empty", "-m", message]).await?;
+            self.git_in(&wt, &["rev-parse", "HEAD"]).await
+        }
+        .await;
+        self.remove_worktree(&wt).await;
+        result
+    }
+
+    /// Read one file at a commit (`None` if absent).
+    pub async fn read_file(&self, commit: &str, path: &str) -> Result<Option<String>> {
+        let out = self.cmd().args(["show", &format!("{commit}:{path}")]).stdin(Stdio::null()).output().await?;
+        if out.status.success() {
+            return Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()));
+        }
+        let err = String::from_utf8_lossy(&out.stderr);
+        if err.contains("does not exist") || err.contains("exists on disk, but not in") {
+            return Ok(None);
+        }
+        Err(Error::Git { args: format!("show {commit}:{path}"), stderr: err.trim().to_string() })
+    }
+
     /// Store a commit under a hub-owned ref so it is not garbage collected (proposals).
     pub async fn pin(&self, refname: &str, commit: &str) -> Result<()> {
         if !refname.starts_with("refs/proposals/") && !refname.starts_with("refs/botler/") {

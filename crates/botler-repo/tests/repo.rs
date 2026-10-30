@@ -154,3 +154,18 @@ async fn pin_is_namespaced() {
     f.repo.pin("refs/proposals/p1", &main).await.unwrap();
     assert!(f.repo.pin("refs/heads/main", &main).await.is_err());
 }
+
+#[tokio::test]
+async fn hub_commits_files_on_main() {
+    let f = fixture().await;
+    let base = f.repo.main().await.unwrap();
+    let head = f
+        .repo
+        .commit_files(&base, &[("secrets.toml", Some("x = 1\n")), ("jobs/poll/src/poll.py", None)], "hub edit")
+        .await
+        .unwrap();
+    f.repo.advance_main(&base, &head).await.unwrap();
+    assert_eq!(f.repo.read_file(&head, "secrets.toml").await.unwrap().as_deref(), Some("x = 1\n"));
+    assert_eq!(f.repo.read_file(&head, "jobs/poll/src/poll.py").await.unwrap(), None);
+    assert_eq!(f.repo.read_file(&head, "nope.txt").await.unwrap(), None);
+}

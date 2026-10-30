@@ -316,7 +316,18 @@ async function renderEvents() {
 async function renderQuestions() {
   const d = await api("/api/v1/dialogs");
   $("#qcount").textContent = d.open.length ? `(${d.open.length})` : "";
-  const open = d.open.map((q) => `
+  const open = d.open.map((q) => q.kind === "credentials" ? `
+    <div class="row" data-credentials="${esc(q.id)}">
+      <div class="muted" style="font-size:12px">${esc(q.instance)} · secrets · ${esc(ago(q.created_at))}</div>
+      <div><b>${esc(q.question)}</b>${q.new_group ? ' <span class="chip">new group</span>' : ""}</div>
+      ${q.detail ? `<div style="white-space:pre-wrap">${esc(q.detail)}</div>` : ""}
+      ${(q.form || []).map((f) => `<div style="margin-top:6px" data-field="${esc(f.name)}">
+        <div style="font-size:13px"><code>${esc(f.name)}</code> <span class="muted">${f.file ? "file " + esc(f.file) : "env var"}${f.description ? " · " + esc(f.description) : ""}</span></div>
+        ${f.file ? '<textarea rows="3"></textarea>' : '<input type="password" autocomplete="off">'}
+      </div>`).join("")}
+      ${(q.remove || []).length ? `<div style="margin-top:6px" class="warn">Will remove: ${q.remove.map((n) => `<code>${esc(n)}</code>`).join(", ")} (values are deleted)</div>` : ""}
+      <div class="ctas"><button class="primary" data-cred-submit>Save</button><button data-cred-decline>Decline</button></div>
+    </div>` : `
     <div class="row" data-dialog="${esc(q.id)}">
       <div class="muted" style="font-size:12px">${esc(q.instance)} · ${esc(q.priority)} · ${esc(ago(q.created_at))}</div>
       <div><b>${esc(q.question)}</b></div>
@@ -375,6 +386,17 @@ async function onPaneClick(e) {
     if (!answer) return;
     try {
       await api(`/api/v1/dialogs/${dialog.dataset.dialog}/answer`, { method: "POST", body: JSON.stringify({ answer }) });
+    } catch (err) { alert(err.message); }
+    refreshPane().catch(report);
+    return;
+  }
+  const cred = e.target.closest("[data-credentials]");
+  if (cred && (e.target.dataset.credSubmit !== undefined || e.target.dataset.credDecline !== undefined)) {
+    const decline = e.target.dataset.credDecline !== undefined;
+    const values = {};
+    cred.querySelectorAll("[data-field]").forEach((f) => { values[f.dataset.field] = f.querySelector("input, textarea").value; });
+    try {
+      await api(`/api/v1/dialogs/${cred.dataset.credentials}/secrets`, { method: "POST", body: JSON.stringify({ values, decline }) });
     } catch (err) { alert(err.message); }
     refreshPane().catch(report);
     return;

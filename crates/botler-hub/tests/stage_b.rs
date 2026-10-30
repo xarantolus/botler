@@ -325,3 +325,110 @@ async fn parent_hears_when_a_spawned_chat_finishes_its_turn() {
     assert!(idle[0].correlation.is_some(), "chained to the delivery that started the turn");
     assert!(e.hub.agents.phase(&child).await.is_none(), "no phase once running");
 }
+
+#[tokio::test]
+async fn secret_requests_are_async_and_declare_on_submit() {
+    use botler_hub::auth::Principal;
+    use botler_hub::ops::{self, Caller, OpError};
+    use botler_hub::secret_requests::{Submission, submit};
+    let e = env().await;
+    with_key(&e).await;
+    e.hub
+        .emit(
+            Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+                .to("main")
+                .payload(json!({"text": "hi"})),
+        )
+        .await
+        .unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    let wake = e.hub.agents.get("main").await.unwrap().wake.clone();
+    let main = Caller::resolve(&e.hub, Principal::Agent { instance: "main".into(), wake }).await.unwrap();
+
+    // Invalid requests are refused immediately with a reason.
+    let bad =
+        ops::call(&e.hub, &main, "request_secrets", json!({"group": "gitlab", "reason": "x", "fill": ["NOPE"]})).await;
+    assert!(matches!(bad, Err(OpError::BadRequest(_))), "{bad:?}");
+
+    let r = ops::call(
+        &e.hub,
+        &main,
+        "request_secrets",
+        json!({
+            "group": "gitlab", "reason": "Deploy the station repo", "description": "GitLab access",
+            "add": [{"name": "GITLAB_TOKEN_STATION", "description": "Project token with write_repository"},
+                    {"name": "GITLAB_SSH_KEY", "description": "Deploy key", "file": "/root/.ssh/id_ed25519"}]
+        }),
+    )
+    .await
+    .unwrap();
+    let id = r["request_id"].as_str().unwrap().to_string();
+    let listed = ops::call(&e.hub, &main, "list_requests", json!({})).await.unwrap();
+    assert_eq!(listed["requests"][0]["id"], id.as_str());
+    assert!(
+        !e.hub.applied().await.defs.secret_groups.contains_key("gitlab"),
+        "nothing is declared before the user answers"
+    );
+
+    let missing = submit(
+        &e.hub,
+        &id,
+        Submission { values: [("GITLAB_TOKEN_STATION".into(), "glpat".into())].into(), decline: false },
+    )
+    .await;
+    assert!(missing.is_err(), "every field needs a value");
+    let out = submit(
+        &e.hub,
+        &id,
+        Submission {
+            values: [("GITLAB_TOKEN_STATION".into(), "glpat".into()), ("GITLAB_SSH_KEY".into(), "KEY".into())].into(),
+            decline: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out["added"].as_array().unwrap().len(), 2);
+    let defs = &e.hub.applied().await.defs;
+    assert_eq!(defs.secret_groups["gitlab"].secrets.len(), 2, "declared and applied");
+    assert_eq!(e.hub.store.secret(&e.hub.secret_key, "GITLAB_TOKEN_STATION").await.unwrap().as_deref(), Some("glpat"));
+    let toml = e.hub.repo.read_file(&e.hub.repo.main().await.unwrap(), "secrets.toml").await.unwrap().unwrap();
+    assert!(toml.contains("# Secret declarations"), "comments preserved: {toml}");
+
+    // The agent hears back with names, never values.
+    e.route().await;
+    let answered = e
+        .hub
+        .store
+        .events(&botler_store::EventQuery { kind: Some("dialog.answered".into()), limit: 1, ..Default::default() })
+        .await
+        .unwrap();
+    let text = answered[0].payload.to_string();
+    assert!(text.contains("GITLAB_SSH_KEY") && !text.contains("glpat") && !text.contains("\"KEY\""), "{text}");
+
+    // Remove one field later; cancel works and blocks late answers.
+    let r2 = ops::call(
+        &e.hub,
+        &main,
+        "request_secrets",
+        json!({"group": "gitlab", "reason": "rotate", "remove": ["GITLAB_SSH_KEY"]}),
+    )
+    .await
+    .unwrap();
+    let id2 = r2["request_id"].as_str().unwrap().to_string();
+    ops::call(&e.hub, &main, "cancel_request", json!({"id": id2, "reason": "not needed"})).await.unwrap();
+    assert!(submit(&e.hub, &id2, Submission { values: Default::default(), decline: false }).await.is_err());
+    let r3 = ops::call(
+        &e.hub,
+        &main,
+        "request_secrets",
+        json!({"group": "gitlab", "reason": "drop key", "remove": ["GITLAB_SSH_KEY"]}),
+    )
+    .await
+    .unwrap();
+    submit(&e.hub, r3["request_id"].as_str().unwrap(), Submission { values: Default::default(), decline: false })
+        .await
+        .unwrap();
+    assert!(!e.hub.applied().await.defs.secrets.contains_key("GITLAB_SSH_KEY"));
+    assert_eq!(e.hub.store.secret(&e.hub.secret_key, "GITLAB_SSH_KEY").await.unwrap(), None, "value deleted");
+}

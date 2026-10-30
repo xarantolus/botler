@@ -184,6 +184,7 @@ async fn dialogs_reject_late_and_invalid_answers() {
         about: vec!["proposal:1".into()],
         priority: Priority::Blocking,
         proposal_id: None,
+        spec: None,
         expires_at: None,
     };
     let d = s.create_dialog(&new("deploy?")).await.unwrap();

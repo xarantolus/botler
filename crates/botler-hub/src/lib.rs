@@ -18,6 +18,7 @@ pub mod plumbing;
 pub mod prompt;
 pub mod router;
 pub mod scheduler;
+pub mod secret_requests;
 pub mod serve;
 pub mod sessions;
 pub mod supervisor;

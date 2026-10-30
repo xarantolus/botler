@@ -12,6 +12,8 @@ use crate::{Error, Result, Store, new_id, parse_opt_ts, parse_ts, text_enum, ts}
 text_enum!(DialogKind {
     Question = "question",
     Approval = "approval",
+    /// Enter, add or remove secret values (a form defined by `spec`).
+    Credentials = "credentials",
 });
 
 text_enum!(DialogStatus {
@@ -40,6 +42,8 @@ pub struct Dialog {
     pub about: Vec<String>,
     pub priority: Priority,
     pub proposal_id: Option<String>,
+    /// Structured request for typed dialogs.
+    pub spec: Option<serde_json::Value>,
     pub status: DialogStatus,
     pub answer: Option<String>,
     pub abort_reason: Option<String>,
@@ -58,6 +62,7 @@ pub struct NewDialog {
     pub about: Vec<String>,
     pub priority: Priority,
     pub proposal_id: Option<String>,
+    pub spec: Option<serde_json::Value>,
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -76,6 +81,10 @@ fn row(r: &SqliteRow) -> Result<Dialog> {
         about: list("about")?,
         priority: Priority::parse(T, r.get("priority"))?,
         proposal_id: r.get("proposal_id"),
+        spec: r
+            .get::<Option<String>, _>("spec")
+            .map(|s| serde_json::from_str(&s).map_err(|e| Error::Corrupt { table: T, detail: e.to_string() }))
+            .transpose()?,
         status: DialogStatus::parse(T, r.get("status"))?,
         answer: r.get("answer"),
         abort_reason: r.get("abort_reason"),
@@ -89,8 +98,8 @@ impl Store {
     pub async fn create_dialog(&self, d: &NewDialog) -> Result<Dialog> {
         let id = new_id();
         sqlx::query(
-            "INSERT INTO dialogs (id, instance, kind, question, detail, ctas, about, priority, proposal_id, status, expires_at, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+            "INSERT INTO dialogs (id, instance, kind, question, detail, ctas, about, priority, proposal_id, spec, status, expires_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
         )
         .bind(&id)
         .bind(&d.instance)
@@ -101,6 +110,7 @@ impl Store {
         .bind(crate::encode("dialog about", &d.about)?)
         .bind(d.priority.as_str())
         .bind(&d.proposal_id)
+        .bind(d.spec.as_ref().map(|s| crate::encode("dialog spec", s)).transpose()?)
         .bind(d.expires_at.map(ts))
         .bind(ts(Utc::now()))
         .execute(&self.pool)
