@@ -610,6 +610,20 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
                 None => l.err(&path, format!("mcp {m:?} is not a job in jobs/")),
             }
         }
+        // Every model route is reached over the network today (even a local `base_url` lies
+        // outside the container), so an agent without network could never call its model.
+        if a.spec.env.network() == Network::None
+            && let Some((route, r)) = defs.route_for(&a.spec)
+        {
+            l.err(
+                &path,
+                format!(
+                    "network = \"none\" cannot reach model route {route:?} ({}/{}): agents call their model over \
+                     the network. Remove `network = \"none\"`",
+                    r.provider, r.model
+                ),
+            );
+        }
         if !a.spec.env.mcp.is_empty() && a.spec.env.network() == Network::None {
             l.err(
                 &path,

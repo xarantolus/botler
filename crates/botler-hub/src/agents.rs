@@ -51,6 +51,8 @@ pub struct LiveAgent {
     stopping: AtomicBool,
     /// What it did this turn: decides whether its parent hears about the end of the turn.
     turn: std::sync::Mutex<TurnLog>,
+    /// The error of the turn's last model call, if it failed: the turn failed when it settles.
+    error: std::sync::Mutex<Option<String>>,
     /// Held while a delivery is handed to pi and recorded as delivered. pi can start and settle
     /// the turn before its response to the prompt is processed, so the end-of-turn handling takes
     /// it before looking up the delivery that started the turn.
@@ -74,6 +76,10 @@ impl LiveAgent {
 
     fn turn(&self) -> std::sync::MutexGuard<'_, TurnLog> {
         self.turn.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn error(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn last_active(&self) -> DateTime<Utc> {
@@ -365,6 +371,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
         turn: std::sync::Mutex::default(),
+        error: std::sync::Mutex::default(),
         delivering: Mutex::default(),
         kill: Mutex::new(Some(attached.kill)),
     });
@@ -693,8 +700,12 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
             PiEventKind::AgentStart => {
                 agent.busy.store(true, Ordering::SeqCst);
                 agent.turn().reset();
+                *agent.error() = None;
                 // pi is up and working: the instance is healthy again.
                 hub.agents.crashes.lock().await.remove(&agent.instance);
+                if hub.agents.phases.lock().await.remove(&agent.instance).is_some() {
+                    broadcast_state(&hub, &agent.instance, AgentStatus::Running);
+                }
             }
             PiEventKind::AgentSettled => {
                 agent.busy.store(false, Ordering::SeqCst);
@@ -702,19 +713,26 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                 if let Err(e) = hub.store.touch_instance(&agent.instance).await {
                     tracing::error!(instance = %agent.instance, error = %e, "could not record activity");
                 }
-                if let Err(e) = notify_parent(&hub, &agent).await {
-                    tracing::error!(instance = %agent.instance, error = %e, "could not notify parent");
+                let failed = agent.error().take();
+                let ended = match failed {
+                    Some(err) => crate::turns::failed(&hub, &agent, &err).await,
+                    None => turn_succeeded(&hub, &agent).await,
+                };
+                if let Err(e) = ended {
+                    tracing::error!(instance = %agent.instance, error = %e, "could not handle the end of the turn");
                 }
                 hub.dispatch_notify.notify_one();
             }
-            PiEventKind::MessageEnd { usage: Some(u), error, .. } => {
-                if let Some(err) = error {
-                    tracing::warn!(instance = %agent.instance, %err, "model call failed");
-                    if let Err(e) = on_provider_error(&hub, &agent, err).await {
-                        tracing::error!(instance = %agent.instance, error = %e, "could not record provider error");
+            PiEventKind::MessageEnd { role, usage, error } => {
+                if role == "assistant" {
+                    if let Some(err) = error {
+                        tracing::warn!(instance = %agent.instance, %err, "model call failed");
                     }
+                    agent.error().clone_from(error);
                 }
-                if let Err(e) = meter(&hub, &agent, u).await {
+                if let Some(u) = usage
+                    && let Err(e) = meter(&hub, &agent, u).await
+                {
                     tracing::error!(instance = %agent.instance, error = %e, "usage metering failed");
                 }
             }
@@ -724,28 +742,17 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
     }
 }
 
-/// Auth and billing errors from the model provider will not fix themselves by retrying: pause the
-/// agent and open an incident for the user. No triage is dispatched (it would use the same key).
-async fn on_provider_error(hub: &Hub, agent: &LiveAgent, err: &str) -> Result<()> {
-    let code = err.trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
-    let kind = match code {
-        "401" | "403" => "provider auth",
-        "402" => "provider billing",
-        _ => return Ok(()),
-    };
-    let reason = format!("{kind} error: {}", err.chars().take(300).collect::<String>());
-    if hub.store.trip_breaker(&format!("instance:{}", agent.instance), "provider", &reason).await? {
-        let (incident, _) = hub.store.record_failure(&format!("agent:{}", agent.instance), "provider", None).await?;
-        tracing::error!(instance = %agent.instance, incident = %incident.id, %reason, "agent paused: provider rejected requests");
-        if hub
-            .live
-            .send(Live::Instance { instance: agent.instance.clone(), status: AgentStatus::Paused { reason } })
-            .is_err()
-        {
-            tracing::trace!("no live viewers");
-        }
-    }
-    Ok(())
+async fn turn_succeeded(hub: &Hub, agent: &LiveAgent) -> Result<()> {
+    crate::turns::succeeded(hub, &agent.instance).await?;
+    notify_parent(hub, agent).await
+}
+
+/// The delivery that started the agent's current turn. A delivery still being recorded may be
+/// it: wait for it. pi's response to the prompt is read by the client's reader task, not the
+/// pump, so this cannot deadlock, and the prompt is bounded by the pi timeout.
+pub(crate) async fn turn_start(hub: &Hub, agent: &LiveAgent) -> Result<Option<Delivery>> {
+    let _delivering = agent.delivering.lock().await;
+    Ok(hub.store.last_delivered(&agent.instance).await?)
 }
 
 /// Tell the agent that spawned this one that it ended its turn, with its final answer, unless
@@ -774,14 +781,7 @@ async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
         last_reply,
     });
     let mut ev = builtin(idle, Source::Agent(instance.name.clone()))?.to(parent);
-    // A delivery still being recorded may be the one that started this turn: wait for it. pi's
-    // response to the prompt is read by the client's reader task, not this pump, so this cannot
-    // deadlock, and the prompt is bounded by the pi timeout.
-    let last = {
-        let _delivering = agent.delivering.lock().await;
-        hub.store.last_delivered(&instance.name).await?
-    };
-    if let Some(d) = last {
+    if let Some(d) = turn_start(hub, agent).await? {
         let started = hub.store.event(&d.event_id).await?;
         ev = ev.in_reply_to(&started);
     }
@@ -866,7 +866,9 @@ async fn watch_exit(
     if let Err(e) = hub.store.set_instance_state(&agent.instance, state, None).await {
         tracing::error!(instance = %agent.instance, error = %e, "could not record agent exit");
     }
-    broadcast_state(&hub, &agent.instance, AgentStatus::Dormant);
+    // A scheduled retry or a failed turn stays visible while it sleeps.
+    let status = hub.agents.phase(&agent.instance).await.map_or(AgentStatus::Dormant, AgentStatus::from);
+    broadcast_state(&hub, &agent.instance, status);
     if !deliberate {
         let tail = stderr.text();
         tracing::warn!(instance = %agent.instance, ?code, stderr = %tail, "agent container exited unexpectedly");
@@ -989,7 +991,13 @@ pub async fn reconcile_on_boot(hub: &Hub) -> Result<()> {
     Ok(())
 }
 
-fn broadcast_state(hub: &Hub, instance: &str, status: AgentStatus) {
+/// Record a phase that outlives the wake (a scheduled retry, a failed turn) and show it.
+pub(crate) async fn show_phase(hub: &Hub, instance: &str, phase: WakePhase) {
+    hub.agents.phases.lock().await.insert(instance.to_string(), phase.clone());
+    broadcast_state(hub, instance, phase.into());
+}
+
+pub(crate) fn broadcast_state(hub: &Hub, instance: &str, status: AgentStatus) {
     if hub.live.send(Live::Instance { instance: instance.into(), status }).is_err() {
         tracing::trace!("no live viewers");
     }

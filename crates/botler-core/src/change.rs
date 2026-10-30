@@ -676,13 +676,14 @@ pub enum Decision {
     Reject,
 }
 
-/// The transaction decision table. Gate failures never reach this point.
-pub fn decide(summary: &ChangeSummary, verdict: Verdict) -> Decision {
+/// The transaction decision table. Gate failures never reach this point. `None` means there is
+/// no review (no reviewer defined, or it failed or timed out): the user decides, never auto-merge.
+pub fn decide(summary: &ChangeSummary, verdict: Option<Verdict>) -> Decision {
     match verdict {
-        Verdict::Reject => Decision::Reject,
-        Verdict::Escalate => Decision::AskUser,
-        Verdict::Approve if summary.escalations.is_empty() => Decision::Merge,
-        Verdict::Approve => Decision::AskUser,
+        Some(Verdict::Reject) => Decision::Reject,
+        None | Some(Verdict::Escalate) => Decision::AskUser,
+        Some(Verdict::Approve) if summary.escalations.is_empty() => Decision::Merge,
+        Some(Verdict::Approve) => Decision::AskUser,
     }
 }
 
@@ -716,7 +717,8 @@ mod tests {
         let new = defs(&new_tree);
         let s = preview(&old, &new, &["triggers/digest.toml".into()], Utc::now());
         assert!(s.escalations.is_empty(), "{:?}", s.escalations);
-        assert_eq!(decide(&s, Verdict::Approve), Decision::Merge);
+        assert_eq!(decide(&s, Some(Verdict::Approve)), Decision::Merge);
+        assert_eq!(decide(&s, None), Decision::AskUser, "a missing review never merges");
         let t = &s.triggers[0];
         assert_eq!(t.status, Status::Added);
         assert_eq!(t.upcoming.len(), UPCOMING);
@@ -774,7 +776,7 @@ mod tests {
         let v2 = svc("lifetime = \"service\"\ncommand = [\"w\", \"--fast\"]\n");
         let s = preview(&v1, &v2, &paths, Utc::now());
         assert!(s.escalations.is_empty(), "code-only changes do not: {:?}", s.escalations);
-        assert_eq!(decide(&s, Verdict::Approve), Decision::Merge);
+        assert_eq!(decide(&s, Some(Verdict::Approve)), Decision::Merge);
         let v3 = svc("lifetime = \"service\"\ncommand = [\"w\"]\nsecrets = [\"gitlab\"]\n");
         assert_eq!(
             esc(&v2, &v3),
@@ -831,8 +833,8 @@ mod tests {
             to: "agent `main`".into()
         }));
         assert!(s.escalations.contains(&Escalation::ProtectedPath { path: "policies/reviewer.md".into() }));
-        assert_eq!(decide(&s, Verdict::Approve), Decision::AskUser);
-        assert_eq!(decide(&s, Verdict::Reject), Decision::Reject);
+        assert_eq!(decide(&s, Some(Verdict::Approve)), Decision::AskUser);
+        assert_eq!(decide(&s, Some(Verdict::Reject)), Decision::Reject);
     }
 
     #[test]

@@ -13,6 +13,8 @@ const BUILTIN = {
   "breaker.tripped": true,
   "archive.requested": true,
   "agent.idle": true,
+  "agent.turn_failed": true,
+  "reply.overdue": true,
   timer: true,
   schedule: true,
   "access.changed": true,
@@ -36,6 +38,8 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   "breaker.tripped": "i-lucide-octagon-pause",
   "archive.requested": "i-lucide-archive",
   "agent.idle": "i-lucide-moon",
+  "agent.turn_failed": "i-lucide-circle-alert",
+  "reply.overdue": "i-lucide-hourglass",
   timer: "i-lucide-alarm-clock",
   schedule: "i-lucide-calendar-clock",
   "access.changed": "i-lucide-shield-plus",
@@ -86,6 +90,10 @@ export function eventSummary(ev: BotlerEvent): string {
       return `archive requested${b.payload.reason ? `: ${b.payload.reason}` : ""}`;
     case "agent.idle":
       return `${b.payload.title ?? b.payload.instance} is idle`;
+    case "agent.turn_failed":
+      return `${b.payload.instance} failed (${b.payload.class}, ${b.payload.attempts} attempts): ${b.payload.error}`;
+    case "reply.overdue":
+      return `${b.payload.instance} has not answered`;
     case "timer":
       return `timer ${b.payload.timer_id}${b.payload.note ? `: ${b.payload.note}` : ""}`;
     case "schedule":

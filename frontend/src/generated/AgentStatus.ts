@@ -4,4 +4,4 @@ import type { WakeStep } from "./WakeStep";
 /**
  * An agent's runtime status, broadcast whenever it changes.
  */
-export type AgentStatus = { "status": "waking", step: WakeStep, } | { "status": "running" } | { "status": "dormant" } | { "status": "failed", error: string, } | { "status": "paused", reason: string, };
+export type AgentStatus = { "status": "waking", step: WakeStep, } | { "status": "running" } | { "status": "dormant" } | { "status": "failed", error: string, } | { "status": "paused", reason: string, } | { "status": "retrying", at: string, error: string, };

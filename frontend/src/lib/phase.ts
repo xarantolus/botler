@@ -33,7 +33,9 @@ export function stepLabel(step: WakeStep): string {
 export function currentStatus(phase: WakePhase | null, live: AgentStatus | null): AgentStatus | null {
   if (live) return live;
   if (!phase) return null;
-  return phase.phase === "waking" ? { status: "waking", step: phase.step } : { status: "failed", error: phase.error };
+  if (phase.phase === "waking") return { status: "waking", step: phase.step };
+  if (phase.phase === "retrying") return { status: "retrying", at: phase.at, error: phase.error };
+  return { status: "failed", error: phase.error };
 }
 
 export interface ChatSituation {
@@ -51,6 +53,9 @@ export function phaseBadge(s: ChatSituation): Badge {
   const st = s.status;
   if (st?.status === "failed") return { label: "crashed", type: "error", busy: false, detail: st.error };
   if (st?.status === "paused") return { label: "paused", type: "error", busy: false, detail: st.reason };
+  if (st?.status === "retrying") {
+    return { label: "retrying", type: "warning", busy: true, detail: `retrying ${retryIn(st.at)}: ${st.error}` };
+  }
   if (st?.status === "waking") return { label: "starting", type: "info", busy: true, detail: stepLabel(st.step) };
   if (s.state === "starting") return { label: "starting", type: "info", busy: true };
   if (s.archiveRequested) return { label: "handing over", type: "warning", busy: true };
@@ -67,4 +72,13 @@ export function phaseBadge(s: ChatSituation): Badge {
   if (s.pending) return { label: "queued", type: "info", busy: true, detail: `${s.pending} message(s) queued` };
   if (running) return { label: "running", type: "success", busy: false };
   return { label: "sleeping", type: "default", busy: false };
+}
+
+/** "in 2m" (or "now") until an RFC 3339 time. */
+export function retryIn(at: string, now: number = Date.now()): string {
+  const secs = Math.round((Date.parse(at) - now) / 1000);
+  if (!(secs > 0)) return "now";
+  if (secs < 60) return `in ${secs}s`;
+  if (secs < 3600) return `in ${Math.round(secs / 60)}m`;
+  return `in ${Math.round(secs / 3600)}h`;
 }

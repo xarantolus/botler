@@ -19,6 +19,7 @@ mod secrets;
 mod timers;
 mod trials;
 mod usage;
+mod waits;
 
 use std::path::Path;
 use std::str::FromStr;
@@ -40,6 +41,7 @@ pub use secrets::SecretKey;
 pub use timers::{NewTimer, Timer, TimerStatus};
 pub use trials::{MAX_EFFECTS as MAX_TRIAL_EFFECTS, Trial};
 pub use usage::UsageTotals;
+pub use waits::{ReplyExpectation, TurnRetry};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -2,6 +2,7 @@
 import type { AccessChangedPayload } from "./AccessChangedPayload";
 import type { ActionResultPayload } from "./ActionResultPayload";
 import type { AgentIdlePayload } from "./AgentIdlePayload";
+import type { AgentTurnFailedPayload } from "./AgentTurnFailedPayload";
 import type { ArchiveRequestedPayload } from "./ArchiveRequestedPayload";
 import type { BreakerTrippedPayload } from "./BreakerTrippedPayload";
 import type { DialogAbortedPayload } from "./DialogAbortedPayload";
@@ -9,6 +10,7 @@ import type { DialogAnsweredPayload } from "./DialogAnsweredPayload";
 import type { EnvironmentUpdatedPayload } from "./EnvironmentUpdatedPayload";
 import type { MessagePayload } from "./MessagePayload";
 import type { ProposalUpdatedPayload } from "./ProposalUpdatedPayload";
+import type { ReplyOverduePayload } from "./ReplyOverduePayload";
 import type { RunnableFailedPayload } from "./RunnableFailedPayload";
 import type { RunnableFinishedPayload } from "./RunnableFinishedPayload";
 import type { SchedulePayload } from "./SchedulePayload";
@@ -19,4 +21,4 @@ import type { TrialFinishedPayload } from "./TrialFinishedPayload";
  * Every built-in event type with its payload. Serialized as `{ "type": ..., "payload": ... }`,
  * the same two fields an [`Event`] has.
  */
-export type BuiltinPayload = { "type": "message", "payload": MessagePayload } | { "type": "runnable.failed", "payload": RunnableFailedPayload } | { "type": "runnable.finished", "payload": RunnableFinishedPayload } | { "type": "dialog.answered", "payload": DialogAnsweredPayload } | { "type": "dialog.aborted", "payload": DialogAbortedPayload } | { "type": "proposal.updated", "payload": ProposalUpdatedPayload } | { "type": "trial.finished", "payload": TrialFinishedPayload } | { "type": "action.result", "payload": ActionResultPayload } | { "type": "breaker.tripped", "payload": BreakerTrippedPayload } | { "type": "archive.requested", "payload": ArchiveRequestedPayload } | { "type": "agent.idle", "payload": AgentIdlePayload } | { "type": "timer", "payload": TimerPayload } | { "type": "schedule", "payload": SchedulePayload } | { "type": "access.changed", "payload": AccessChangedPayload } | { "type": "environment.updated", "payload": EnvironmentUpdatedPayload };
+export type BuiltinPayload = { "type": "message", "payload": MessagePayload } | { "type": "runnable.failed", "payload": RunnableFailedPayload } | { "type": "runnable.finished", "payload": RunnableFinishedPayload } | { "type": "dialog.answered", "payload": DialogAnsweredPayload } | { "type": "dialog.aborted", "payload": DialogAbortedPayload } | { "type": "proposal.updated", "payload": ProposalUpdatedPayload } | { "type": "trial.finished", "payload": TrialFinishedPayload } | { "type": "action.result", "payload": ActionResultPayload } | { "type": "breaker.tripped", "payload": BreakerTrippedPayload } | { "type": "archive.requested", "payload": ArchiveRequestedPayload } | { "type": "agent.idle", "payload": AgentIdlePayload } | { "type": "agent.turn_failed", "payload": AgentTurnFailedPayload } | { "type": "reply.overdue", "payload": ReplyOverduePayload } | { "type": "timer", "payload": TimerPayload } | { "type": "schedule", "payload": SchedulePayload } | { "type": "access.changed", "payload": AccessChangedPayload } | { "type": "environment.updated", "payload": EnvironmentUpdatedPayload };

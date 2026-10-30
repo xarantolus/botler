@@ -229,12 +229,15 @@ mod tests {
                 .with("jobs/j/Dockerfile", "FROM x")
         };
         let errors = |t: &MemTree| load(t).errors().map(|d| d.message.clone()).collect::<Vec<_>>();
-        let ok =
-            tree("workspace = \"none\"\nnetwork = \"none\"\nhome = \"h\"\n", "volume = true\nnetwork = \"none\"\n");
+        let ok = tree("workspace = \"none\"\nhome = \"h\"\n", "volume = true\nnetwork = \"none\"\n");
         let defs = load(&ok).into_result().unwrap_or_else(|d| panic!("{d:#?}"));
         assert_eq!(defs.agents["a"].spec.env.workspace(), Workspace::None);
         assert_eq!(defs.agents["a"].spec.env.home.as_deref(), Some("h"));
         assert!(defs.jobs["j"].spec.env.volume && defs.jobs["j"].spec.env.network() == Network::None);
+        // Jobs may run without network; an agent could never reach its (remote) model.
+        let offline = errors(&tree("network = \"none\"\n", ""));
+        assert_eq!(offline.len(), 1, "{offline:?}");
+        assert!(offline[0].contains("network = \"none\" cannot reach model route \"d\" (p/m)"), "{offline:?}");
         let unknown = errors(&tree("bogus = 1\n", "bogus = 1\n"));
         assert_eq!(unknown.len(), 2, "{unknown:?}");
         assert!(unknown.iter().all(|e| e.contains("unknown field `bogus`")), "{unknown:?}");

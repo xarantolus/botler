@@ -409,6 +409,32 @@ async fn quiet_and_held_deliveries_and_pair_queries() {
 }
 
 #[tokio::test]
+async fn turn_retries_and_reply_expectations() {
+    let s = store().await;
+    let t0 = Utc::now().trunc_subsecs(3);
+    let r = s.record_turn_failure("a", Some("e1"), "Connection error.").await.unwrap();
+    assert_eq!((r.attempts, r.event_id.as_deref(), r.next_at), (1, Some("e1"), None));
+    s.schedule_turn_retry("a", t0 + Duration::seconds(30)).await.unwrap();
+    assert!(s.take_due_retries(t0).await.unwrap().is_empty());
+    assert_eq!(s.next_wait_at().await.unwrap(), Some(t0 + Duration::seconds(30)));
+    assert_eq!(s.take_due_retries(t0 + Duration::seconds(31)).await.unwrap().len(), 1);
+    assert!(s.take_due_retries(t0 + Duration::seconds(31)).await.unwrap().is_empty(), "taken once");
+    let r = s.record_turn_failure("a", Some("e2"), "503").await.unwrap();
+    assert_eq!((r.attempts, r.event_id.as_deref()), (2, Some("e1")), "keeps what started the turn");
+    assert!(s.clear_turn_retry("a").await.unwrap());
+    assert!(s.turn_retry("a").await.unwrap().is_none());
+
+    s.expect_reply("p", "c", Some("e1"), t0).await.unwrap();
+    s.expect_reply("q", "c", None, t0).await.unwrap();
+    s.clear_expectations(Some("p"), "c").await.unwrap();
+    assert_eq!(s.expectations_on("c").await.unwrap().len(), 1);
+    let overdue = s.take_overdue(t0).await.unwrap();
+    assert_eq!(overdue.len(), 1);
+    assert_eq!(overdue[0].sender, "q");
+    assert!(s.take_overdue(t0).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn grants_and_subscriptions_follow_the_chat() {
     use botler_core::defs::{MountMode, Resource};
     let s = store().await;

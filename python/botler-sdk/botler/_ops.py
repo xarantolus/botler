@@ -8,15 +8,16 @@ from typing import Any
 from ._client import call
 
 
-def send_message(*, text: str, to: str, reply_to: str | None = None, urgent: bool | None = None) -> dict[str, Any]:
+def send_message(*, text: str, to: str, expect_reply_within: str | None = None, reply_to: str | None = None, urgent: bool | None = None) -> dict[str, Any]:
     """Send a message to an agent instance (e.g. `botler`). Replies come back to you as messages. Set `reply_to` to the event you are answering to keep the thread.
 
     Args:
         to: Recipient instance name.
+        expect_reply_within: You need an answer within this long, e.g. `20m`: if the recipient neither replies to you nor ends its turn by then, you get a `reply.overdue` event.
         reply_to: Event id this answers, to keep the conversation thread.
         urgent: Interrupt the recipient at its next turn instead of waiting until it is idle.
     """
-    return call("send_message", {"text": text, "to": to, "reply_to": reply_to, "urgent": urgent})
+    return call("send_message", {"text": text, "to": to, "expect_reply_within": expect_reply_within, "reply_to": reply_to, "urgent": urgent})
 
 
 def emit_event(*, type: str, payload: Any = None, provenance: Any = None) -> dict[str, Any]:
@@ -61,7 +62,7 @@ def set_chat_title(*, slug: str, title: str) -> dict[str, Any]:
 
 
 def spawn_agent(*, definition: str, task: str, env: Any = None) -> dict[str, Any]:
-    """Start a new instance of an agent definition with a task. It reports back to you by message. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user. Give the child the access its task needs; never tell it to work around missing access.
+    """Start a new instance of an agent definition with a task. It reports back to you by message; if it has not by `reply_within` (botler.toml, default 20m), you get a `reply.overdue` event. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user. Give the child the access its task needs; never tell it to work around missing access.
 
     Args:
         definition: Agent definition under `agents/`, e.g. `dev`.

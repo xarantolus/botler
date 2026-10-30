@@ -197,6 +197,10 @@ impl Hub {
     /// Journal an event and wake the router. The single entry point for everything that happens.
     pub async fn emit(&self, event: Event) -> Result<Event> {
         self.store.append_event(&event).await?;
+        // An agent writing to someone who waits on it answers them (a reply, an end-of-turn notice).
+        if let (Source::Agent(from), Some(to)) = (&event.source, &event.to) {
+            self.store.clear_expectations(Some(to), from).await?;
+        }
         if self.live.send(Live::Event { event: event.clone() }).is_err() {
             tracing::trace!("no live viewers");
         }
