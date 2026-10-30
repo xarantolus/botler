@@ -122,6 +122,10 @@ pub struct Defaults {
     /// How deep agent trees may grow: an agent at this depth cannot spawn further.
     #[serde(default = "Defaults::max_spawn_depth")]
     pub max_spawn_depth: u32,
+    /// How long a spawned agent (and the reviewer) may take to answer before whoever waits on it
+    /// is told (`reply.overdue`).
+    #[serde(default = "Defaults::reply_within")]
+    pub reply_within: HumanDuration,
 }
 
 impl Defaults {
@@ -134,6 +138,9 @@ impl Defaults {
     fn max_spawn_depth() -> u32 {
         8
     }
+    fn reply_within() -> HumanDuration {
+        HumanDuration::from_secs(20 * 60)
+    }
 }
 
 impl Default for Defaults {
@@ -143,6 +150,7 @@ impl Default for Defaults {
             job_timeout: Self::job_timeout(),
             budget: Budget::default(),
             max_spawn_depth: Self::max_spawn_depth(),
+            reply_within: Self::reply_within(),
         }
     }
 }

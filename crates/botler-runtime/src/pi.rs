@@ -105,7 +105,9 @@ impl PiEvent {
                     total_tokens: u.get("totalTokens").and_then(Value::as_i64).unwrap_or(0),
                     cost_usd: u.pointer("/cost/total").and_then(Value::as_f64).unwrap_or(0.0),
                 });
-                let error = msg.get("errorMessage").and_then(Value::as_str).map(String::from);
+                // An aborted call (budget stop, kill switch) is not a model failure.
+                let aborted = msg.get("stopReason").and_then(Value::as_str) == Some("aborted");
+                let error = msg.get("errorMessage").and_then(Value::as_str).filter(|_| !aborted).map(String::from);
                 PiEventKind::MessageEnd { role, usage, error }
             }
             "tool_execution_start" => {
@@ -213,6 +215,11 @@ impl PiClient {
             Some("handled") => Ok(Disposition::Handled),
             other => Err(PiError::Protocol { command: "prompt".into(), detail: format!("disposition {other:?}") }),
         }
+    }
+
+    /// Summarise the conversation so far to free context (`compact`).
+    pub async fn compact(&self) -> Result<()> {
+        self.command(json!({ "type": "compact" })).await.map(|_| ())
     }
 
     pub async fn abort(&self) -> Result<()> {

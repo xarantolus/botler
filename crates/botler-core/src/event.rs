@@ -137,6 +137,8 @@ pub mod kinds {
     pub const TIMER: &str = "timer";
     pub const ARCHIVE_REQUESTED: &str = "archive.requested";
     pub const AGENT_IDLE: &str = "agent.idle";
+    pub const AGENT_TURN_FAILED: &str = "agent.turn_failed";
+    pub const REPLY_OVERDUE: &str = "reply.overdue";
     pub const SCHEDULE: &str = "schedule";
 }
 

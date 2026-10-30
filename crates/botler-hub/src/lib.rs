@@ -35,6 +35,7 @@ pub mod sessions;
 pub mod supervisor;
 pub mod template;
 pub mod transactions;
+pub mod turns;
 pub mod web;
 pub mod wire;
 

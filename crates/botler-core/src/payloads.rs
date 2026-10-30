@@ -159,6 +159,31 @@ pub struct AgentIdlePayload {
     pub last_reply: String,
 }
 
+/// `agent.turn_failed`: an agent's turn ended in a model error the hub gave up on (permanent, or
+/// transient after its retries). Delivered to whoever waits on that chat, like `agent.idle`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct AgentTurnFailedPayload {
+    pub instance: String,
+    pub class: crate::model_error::ErrorClass,
+    /// The provider's error message, clipped.
+    pub error: String,
+    /// Failed attempts at this turn (the first one plus the hub's retries).
+    pub attempts: u32,
+    /// The event whose delivery started the failed turn.
+    pub event_id: Option<String>,
+}
+
+/// `reply.overdue`: an agent you asked something (or spawned with a task) has neither answered
+/// nor ended its turn within the time you expected.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct ReplyOverduePayload {
+    pub instance: String,
+    /// The event waiting for an answer, if known.
+    pub event_id: Option<String>,
+    /// When the answer was due.
+    pub due_at: DateTime<Utc>,
+}
+
 /// A fired one-off timer. What the woken agent is told is the delivery's prompt.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct TimerPayload {
@@ -231,6 +256,10 @@ pub enum BuiltinPayload {
     ArchiveRequested(ArchiveRequestedPayload),
     #[serde(rename = "agent.idle")]
     AgentIdle(AgentIdlePayload),
+    #[serde(rename = "agent.turn_failed")]
+    AgentTurnFailed(AgentTurnFailedPayload),
+    #[serde(rename = "reply.overdue")]
+    ReplyOverdue(ReplyOverduePayload),
     #[serde(rename = "timer")]
     Timer(TimerPayload),
     #[serde(rename = "schedule")]
@@ -251,6 +280,8 @@ impl BuiltinPayload {
             Self::BreakerTripped(_) => kinds::BREAKER_TRIPPED,
             Self::ArchiveRequested(_) => kinds::ARCHIVE_REQUESTED,
             Self::AgentIdle(_) => kinds::AGENT_IDLE,
+            Self::AgentTurnFailed(_) => kinds::AGENT_TURN_FAILED,
+            Self::ReplyOverdue(_) => kinds::REPLY_OVERDUE,
             Self::Timer(_) => kinds::TIMER,
             Self::Schedule(_) => kinds::SCHEDULE,
         }
@@ -268,6 +299,8 @@ impl BuiltinPayload {
             Self::BreakerTripped(p) => serde_json::to_value(p),
             Self::ArchiveRequested(p) => serde_json::to_value(p),
             Self::AgentIdle(p) => serde_json::to_value(p),
+            Self::AgentTurnFailed(p) => serde_json::to_value(p),
+            Self::ReplyOverdue(p) => serde_json::to_value(p),
             Self::Timer(p) => serde_json::to_value(p),
             Self::Schedule(p) => serde_json::to_value(p),
         }
@@ -319,6 +352,8 @@ mod tests {
             (kinds::BREAKER_TRIPPED, fields::<BreakerTrippedPayload>()),
             (kinds::ARCHIVE_REQUESTED, fields::<ArchiveRequestedPayload>()),
             (kinds::AGENT_IDLE, fields::<AgentIdlePayload>()),
+            (kinds::AGENT_TURN_FAILED, fields::<AgentTurnFailedPayload>()),
+            (kinds::REPLY_OVERDUE, fields::<ReplyOverduePayload>()),
             (kinds::TIMER, fields::<TimerPayload>()),
             (kinds::SCHEDULE, fields::<SchedulePayload>()),
         ];

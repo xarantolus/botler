@@ -126,10 +126,12 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     match reviewer {
         Some(name) => {
             hub.store.set_proposal_reviewing(id, &name).await?;
+            // A reviewer that fails or goes quiet hands the decision to the user.
+            crate::turns::expect_reply(hub, crate::turns::HUB, &name, None, None).await?;
             update(hub, id, "reviewing", &format!("Gate passed. Reviewer `{name}` is looking at it.")).await
         }
         // No reviewer agent defined: the user decides.
-        None => decide_and_act(hub, id, Verdict::Escalate, "no reviewer agent is defined").await,
+        None => decide_and_act(hub, id, None, "no reviewer agent is defined").await,
     }
 }
 
@@ -238,10 +240,26 @@ pub async fn submit_review(hub: &Arc<Hub>, reviewer: &str, id: &str, verdict: Ve
         Verdict::Reject => "reject",
     };
     hub.store.set_proposal_review(id, v, notes).await?;
-    decide_and_act(hub, id, verdict, notes).await
+    hub.store.clear_expectations(Some(crate::turns::HUB), reviewer).await?;
+    decide_and_act(hub, id, Some(verdict), notes).await
 }
 
-async fn decide_and_act(hub: &Arc<Hub>, id: &str, verdict: Verdict, notes: &str) -> Result<()> {
+/// The reviewer `reviewer` failed or did not answer in time: proposals it was reviewing go to the
+/// user, with the reason. A no-op for any other instance.
+pub async fn reviewer_unavailable(hub: &Arc<Hub>, reviewer: &str, reason: &str) -> Result<()> {
+    for p in hub.store.unfinished_proposals().await? {
+        if p.status == ProposalStatus::Reviewing && p.reviewer.as_deref() == Some(reviewer) {
+            tracing::warn!(proposal = %p.id, reviewer, reason, "reviewer unavailable; asking the user");
+            let notes = format!("reviewer unavailable: {reason}");
+            hub.store.set_proposal_review(&p.id, "unavailable", &notes).await?;
+            decide_and_act(hub, &p.id, None, &notes).await?;
+        }
+    }
+    Ok(())
+}
+
+/// `verdict` is `None` when there is no review (see [`decide`]).
+async fn decide_and_act(hub: &Arc<Hub>, id: &str, verdict: Option<Verdict>, notes: &str) -> Result<()> {
     let p = hub.store.proposal(id).await?;
     let summary: ChangeSummary = summary_of(&p)?;
     match decide(&summary, verdict) {
@@ -417,12 +435,22 @@ pub async fn interrupted(hub: &Hub) -> Result<Vec<String>> {
 }
 
 /// After a restart: interrupted proposals start over, unless finished meanwhile (superseded);
-/// reviews in progress continue.
+/// reviews in progress continue. A review without a deadline (started before deadlines existed)
+/// gets one counted from when it started, so the scheduler hands it to the user once overdue.
 pub async fn resume_on_boot(hub: &Arc<Hub>, interrupted: Vec<String>) -> Result<()> {
     for id in interrupted {
         if hub.store.proposal(&id).await?.status == ProposalStatus::Gating {
             tracing::info!(proposal = %id, "restarting interrupted proposal");
             spawn_pipeline(hub.clone(), id);
+        }
+    }
+    let within = hub.applied().await.defs.instance.defaults.reply_within.as_chrono();
+    for p in hub.store.unfinished_proposals().await? {
+        let Some(reviewer) = p.reviewer.as_deref().filter(|_| p.status == ProposalStatus::Reviewing) else { continue };
+        let waiting = hub.store.expectations_on(reviewer).await?.iter().any(|x| x.sender == crate::turns::HUB);
+        if !waiting {
+            tracing::info!(proposal = %p.id, reviewer, "review in progress has no deadline; adding one");
+            hub.store.expect_reply(crate::turns::HUB, reviewer, None, p.updated_at + within).await?;
         }
     }
     Ok(())

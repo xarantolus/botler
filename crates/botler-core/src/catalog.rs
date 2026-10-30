@@ -187,6 +187,40 @@ pub const BUILTIN: &[BuiltinEvent] = &[
                    it. Otherwise do not answer (no thanks needed): it sleeps until messaged.",
     },
     BuiltinEvent {
+        kind: kinds::AGENT_TURN_FAILED,
+        summary: "An agent you are waiting on could not finish its turn: its model calls kept failing.",
+        fields: &[
+            ("instance", "the agent"),
+            ("class", "transient (retries used up) | context_length | permanent | auth | billing"),
+            ("error", "the provider's error message"),
+            ("attempts", "how often the turn was tried"),
+            ("event_id", "the event whose delivery started the failed turn"),
+        ],
+        follow_up: &[
+            FollowUp { tool: "read_session", args: &[("instance", "instance")], why: "how far it got before failing" },
+            FollowUp { tool: "get_events", args: &[("correlation", "event_id")], why: "the conversation it was in" },
+        ],
+        guidance: "Decide whether to retry (message it again later, e.g. after a `set_timer`), do the work \
+                   yourself, or tell the user. Auth and billing errors need the user (a key or credits): do not \
+                   retry those. The hub already retried transient errors with backoff, so retrying right away \
+                   rarely helps.",
+    },
+    BuiltinEvent {
+        kind: kinds::REPLY_OVERDUE,
+        summary: "An agent you messaged or spawned has not answered within the time you expected.",
+        fields: &[
+            ("instance", "the agent that has not answered"),
+            ("event_id", "your message or task waiting for an answer"),
+            ("due_at", "when the answer was due"),
+        ],
+        follow_up: &[
+            FollowUp { tool: "read_session", args: &[("instance", "instance")], why: "what it is doing" },
+            FollowUp { tool: "list_chats", args: &[], why: "whether it is running, asleep or failed" },
+        ],
+        guidance: "Check what it is doing. Then decide: wait longer (`set_timer`), nudge it with `send_message`, \
+                   do the work yourself, or tell the user. Do not just resend the same request.",
+    },
+    BuiltinEvent {
         kind: kinds::SCHEDULE,
         summary: "A schedule (cron or interval trigger) fired.",
         fields: &[
@@ -318,6 +352,8 @@ mod tests {
             kinds::TIMER,
             kinds::ARCHIVE_REQUESTED,
             kinds::AGENT_IDLE,
+            kinds::AGENT_TURN_FAILED,
+            kinds::REPLY_OVERDUE,
         ] {
             assert!(builtin(k).is_some(), "{k} missing from catalog");
         }

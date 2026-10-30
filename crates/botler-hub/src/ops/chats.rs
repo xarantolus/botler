@@ -70,13 +70,15 @@ pub struct AgentSpawned {
 
 impl Op for SpawnAgent {
     const NAME: &'static str = "spawn_agent";
-    const DESCRIPTION: &'static str =
-        "Start a new instance of an agent definition with a task. It reports back to you by message.";
+    const DESCRIPTION: &'static str = "Start a new instance of an agent definition with a task. It reports back to you by message; if it has not by `reply_within` (botler.toml, default 20m), you get a `reply.overdue` event.";
     const WHO: Who = Who::UserAndAgents;
     type Output = AgentSpawned;
 
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<AgentSpawned, OpError> {
         let instance = router::spawn(hub, &self.definition, caller.instance(), Some(&self.task), None, None).await?;
+        if let Some(me) = caller.instance() {
+            crate::turns::expect_reply(hub, me, &instance, None, None).await?;
+        }
         Ok(AgentSpawned { instance })
     }
 }
@@ -303,8 +305,13 @@ impl Op for ArchiveReady {
         if let Some(h) = &self.handoff {
             handed_to = Some(match (&h.to, &h.spawn) {
                 (Some(to), None) => {
-                    let message =
-                        SendMessage { to: to.clone(), text: h.message.clone(), urgent: false, reply_to: None };
+                    let message = SendMessage {
+                        to: to.clone(),
+                        text: h.message.clone(),
+                        urgent: false,
+                        reply_to: None,
+                        expect_reply_within: None,
+                    };
                     message.call(hub, caller).await?;
                     to.clone()
                 }

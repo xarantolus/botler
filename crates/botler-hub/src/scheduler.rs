@@ -1,6 +1,7 @@
 //! Schedules and timers. Stateless apart from `last_fired` per trigger and timer rows, so the
 //! whole timetable is recomputed from definitions + store on every tick.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use botler_core::Source;
@@ -16,8 +17,9 @@ use crate::router;
 /// Longest sleep between ticks, so clock jumps and missed notifications heal on their own.
 pub const MAX_SLEEP: Duration = Duration::from_secs(60);
 
-/// Fire everything due at `now`. Returns when the next thing is due.
-pub async fn tick(hub: &Hub, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
+/// Fire everything due at `now`: schedules, timers, turn retries and overdue answers. Returns
+/// when the next thing is due.
+pub async fn tick(hub: &Arc<Hub>, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
     if hub.paused().await? {
         // While paused nothing fires; on resume the `missed` policy decides what to catch up.
         return Ok(None);
@@ -65,6 +67,7 @@ pub async fn tick(hub: &Hub, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>
             tracing::warn!(timer = %timer.id, error = %e, "timer fire failed");
         }
     }
+    let next = earliest(next, crate::turns::sweep(hub, now).await?);
     Ok(earliest(next, hub.store.next_timer_at().await?))
 }
 
@@ -76,7 +79,7 @@ fn earliest(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<DateTi
 }
 
 /// Run forever: tick, then sleep until the next due time (bounded), or until woken.
-pub async fn run(hub: std::sync::Arc<Hub>) {
+pub async fn run(hub: Arc<Hub>) {
     loop {
         let now = Utc::now();
         let sleep = match tick(&hub, now).await {

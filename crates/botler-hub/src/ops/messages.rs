@@ -29,6 +29,10 @@ pub struct SendMessage {
     /// Event id this answers, to keep the conversation thread.
     #[serde(default)]
     pub reply_to: Option<String>,
+    /// You need an answer within this long, e.g. `20m`: if the recipient neither replies to you
+    /// nor ends its turn by then, you get a `reply.overdue` event.
+    #[serde(default)]
+    pub expect_reply_within: Option<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -46,6 +50,16 @@ impl Op for SendMessage {
 
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<MessageSent, OpError> {
         let to = resolve_chat(hub, &self.to).await?;
+        let within = match (&self.expect_reply_within, caller.instance()) {
+            (None, _) => None,
+            (Some(w), Some(_)) => Some(
+                w.parse::<botler_core::duration::HumanDuration>()
+                    .map_err(|e| OpError::BadRequest(format!("expect_reply_within {w:?}: {e}")))?,
+            ),
+            (Some(_), None) => {
+                return Err(OpError::BadRequest("expect_reply_within is for agents waiting on an answer".into()));
+            }
+        };
         if caller.instance() == Some(to.as_str()) {
             return Err(OpError::BadRequest(
                 "that is you: a message to yourself would only wake you again. To remember something, write it to a \
@@ -69,6 +83,9 @@ impl Op for SendMessage {
             ev = ev.in_reply_to(&parent);
         }
         let ev = hub.emit(ev).await?;
+        if let (Some(me), Some(w)) = (caller.instance(), within) {
+            crate::turns::expect_reply(hub, me, &to, Some(&ev.id.to_string()), Some(w.0)).await?;
+        }
         if let Some(me) = caller.instance()
             && let Some(live) = hub.agents.get(me).await
         {

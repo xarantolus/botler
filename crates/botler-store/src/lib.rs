@@ -17,6 +17,7 @@ mod schedules;
 mod secrets;
 mod timers;
 mod usage;
+mod waits;
 
 use std::path::Path;
 use std::str::FromStr;
@@ -36,6 +37,7 @@ pub use schedules::ScheduleState;
 pub use secrets::SecretKey;
 pub use timers::{NewTimer, Timer, TimerStatus};
 pub use usage::UsageTotals;
+pub use waits::{ReplyExpectation, TurnRetry};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

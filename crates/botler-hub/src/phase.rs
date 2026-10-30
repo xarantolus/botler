@@ -1,5 +1,6 @@
 //! What an agent is doing, as live viewers see it: the steps of waking, and its runtime status.
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -27,8 +28,17 @@ impl WakeStep {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum WakePhase {
-    Waking { step: WakeStep },
-    Failed { error: String },
+    Waking {
+        step: WakeStep,
+    },
+    Failed {
+        error: String,
+    },
+    /// Its last turn failed with a transient model error; the hub tries again at `at`.
+    Retrying {
+        at: DateTime<Utc>,
+        error: String,
+    },
 }
 
 /// An agent's runtime status, broadcast whenever it changes.
@@ -49,6 +59,11 @@ pub enum AgentStatus {
     Paused {
         reason: String,
     },
+    /// Its last turn failed with a transient model error; the hub tries again at `at`.
+    Retrying {
+        at: DateTime<Utc>,
+        error: String,
+    },
 }
 
 impl From<WakePhase> for AgentStatus {
@@ -56,6 +71,7 @@ impl From<WakePhase> for AgentStatus {
         match p {
             WakePhase::Waking { step } => Self::Waking { step },
             WakePhase::Failed { error } => Self::Failed { error },
+            WakePhase::Retrying { at, error } => Self::Retrying { at, error },
         }
     }
 }
