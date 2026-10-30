@@ -23,6 +23,10 @@ async fn route_loop(hub: Arc<Hub>) {
 pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()> + Send + 'static) -> Result<()> {
     crate::assets::unpack(&hub.paths)?;
     agents::reconcile_on_boot(&hub).await?;
+    // Before resuming proposals, so a superseded template upgrade is not restarted.
+    if let Err(e) = crate::template::upgrade_on_boot(&hub).await {
+        tracing::error!(error = %e, "could not propose the template upgrade");
+    }
     crate::transactions::resume_on_boot(&hub).await?;
     {
         // Building the base image can take minutes on a fresh host; agents wait for it on wake.

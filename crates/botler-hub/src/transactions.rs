@@ -41,6 +41,13 @@ pub async fn propose(hub: &Arc<Hub>, instance: &str, branch: &str, title: &str) 
     if hub.repo.is_ancestor(&head, &main).await? {
         return Err(HubError::Forbidden("nothing to propose: the branch has no commits that are not on main".into()));
     }
+    open(hub, instance, branch, &head, title).await
+}
+
+/// Start a proposal for `head` (on `branch`) on behalf of `instance`, which hears about its
+/// progress. Also used by the hub for its own changes (template upgrades).
+pub async fn open(hub: &Arc<Hub>, instance: &str, branch: &str, head: &str, title: &str) -> Result<Proposal> {
+    let main = hub.repo.main().await?;
     let p = hub
         .store
         .create_proposal(
@@ -51,12 +58,12 @@ pub async fn propose(hub: &Arc<Hub>, instance: &str, branch: &str, title: &str) 
                 title: title.into(),
                 branch: Some(branch.into()),
                 base_commit: Some(main),
-                head_commit: Some(head.clone()),
+                head_commit: Some(head.into()),
                 ..Default::default()
             },
         )
         .await?;
-    hub.repo.pin(&format!("refs/proposals/{}", p.id), &head).await?;
+    hub.repo.pin(&format!("refs/proposals/{}", p.id), head).await?;
     spawn_pipeline(hub.clone(), p.id.clone());
     Ok(p)
 }

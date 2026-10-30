@@ -104,7 +104,7 @@ fn botler_bases(dockerfile: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Build the agent base image if missing (tagged with the hub version and `latest`).
+/// Build the agent base image if missing (tagged with its content hash and `latest`).
 pub async fn ensure_base(hub: &Hub) -> Result<()> {
     let tag = assets::agent_base_tag();
     let exists = |t: String| async move { hub.containers.image_id(&t).await.map(|id| id.is_some()) };

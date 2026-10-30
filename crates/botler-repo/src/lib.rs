@@ -15,11 +15,17 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 pub const MAIN: &str = "main";
+/// Pristine snapshots of the hub's built-in monorepo template, as a linear history: each commit
+/// holds the template's tree and has the previous snapshot as parent. `init_from` points it at
+/// main's root commit; template upgrades merge newer snapshots into main.
+pub const TEMPLATE_REF: &str = "refs/botler/template";
+/// Author email of every commit the hub makes itself.
+pub const HUB_EMAIL: &str = "hub@botler.invalid";
 const IDENTITY: [(&str, &str); 4] = [
     ("GIT_AUTHOR_NAME", "botler hub"),
-    ("GIT_AUTHOR_EMAIL", "hub@botler.invalid"),
+    ("GIT_AUTHOR_EMAIL", HUB_EMAIL),
     ("GIT_COMMITTER_NAME", "botler hub"),
-    ("GIT_COMMITTER_EMAIL", "hub@botler.invalid"),
+    ("GIT_COMMITTER_EMAIL", HUB_EMAIL),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +55,17 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// The result of [`Repo::merge_into_main`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum Merge {
+    Clean(String),
+    /// Committed anyway, with conflict markers in `paths`, so someone can resolve them on a branch.
+    Conflicted {
+        commit: String,
+        paths: Vec<String>,
+    },
+}
 
 /// Paths whose contents are needed to load [`botler_core::Definitions`].
 fn is_definition_path(path: &str) -> bool {
@@ -122,7 +139,8 @@ impl Repo {
         self.git_dir.join("HEAD").exists()
     }
 
-    /// Create the bare repo with an initial commit holding `template`'s files.
+    /// Create the bare repo with an initial commit holding `template`'s files. That commit is
+    /// both main's root and the first template snapshot ([`TEMPLATE_REF`]).
     pub async fn init_from(&self, template: &Path) -> Result<String> {
         if self.exists() {
             return Err(Error::AlreadyExists(self.git_dir.clone()));
@@ -142,17 +160,84 @@ impl Repo {
         self.git(&["config", "receive.denyDeletes", "true"]).await?;
         self.git(&["config", "http.receivepack", "true"]).await?;
         self.install_hooks().await?;
-        // This git runs in `template`, so a relative git dir would resolve against it.
-        let mut c = Self::base_cmd();
-        c.arg("--git-dir").arg(std::path::absolute(&self.git_dir)?);
-        c.arg("--work-tree").arg(template).current_dir(template);
-        self.run(c, &["add", "--all", "--force", "."]).await?;
-        let tree = self.git(&["write-tree"]).await?;
-        let commit = self.git(&["commit-tree", &tree, "-m", "Initial monorepo from template"]).await?;
+        let tree = self.write_tree_from(template).await?;
+        let commit = self.commit_tree(&tree, None, "Initial monorepo from template").await?;
         self.git(&["update-ref", &format!("refs/heads/{MAIN}"), &commit, ""]).await?;
-        // `add` populated the bare repo's index; drop it so it never leaks into later operations.
-        remove_file_if_exists(&self.git_dir.join("index")).await?;
+        self.git(&["update-ref", TEMPLATE_REF, &commit, ""]).await?;
         Ok(commit)
+    }
+
+    /// Store every file under `dir` (ignore rules notwithstanding) as a tree object and return
+    /// its id. Uses a throwaway index; no ref changes.
+    pub async fn write_tree_from(&self, dir: &Path) -> Result<String> {
+        tokio::fs::create_dir_all(&self.worktrees).await?;
+        let index = std::path::absolute(self.worktrees.join(format!("{}.index", uuid::Uuid::now_v7())))?;
+        let result = async {
+            // This git runs in `dir`, so a relative git dir would resolve against it.
+            let mut c = Self::base_cmd();
+            c.env("GIT_INDEX_FILE", &index).arg("--git-dir").arg(std::path::absolute(&self.git_dir)?);
+            c.arg("--work-tree").arg(dir).current_dir(dir);
+            self.run(c, &["add", "--all", "--force", "."]).await?;
+            let mut c = self.cmd();
+            c.env("GIT_INDEX_FILE", &index);
+            self.run(c, &["write-tree"]).await
+        }
+        .await;
+        remove_file_if_exists(&index).await?;
+        result
+    }
+
+    /// A hub-authored commit of `tree` with an optional parent. No ref changes.
+    pub async fn commit_tree(&self, tree: &str, parent: Option<&str>, message: &str) -> Result<String> {
+        let mut args = vec!["commit-tree", tree, "-m", message];
+        if let Some(p) = parent {
+            args.extend(["-p", p]);
+        }
+        self.git(&args).await
+    }
+
+    /// The tree id of a commit.
+    pub async fn tree(&self, rev: &str) -> Result<String> {
+        self.git(&["rev-parse", "--verify", &format!("{rev}^{{tree}}")]).await
+    }
+
+    /// Root commits reachable from `rev`, with their author emails: `(commit, email)`.
+    pub async fn roots(&self, rev: &str) -> Result<Vec<(String, String)>> {
+        let out = self.git(&["log", "--max-parents=0", "--format=%H %ae", rev]).await?;
+        out.lines()
+            .map(|l| {
+                l.split_once(' ')
+                    .map(|(a, b)| (a.to_string(), b.to_string()))
+                    .ok_or_else(|| Error::Malformed(format!("log line {l:?}")))
+            })
+            .collect()
+    }
+
+    /// Merge `commit` into main in a throwaway worktree (git's 3-way merge, always a merge
+    /// commit). On conflicts the merge is committed with the markers in place. Main itself is
+    /// not moved.
+    pub async fn merge_into_main(&self, commit: &str, message: &str) -> Result<Merge> {
+        let main = self.main().await?;
+        let wt = self.temp_worktree(&main).await?;
+        let result = async {
+            match self.git_in(&wt, &["merge", "--no-ff", "--no-edit", "-m", message, commit]).await {
+                Ok(_) => Ok(Merge::Clean(self.git_in(&wt, &["rev-parse", "HEAD"]).await?)),
+                Err(Error::Git { args, stderr }) => {
+                    let unmerged = self.git_in(&wt, &["diff", "--name-only", "--diff-filter=U", "-z"]).await?;
+                    let paths: Vec<String> = unmerged.split('\0').filter(|s| !s.is_empty()).map(String::from).collect();
+                    if paths.is_empty() {
+                        return Err(Error::Git { args, stderr });
+                    }
+                    self.git_in(&wt, &["add", "--all"]).await?;
+                    self.git_in(&wt, &["commit", "--quiet", "--no-edit"]).await?;
+                    Ok(Merge::Conflicted { commit: self.git_in(&wt, &["rev-parse", "HEAD"]).await?, paths })
+                }
+                Err(e) => Err(e),
+            }
+        }
+        .await;
+        self.remove_worktree(&wt).await;
+        result
     }
 
     /// The pre-receive hook: pushes are only allowed to `refs/heads/agents/<instance>/...` for the
@@ -398,9 +483,10 @@ impl Repo {
         Err(Error::Git { args: format!("show {commit}:{path}"), stderr: err.trim().to_string() })
     }
 
-    /// Store a commit under a hub-owned ref so it is not garbage collected (proposals).
+    /// Point a hub-owned ref at a commit: proposal pins, hub refs, and the hub's own branches
+    /// (`hub/*`, which agents can fetch but not push).
     pub async fn pin(&self, refname: &str, commit: &str) -> Result<()> {
-        if !refname.starts_with("refs/proposals/") && !refname.starts_with("refs/botler/") {
+        if !["refs/proposals/", "refs/botler/", "refs/heads/hub/"].iter().any(|p| refname.starts_with(p)) {
             return Err(Error::RefNamespace(refname.into()));
         }
         self.git(&["update-ref", refname, commit]).await.map(|_| ())
