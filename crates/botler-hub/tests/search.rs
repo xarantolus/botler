@@ -119,7 +119,8 @@ async fn session_files_are_indexed_incrementally() {
     assert!(u1["snippet"].as_str().unwrap().contains("**antenna**"), "{u1}");
     assert!(!u1["snippet"].as_str().unwrap().contains("provenance"), "headers are not indexed: {u1}");
     // Stemming; a tool call is found as itself (`<entry>#<call>`).
-    assert_eq!(refs(&find(&e, &user_caller(), json!({"query": "rotate"})).await.unwrap()), ["session:a1"]);
+    let rotate = json!({"query": "rotate", "sources": ["session"]});
+    assert_eq!(refs(&find(&e, &user_caller(), rotate).await.unwrap()), ["session:a1"]);
     let calls = refs(&find(&e, &user_caller(), json!({"query": "ls"})).await.unwrap());
     assert!(calls.contains(&"session:a1#c1".to_string()), "{calls:?}");
     assert_eq!(refs(&find(&e, &user_caller(), json!({"query": "gearbox replaced"})).await.unwrap()), ["session:a2"]);

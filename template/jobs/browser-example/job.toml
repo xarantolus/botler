@@ -1,0 +1,21 @@
+version = 1
+description = "Example browser service: a logged-in Chromium whose bridge reads a page into example.page_item events and reports example.login_needed / example.logged_in. A template (pi/skills/browser-login); disabled, so it never runs unless enabled."
+lifetime = "service"
+# Not deployed: `trial_run` still runs it. Enabling a service asks the user once.
+enabled = false
+command = ["browser-session", "/app/.venv/bin/python", "-m", "browser_example"]
+emits = ["example.page_item", "example.login_needed", "example.logged_in"]
+# The Chrome profile (/data/chrome-profile), and with it the login, survives restarts.
+volume = true
+# DevTools (CDP) on the services network. Never publish it: it is the logged-in session.
+port = 9222
+# The chat that owns this login hears about failures: on_failure = { resume = "<chat>" }
+
+# noVNC, for login visits (`request_visit`). Publishing needs the user's approval.
+[[publish]]
+port = 6080
+host_port = 6080
+
+[health]
+heartbeat = "3m"
+grace = "2m"

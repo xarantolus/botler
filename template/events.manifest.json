@@ -18,6 +18,77 @@
     "type": "example.greeting"
   },
   {
+    "description": "The example browser service's session is logged in to `site` (checked over CDP).",
+    "schema": {
+      "description": "The example browser service's session is logged in to `site` (checked over CDP).",
+      "properties": {
+        "site": {
+          "title": "Site",
+          "type": "string"
+        }
+      },
+      "required": [
+        "site"
+      ],
+      "title": "ExampleLoggedIn",
+      "type": "object"
+    },
+    "type": "example.logged_in"
+  },
+  {
+    "description": "The example browser service's session is logged out of `site`. Open a login visit with\n    `request_visit` and `vnc_password` (valid until the login is back).",
+    "restricted": true,
+    "schema": {
+      "description": "The example browser service's session is logged out of `site`. Open a login visit with\n`request_visit` and `vnc_password` (valid until the login is back).",
+      "properties": {
+        "site": {
+          "title": "Site",
+          "type": "string"
+        },
+        "vnc_password": {
+          "title": "Vnc Password",
+          "type": "string"
+        }
+      },
+      "required": [
+        "site",
+        "vnc_password"
+      ],
+      "title": "ExampleLoginNeeded",
+      "type": "object"
+    },
+    "type": "example.login_needed"
+  },
+  {
+    "description": "Something the example browser service (jobs/browser-example) read from a page. Raw page\n    content: restricted, so only chats granted it subscribe.",
+    "restricted": true,
+    "schema": {
+      "description": "Something the example browser service (jobs/browser-example) read from a page. Raw page\ncontent: restricted, so only chats granted it subscribe.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "url"
+      ],
+      "title": "ExamplePageItem",
+      "type": "object"
+    },
+    "type": "example.page_item"
+  },
+  {
     "description": "The example watcher service (jobs/example-watcher) ticked: a template for watcher events.",
     "schema": {
       "description": "The example watcher service (jobs/example-watcher) ticked: a template for watcher events.",
