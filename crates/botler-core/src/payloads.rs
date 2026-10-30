@@ -234,6 +234,14 @@ pub struct AccessChangedPayload {
     pub note: String,
 }
 
+/// `environment.updated`: this chat was restarted (or woke) with a changed container, e.g. after
+/// a merge. Delivered as a quiet note ahead of whatever is delivered next.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct EnvironmentUpdatedPayload {
+    /// What changed, in words (`new tools: weather.forecast`).
+    pub changes: Vec<String>,
+}
+
 /// What the hub sends pi for one delivery (`botler:delivery <json>`); the botler pi extension
 /// parses it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -293,6 +301,8 @@ pub enum BuiltinPayload {
     Schedule(SchedulePayload),
     #[serde(rename = "access.changed")]
     AccessChanged(AccessChangedPayload),
+    #[serde(rename = "environment.updated")]
+    EnvironmentUpdated(EnvironmentUpdatedPayload),
 }
 
 impl BuiltinPayload {
@@ -313,6 +323,7 @@ impl BuiltinPayload {
             Self::Timer(_) => kinds::TIMER,
             Self::Schedule(_) => kinds::SCHEDULE,
             Self::AccessChanged(_) => kinds::ACCESS_CHANGED,
+            Self::EnvironmentUpdated(_) => kinds::ENVIRONMENT_UPDATED,
         }
     }
 
@@ -332,6 +343,7 @@ impl BuiltinPayload {
             Self::Timer(p) => serde_json::to_value(p),
             Self::Schedule(p) => serde_json::to_value(p),
             Self::AccessChanged(p) => serde_json::to_value(p),
+            Self::EnvironmentUpdated(p) => serde_json::to_value(p),
         }
     }
 
@@ -362,6 +374,7 @@ pub fn builtin_schema(kind: &str) -> Option<serde_json::Value> {
         kinds::SCHEDULE => s::<SchedulePayload>(),
         kinds::TRIAL_FINISHED => s::<TrialFinishedPayload>(),
         kinds::ACCESS_CHANGED => s::<AccessChangedPayload>(),
+        kinds::ENVIRONMENT_UPDATED => s::<EnvironmentUpdatedPayload>(),
         _ => None,
     }
 }
@@ -409,6 +422,7 @@ mod tests {
             (kinds::TIMER, fields::<TimerPayload>()),
             (kinds::SCHEDULE, fields::<SchedulePayload>()),
             (kinds::ACCESS_CHANGED, fields::<AccessChangedPayload>()),
+            (kinds::ENVIRONMENT_UPDATED, fields::<EnvironmentUpdatedPayload>()),
         ];
         for b in BUILTIN {
             assert!(builtin_schema(b.kind).is_some(), "{} has no schema", b.kind);

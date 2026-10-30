@@ -140,6 +140,7 @@ pub mod kinds {
     pub const AGENT_IDLE: &str = "agent.idle";
     pub const SCHEDULE: &str = "schedule";
     pub const ACCESS_CHANGED: &str = "access.changed";
+    pub const ENVIRONMENT_UPDATED: &str = "environment.updated";
 }
 
 #[cfg(test)]

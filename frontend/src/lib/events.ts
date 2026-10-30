@@ -16,6 +16,7 @@ const BUILTIN = {
   timer: true,
   schedule: true,
   "access.changed": true,
+  "environment.updated": true,
 } as const satisfies Record<BuiltinPayload["type"], true>;
 
 /** The typed payload of a built-in event, or null for agent-defined event types. */
@@ -38,6 +39,7 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   timer: "i-lucide-alarm-clock",
   schedule: "i-lucide-calendar-clock",
   "access.changed": "i-lucide-shield-plus",
+  "environment.updated": "i-lucide-refresh-cw",
 };
 
 /** An icon for an event type (agent-defined types get a generic one). */
@@ -90,6 +92,8 @@ export function eventSummary(ev: BotlerEvent): string {
       return `schedule ${b.payload.trigger}${b.payload.skipped ? ` (${b.payload.skipped} missed)` : ""}`;
     case "access.changed":
       return `${b.payload.resource} ${b.payload.change}`;
+    case "environment.updated":
+      return `restarted: ${b.payload.changes.join("; ")}`;
   }
 }
 

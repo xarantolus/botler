@@ -188,6 +188,8 @@ impl Hub {
         *self.applied.write().await = Arc::new(applied);
         self.schedule_notify.notify_one();
         self.reconcile_notify.notify_one();
+        // Running agents whose environment changed are restarted (`agents::refresh_environments`).
+        self.dispatch_notify.notify_one();
         Ok(())
     }
 

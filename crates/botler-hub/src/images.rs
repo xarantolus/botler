@@ -205,7 +205,7 @@ const PI: &str = "pi";
 
 /// Export name of the pi resources at `commit`, keyed by their tree hash so commits that leave
 /// `pi/` alone share one export. `None` if the commit has no `pi/`.
-async fn pi_export_name(hub: &Hub, commit: &str) -> Result<Option<String>> {
+pub async fn pi_export_name(hub: &Hub, commit: &str) -> Result<Option<String>> {
     Ok(hub.repo.path_ids(commit, &[PI]).await?.remove(PI).map(|tree| format!("pi-{tree}")))
 }
 
