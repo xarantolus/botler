@@ -1,7 +1,7 @@
 // The typed API client. Routes, parameters, bodies and responses all come from the generated
 // route table (src/generated/routes.ts), which is generated from the hub's Rust types.
 
-import { ROUTES, type Routes } from "../generated";
+import { ROUTES, type ApiErrorBody, type Routes } from "../generated";
 
 const TOKEN_KEY = "botler.token";
 
@@ -9,6 +9,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The parsed error body, when the hub sent one. */
+    readonly body: ApiErrorBody | null = null,
   ) {
     super(message);
   }
@@ -104,8 +106,12 @@ export async function call<K extends keyof Routes>(name: K, args: Args<K>): Prom
     for (const f of unauthorizedHandlers) f();
     throw new Unauthorized(401, errorText(parsed, text) || "your token is invalid or expired");
   }
-  if (!res.ok) throw new ApiError(res.status, errorText(parsed, text) || res.statusText);
+  if (!res.ok) throw new ApiError(res.status, errorText(parsed, text) || res.statusText, errorBody(parsed));
   return parsed as Routes[K]["response"];
+}
+
+function errorBody(parsed: unknown): ApiErrorBody | null {
+  return parsed && typeof parsed === "object" && "error" in parsed ? (parsed as ApiErrorBody) : null;
 }
 
 function errorText(parsed: unknown, raw: string): string {

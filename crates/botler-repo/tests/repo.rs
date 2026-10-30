@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use botler_repo::{Error, Repo};
+use botler_repo::{Error, Merge, Repo};
 
 fn write(root: &Path, rel: &str, body: &str) {
     let p = root.join(rel);
@@ -193,4 +193,75 @@ async fn hub_commits_files_on_main() {
     assert_eq!(f.repo.read_file(&head, "secrets.toml").await.unwrap().as_deref(), Some("x = 1\n"));
     assert_eq!(f.repo.read_file(&head, "jobs/poll/src/poll.py").await.unwrap(), None);
     assert_eq!(f.repo.read_file(&head, "nope.txt").await.unwrap(), None);
+}
+
+/// A new template snapshot on top of the current one, from the template with `edits` applied.
+async fn snapshot(f: &Fixture, edits: &[(&str, &str)]) -> String {
+    let tpl = f.root.join("template");
+    for (rel, body) in edits {
+        write(&tpl, rel, body);
+    }
+    let tree = f.repo.write_tree_from(&tpl).await.unwrap();
+    let parent = f.repo.rev(botler_repo::TEMPLATE_REF).await.unwrap().unwrap();
+    let snap = f.repo.commit_tree(&tree, Some(&parent), "template v2").await.unwrap();
+    f.repo.pin(botler_repo::TEMPLATE_REF, &snap).await.unwrap();
+    snap
+}
+
+const PROMPT: &str = "# main\n\nline 2\nline 3\nline 4\nline 5\nline 6\n";
+
+#[tokio::test]
+async fn init_is_the_first_template_snapshot() {
+    let f = fixture().await;
+    let main = f.repo.main().await.unwrap();
+    assert_eq!(f.repo.rev(botler_repo::TEMPLATE_REF).await.unwrap().as_deref(), Some(main.as_str()));
+    assert_eq!(f.repo.roots(&main).await.unwrap(), [(main.clone(), botler_repo::HUB_EMAIL.to_string())]);
+    // The same directory gives the same tree, so an unchanged template is no upgrade.
+    assert_eq!(f.repo.write_tree_from(&f.root.join("template")).await.unwrap(), f.repo.tree(&main).await.unwrap());
+    let snap = snapshot(&f, &[("botler.toml", "timezone = \"Europe/Berlin\"\n")]).await;
+    assert_ne!(f.repo.tree(&snap).await.unwrap(), f.repo.tree(&main).await.unwrap());
+    assert_eq!(f.repo.log_subjects(&main, &snap).await.unwrap().len(), 1, "linear: parent is the old snapshot");
+    // The throwaway index is gone.
+    assert_eq!(std::fs::read_dir(f.root.join("worktrees")).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn template_merge_keeps_agent_edits() {
+    let f = fixture().await;
+    write(&f.root.join("template"), "agents/main/AGENTS.md", PROMPT);
+    let s1 = snapshot(&f, &[]).await;
+    let base = f.repo.main().await.unwrap();
+    let merged = match f.repo.merge_into_main(&s1, "upgrade 1").await.unwrap() {
+        Merge::Clean(c) => c,
+        m => panic!("{m:?}"),
+    };
+    f.repo.advance_main(&base, &merged).await.unwrap();
+    // The agent edits the top, the template the bottom of the same file.
+    let edit = agent_commit(&f, "a", "agents/a/x", "agents/main/AGENTS.md", &PROMPT.replace("line 2", "agent line"));
+    f.repo.advance_main(&merged, &edit).await.unwrap();
+    let s2 = snapshot(&f, &[("agents/main/AGENTS.md", &PROMPT.replace("line 6", "template line"))]).await;
+    let Merge::Clean(up) = f.repo.merge_into_main(&s2, "upgrade 2").await.unwrap() else { panic!("conflict") };
+    let text = f.repo.read_file(&up, "agents/main/AGENTS.md").await.unwrap().unwrap();
+    assert!(text.contains("agent line") && text.contains("template line"), "{text}");
+    assert_eq!(f.repo.main().await.unwrap(), edit, "main is not moved");
+    assert!(f.repo.is_ancestor(&edit, &up).await.unwrap() && f.repo.is_ancestor(&s2, &up).await.unwrap());
+}
+
+#[tokio::test]
+async fn conflicting_template_merge_is_committed_with_markers() {
+    let f = fixture().await;
+    let base = f.repo.main().await.unwrap();
+    let edit = agent_commit(&f, "a", "agents/a/x", "botler.toml", "timezone = \"Asia/Tokyo\"\n");
+    f.repo.advance_main(&base, &edit).await.unwrap();
+    let snap = snapshot(&f, &[("botler.toml", "timezone = \"Europe/Berlin\"\n")]).await;
+    match f.repo.merge_into_main(&snap, "upgrade").await.unwrap() {
+        Merge::Conflicted { commit, paths } => {
+            assert_eq!(paths, ["botler.toml"]);
+            let text = f.repo.read_file(&commit, "botler.toml").await.unwrap().unwrap();
+            assert!(text.contains("<<<<<<<") && text.contains("Asia/Tokyo") && text.contains("Europe/Berlin"));
+            assert!(f.repo.is_ancestor(&snap, &commit).await.unwrap());
+        }
+        m => panic!("{m:?}"),
+    }
+    assert_eq!(std::fs::read_dir(f.root.join("worktrees")).unwrap().count(), 0);
 }

@@ -162,11 +162,12 @@ An agent messaging itself is refused with a hint (files in its home, `set_timer`
 **pi packages.** Agents can propose adding community pi packages (skills/extensions) to `pi/`, pinned by version, through a normal transaction. The capability diff flags new extensions, since they run with full process rights inside the container.
 
 **Memory (hub-mediated, concurrent-safe).**
-- **Storage:** Markdown notes in a hub-owned `memory.git`, separate from the monorepo. Every write is auto-committed with the author instance, and there's no gate.
-- **Namespaces:** per agent definition (shared by all its instances, e.g. every `triage`), per workspace/project, and a global `user` profile.
-- **Reading:** an agent's namespaces are mounted read-only, so plain file tools and `grep` work.
-- **Writing:** writes go through MCP `memory_write(path, content, expected_version)` with optimistic concurrency. A stale version returns a conflict with the current content, so concurrent instances never silently overwrite each other.
-- **Search:** memory is covered by the derived search index.
+- **Storage:** plain Markdown files under `<data>/memory/`, separate from the monorepo and outside transactions, with a non-bare git repo there for history. There's no gate.
+- **Namespaces:** `agents/<definition>/` (shared by every instance of a definition, e.g. every `triage`), `projects/<home>/` (agents whose definition names the shared home `<home>`) and `user/` (the user profile and global facts). Agents write their own definition's namespace, their project's and `user/`; the user writes all; jobs read only.
+- **Reading:** an agent's namespaces are bind-mounted read-only at `/memory/self`, `/memory/project` (with a shared home) and `/memory/user`, so `rg` and file tools work. The repo's `.git` sits above the namespace directories and is never mounted. Callers without a mount (the web app, jobs) use `memory_read`, `memory_list` and `memory_history` (`git log`, with authors).
+- **Writing:** the hub is the only writer. `memory_write(path, content, expected_sha256?)` (no `expected_sha256` means create-only), `memory_append(path, text)` (no version) and `memory_delete(path, expected_sha256)`. A hub mutex serialises writes; each is a temp file plus rename, then `git add -A && git commit --author=<instance>`. A stale sha returns a typed conflict (HTTP 409, `ApiErrorBody.conflict`) with the current content and sha, so concurrent instances never silently overwrite each other. Paths are `.md` only, with no `..` or dot segments, at most 200 characters and 8 levels deep; files hold at most 64 KiB.
+- **In the prompt:** the core prompt says what belongs in memory (durable facts, preferences, decisions) versus the monorepo (code, definitions) and the home (working files). The `INDEX.md` of each of the agent's namespaces (first 4 KiB) is appended to the system prompt file when the container starts. It is read once per wake, so the system prompt is fixed for the whole pi session and stays cacheable; changes show from the next wake. Injecting it per prompt (`before_agent_start`) would change the system prompt mid-session and break prompt caching.
+- **Search:** later, through the derived full-text index.
 
 **Built-in event catalog.** Every hub event type (`runnable.failed`, `proposal.updated`, `dialog.aborted`, ...) has a catalog entry in core with a summary, payload fields, follow-up tools filled in with the event's values (e.g. `get_incident_history(runnable=...)`, `get_run_logs(run_id=...)`, `replay_event`, `resolve_incident`), and guidance. Deliveries are rendered from it. Failure guidance points the agent at incident history (core fact: every incident stores its resolution) *and* its memory notes, and requires `resolve_incident` with the cause and fix.
 
@@ -184,6 +185,8 @@ An agent messaging itself is refused with a hint (files in its home, `set_timer`
 5. Applies the decision table: reviewer approve + no protected or capability changes → auto-merge; otherwise a dialog to you.
 6. Fast-forwards main, then reconciles (image rebuilds, schedule table, services; agents pick up new definitions on their next wake, never mid-turn).
 7. Push-mirrors to GitLab/Forgejo if configured. Gate failures go back to the agent as an event.
+
+**Template upgrades.** `refs/botler/template` holds pristine snapshots of the hub's built-in template as a linear history; `botler init` makes main's root commit the first one (older repos bootstrap the ref from main's root, which `init` always made from the template). When the built-in template differs from the newest snapshot, the hub commits a new snapshot at boot and git-merges it into main (3-way, so agent edits survive) on branch `hub/template-<snapshot>`, proposed through the normal transaction on behalf of the front door ("Upgrade botler template files (hub vX)"; it touches protected paths, so you approve it). A conflicting merge is committed with its markers on that branch and handed to the front door to resolve and propose. The branch marks an upgrade as handled; a newer template supersedes an open upgrade. `botler template status` shows the state.
 
 **pi integration (reuse first).**
 - Agent base image: pinned pi + Node + Python/uv + git + the **botler pi extension**.

@@ -1,4 +1,6 @@
-"""`web.search`: scrapes DuckDuckGo's no-JavaScript HTML endpoint.
+"""`web.search`: OpenRouter's web search (`openrouter.py`) or a scraper of DuckDuckGo's no-JavaScript
+HTML endpoint (here). `auto` tries OpenRouter first: DuckDuckGo blocks a host with its bot check after a
+few searches, while OpenRouter costs about $0.001 per search, little next to a model call.
 
 DuckDuckGo changes its markup now and then. When parsing fails, `parse_page` raises with a pointer
 here; the fixture `tests/fixtures/ddg_results.html` is a saved results page to test against.
@@ -7,7 +9,7 @@ here; the fixture `tests/fixtures/ddg_results.html` is a saved results page to t
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import parse_qs, urlsplit
 
 import botler
@@ -15,7 +17,7 @@ import httpx
 from pydantic import BaseModel, Field
 from selectolax.lexbor import LexborHTMLParser, LexborNode
 
-from . import _http
+from . import _http, openrouter
 from ._http import WebToolError, fix_hint
 
 DDG_URL = "https://html.duckduckgo.com/html/"
@@ -27,6 +29,17 @@ class SearchResult(BaseModel):
     title: str
     url: str
     snippet: str
+
+
+Backend = Literal["openrouter", "duckduckgo"]
+BackendChoice = Literal["auto", "openrouter", "duckduckgo"]
+
+
+class SearchResponse(BaseModel):
+    backend: Backend
+    cost_usd: float | None = None
+    note: str | None = None
+    results: list[SearchResult]
 
 
 @dataclass
@@ -133,15 +146,7 @@ def _post(http: httpx.Client, form: dict[str, str]) -> str:
     return resp.text
 
 
-@botler.tool(effects=["network"])
-def search(
-    query: Annotated[str, Field(min_length=1)],
-    max_results: Annotated[int, Field(ge=1, le=MAX_PAGES * 10)] = 10,
-    region: str | None = None,
-) -> list[SearchResult]:
-    """Search the web with DuckDuckGo. Returns results as {title, url, snippet}; use web.fetch to read
-    a result. `region` is a DuckDuckGo region code such as "us-en", "uk-en" or "de-de" (default: none).
-    This tool scrapes DuckDuckGo and is maintained in the monorepo (tools/web/); if it breaks, fix it."""
+def duckduckgo(query: str, max_results: int, region: str | None) -> list[SearchResult]:
     form = {"q": query, "b": ""}
     if region:
         form["kl"] = region
@@ -158,3 +163,40 @@ def search(
                 break
             form = page.next_form
     return results[:max_results]
+
+
+def _run(backend: Backend, query: str, max_results: int, region: str | None) -> SearchResponse:
+    if backend == "duckduckgo":
+        return SearchResponse(backend=backend, results=duckduckgo(query, max_results, region))
+    found, cost = openrouter.search(query, max_results)
+    return SearchResponse(
+        backend=backend, cost_usd=cost, results=[SearchResult.model_validate(r) for r in found]
+    )
+
+
+@botler.tool(effects=["network", "secret:OPENROUTER_API_KEY"])
+def search(
+    query: Annotated[str, Field(min_length=1)],
+    max_results: Annotated[int, Field(ge=1, le=MAX_PAGES * 10)] = 10,
+    region: str | None = None,
+    backend: BackendChoice = "auto",
+) -> SearchResponse:
+    """Search the web. Returns {backend, cost_usd, note, results: [{title, url, snippet}]}; use web.fetch
+    to read a result. `backend`: "openrouter" (OpenRouter's web search, about $0.001 per search),
+    "duckduckgo" (free scraping, often blocked by its bot check), or "auto" (default): OpenRouter, and
+    DuckDuckGo if that fails; `note` says why a backend was skipped. `region` is a DuckDuckGo region
+    code such as "us-en" or "de-de"; OpenRouter ignores it. Maintained in the monorepo (tools/web/);
+    if it breaks, fix it."""
+    if backend != "auto":
+        return _run(backend, query, max_results, region)
+    try:
+        return _run("openrouter", query, max_results, region)
+    except WebToolError as first:
+        try:
+            response = _run("duckduckgo", query, max_results, region)
+        except WebToolError as second:
+            raise WebToolError(
+                second.code, f"Both search backends failed. openrouter: {first} duckduckgo: {second}"
+            ) from second
+        response.note = f"openrouter failed, used duckduckgo: {first}"
+        return response

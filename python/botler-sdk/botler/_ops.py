@@ -154,6 +154,54 @@ def read_session(*, instance: str, last: int | None = None) -> Any:
     return call("read_session", {"instance": instance, "last": last})
 
 
+def memory_write(*, content: str, path: str, expected_sha256: str | None = None) -> Any:
+    """Write a memory file (Markdown) in one of your namespaces: `agents/<definition>/...` (mounted at /memory/self), `projects/<home>/...` (/memory/project) or `user/...` (/memory/user). Pass the sha256 of the version you read as `expected_sha256` (`sha256sum`), or omit it to create a new file. If someone changed it meanwhile you get a conflict with the current content: merge and write again.
+
+    Args:
+        content: The whole new content (Markdown).
+        path: e.g. `agents/dev/github.md`, `projects/groundstation/INDEX.md`, `user/preferences.md`.
+        expected_sha256: sha256 of the version you are replacing (`sha256sum <file>`); omit to create a new file.
+    """
+    return call("memory_write", {"content": content, "path": path, "expected_sha256": expected_sha256})
+
+
+def memory_append(*, path: str, text: str) -> Any:
+    """Append line(s) to a memory file, creating it if needed. No version needed: use it for logs and lists.
+
+    Args:
+        text: Added at the end, on its own line(s). Creates the file if needed.
+    """
+    return call("memory_append", {"path": path, "text": text})
+
+
+def memory_delete(*, expected_sha256: str, path: str) -> Any:
+    """Delete a memory file; `expected_sha256` is the sha256 of the version you are deleting.
+
+    Args:
+        expected_sha256: sha256 of the version you are deleting.
+    """
+    return call("memory_delete", {"expected_sha256": expected_sha256, "path": path})
+
+
+def memory_read(*, path: str) -> Any:
+    """Read a memory file with its sha256."""
+    return call("memory_read", {"path": path})
+
+
+def memory_list(*, prefix: str | None = None) -> Any:
+    """Memory files you may read, optionally under a directory such as `user` or `agents/dev`.
+
+    Args:
+        prefix: A directory such as `user` or `agents/dev`; omit for every file you may read.
+    """
+    return call("memory_list", {"prefix": prefix})
+
+
+def memory_history(*, path: str) -> Any:
+    """The commits that changed a memory file, newest first, with their authors."""
+    return call("memory_history", {"path": path})
+
+
 def get_events(*, correlation: str | None = None, limit: int | None = None, type: str | None = None) -> Any:
     """Read the event journal, newest first: filter by type (`mail.*`) or conversation (`correlation`)."""
     return call("get_events", {"correlation": correlation, "limit": limit, "type": type})

@@ -73,7 +73,9 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
             "`~/monorepo` is your own clone of the monorepo{}. Change the system by editing it, running \
              `gate/run`, committing, `git push origin HEAD`, then `propose_change(branch, title)`. The \
              result includes a deployment summary in plain words (what will run when, what needs the \
-             user's approval): read it. Nothing you push takes effect until it is merged.\n\n",
+             user's approval): read it. Nothing you push takes effect until it is merged. `gate/run` and \
+             everything the gate checks are files on your branch: a gate failure is always fixable there \
+             (changes to `gate/` need the user's approval).\n\n",
             branch.map(|b| format!(" on branch `{b}`")).unwrap_or_default()
         )),
         Workspace::Volume | Workspace::None => s.push_str(&format!(
@@ -90,6 +92,22 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
             Some(name) => format!("It is the shared home `{name}`: other agents of this project use it too."),
             None => "It is yours alone.".to_string(),
         }
+    ));
+    let project = def
+        .spec
+        .home
+        .as_ref()
+        .map(|h| format!(", `/memory/project` (`projects/{h}/`, this project)"))
+        .unwrap_or_default();
+    s.push_str(&format!(
+        "## Memory\n\
+         Durable facts, preferences and decisions (e.g. \"dev work on GitHub repos uses secret group \
+         `github-ssh`\") go in memory: read-only at `/memory/self` (`agents/{}/`, all `{}` agents){project} \
+         and `/memory/user` (`user/`, the user's profile, shared by all agents); search it with `rg` before \
+         asking the user something they may have told you before. Change it with `memory_write`, \
+         `memory_append` and `memory_delete` (paths like `user/tools.md`) and keep a short `INDEX.md` in each. \
+         Code and definitions belong in the monorepo, working files in your home.\n\n",
+        def.name, def.name
     ));
     s.push_str(
         "## Limits\n\

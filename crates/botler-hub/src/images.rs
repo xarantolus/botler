@@ -104,7 +104,7 @@ fn botler_bases(dockerfile: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Build the agent base image if missing (tagged with the hub version and `latest`).
+/// Build the agent base image if missing (tagged with its content hash and `latest`).
 pub async fn ensure_base(hub: &Hub) -> Result<()> {
     let tag = assets::agent_base_tag();
     let exists = |t: String| async move { hub.containers.image_id(&t).await.map(|id| id.is_some()) };
@@ -112,6 +112,10 @@ pub async fn ensure_base(hub: &Hub) -> Result<()> {
         return Ok(());
     }
     let _guard = hub.build_lock.lock().await;
+    // Another caller may have built it while this one waited for the lock.
+    if exists(tag.clone()).await? && exists(assets::AGENT_BASE_LATEST.into()).await? {
+        return Ok(());
+    }
     let ctx = hub.paths.assets().join("agent-base");
     tracing::info!(%tag, "building agent base image");
     // Unlabelled: the base belongs to the hub version, not to the monorepo, and is never collected.

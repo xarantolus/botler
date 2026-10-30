@@ -436,14 +436,18 @@ async fn parent_hears_when_a_spawned_chat_finishes_its_turn() {
     with_key(&e).await;
     let child = router::spawn(&e.hub, "dev", Some("botler"), Some("look into x"), None, None).await.unwrap();
     agents::dispatch_pending(&e.hub).await.unwrap();
-    settle().await;
-    e.route().await;
-    let idle = e
-        .hub
-        .store
-        .events(&botler_store::EventQuery { kind: Some(kinds::AGENT_IDLE.into()), limit: 5, ..Default::default() })
-        .await
-        .unwrap();
+    // The pump task records the end of the turn in its own time: poll for the notice.
+    let query = botler_store::EventQuery { kind: Some(kinds::AGENT_IDLE.into()), limit: 5, ..Default::default() };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let idle = loop {
+        e.route().await;
+        let idle = e.hub.store.events(&query).await.unwrap();
+        if !idle.is_empty() {
+            break idle;
+        }
+        assert!(std::time::Instant::now() < deadline, "no idle notice within 10s");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
     assert_eq!(idle.len(), 1, "one turn, one idle notice");
     assert_eq!(idle[0].to.as_deref(), Some("botler"));
     assert_eq!(idle[0].payload["instance"], child.as_str());

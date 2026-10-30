@@ -142,6 +142,7 @@ pub fn generate(dir: &Path) -> Result<(), BindingsError> {
     ex.add::<crate::live::ServerMessage>();
     ex.add::<botler_core::payloads::BuiltinPayload>();
     ex.add::<botler_core::payloads::DeliveryEnvelope>();
+    ex.add::<crate::wire::ApiErrorBody>();
     if let Some(e) = ex.error {
         return Err(e.into());
     }

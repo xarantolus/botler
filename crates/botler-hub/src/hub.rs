@@ -43,6 +43,8 @@ pub enum HubError {
     SpawnTooDeep { parent: String, depth: u32 },
     #[error("migrating the data directory: {0}")]
     Migration(String),
+    #[error(transparent)]
+    Memory(#[from] crate::memory::MemoryError),
     #[error("{instance} keeps crashing; next start allowed at {until}")]
     Backoff { instance: String, until: chrono::DateTime<chrono::Utc> },
     #[error("host port {ports} is already in use by another program or container; publish a free port: {source}")]
@@ -94,6 +96,7 @@ pub struct Hub {
     pub agents: crate::agents::Agents,
     /// Serialises image builds so the same tag is never built twice concurrently.
     pub build_lock: Mutex<()>,
+    pub memory: crate::memory::Memory,
 }
 
 impl std::fmt::Debug for Hub {
@@ -116,6 +119,7 @@ impl Hub {
         }
         crate::migrate::front_door(&paths, &store, &repo).await?;
         let applied = Self::load_bootable(&store, &repo).await?;
+        let memory = crate::memory::Memory::open(paths.memory()).await?;
         let (live, _) = broadcast::channel(1024);
         let id = {
             use sha2::Digest;
@@ -139,6 +143,7 @@ impl Hub {
             live,
             agents: crate::agents::Agents::default(),
             build_lock: Mutex::new(()),
+            memory,
         }))
     }
 

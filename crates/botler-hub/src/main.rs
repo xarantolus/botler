@@ -57,6 +57,11 @@ enum Command {
     Resume,
     /// Show what the hub is doing.
     Status,
+    /// The monorepo template: which snapshot main builds on and whether an upgrade is pending.
+    Template {
+        #[command(subcommand)]
+        command: TemplateCommand,
+    },
     /// Write a consistent archive of the data directory (safe while the hub runs).
     Backup {
         /// Archive to create (zstd-compressed if `zstd` is installed, else gzip).
@@ -65,6 +70,12 @@ enum Command {
         #[arg(long)]
         no_key: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum TemplateCommand {
+    /// The newest template snapshot, the template built into this hub, and pending upgrades.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -89,6 +100,8 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,botler=info".into()),
         )
+        // Logs go to stderr: stdout is for command output (`botler token > file`).
+        .with_writer(std::io::stderr)
         .init();
     let args = Args::parse();
     // Absolute, so nothing depends on the working directory of the git or podman it runs.
@@ -156,6 +169,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Status => status(paths).await,
+        Command::Template { command: TemplateCommand::Status } => template_status(paths).await,
         Command::Backup { dest, no_key } => backup(&paths, &dest, !no_key).await,
     }
 }
@@ -242,9 +256,30 @@ async fn status(paths: Paths) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn template_status(paths: Paths) -> anyhow::Result<()> {
+    let hub = offline_hub(paths).await?;
+    let embedded = template::embedded_tree(&hub.repo, &hub.paths.worktrees()).await?;
+    println!("embedded   hub v{} (tree {})", env!("CARGO_PKG_VERSION"), &embedded[..12]);
+    let Some(tip) = template::snapshot(&hub.repo).await? else {
+        println!("snapshot   none: main's root commit is not a botler template, so upgrades are off");
+        return Ok(());
+    };
+    let tree = hub.repo.tree(&tip).await?;
+    let main = hub.repo.main().await?;
+    let merged = if hub.repo.is_ancestor(&tip, &main).await? { "merged into main" } else { "not on main yet" };
+    println!("snapshot   {} (tree {}, {merged})", &tip[..12], &tree[..12]);
+    if tree != embedded {
+        println!("upgrade    the next `botler serve` proposes the embedded template");
+    }
+    for p in template::pending(&hub).await? {
+        println!("proposal   {} {} on {}: {}", p.id, p.status, p.branch.as_deref().unwrap_or(""), p.title);
+    }
+    Ok(())
+}
+
 /// Data directory entries that are facts. Everything else (exports, worktrees, logs, agent-dirs,
 /// assets, images) is derived and rebuilt by the hub.
-const BACKUP_DIRS: &[&str] = &["repo.git", "memory.git", "sessions", "workspaces", "homes", "shared-homes", "uploads"];
+const BACKUP_DIRS: &[&str] = &["repo.git", "memory", "sessions", "workspaces", "homes", "shared-homes", "uploads"];
 
 async fn backup(paths: &Paths, dest: &std::path::Path, with_key: bool) -> anyhow::Result<()> {
     if !paths.db().exists() {

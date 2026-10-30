@@ -122,7 +122,7 @@ struct ApiError(StatusCode, String);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(ApiErrorBody { error: self.1 })).into_response()
+        (self.0, Json(ApiErrorBody { error: self.1, conflict: None })).into_response()
     }
 }
 
@@ -149,6 +149,16 @@ impl From<&HubError> for ApiError {
                 botler_store::Error::DialogClosed { .. } | botler_store::Error::AnswerNotAllowed { .. },
             ) => StatusCode::CONFLICT,
             HubError::Paused => StatusCode::SERVICE_UNAVAILABLE,
+            HubError::Memory(m) => {
+                use crate::memory::MemoryError as M;
+                match m {
+                    M::InvalidPath { .. } | M::TooLarge { .. } | M::Invalid(_) => StatusCode::BAD_REQUEST,
+                    M::Forbidden { .. } => StatusCode::FORBIDDEN,
+                    M::NotFound(_) => StatusCode::NOT_FOUND,
+                    M::Conflict(_) => StatusCode::CONFLICT,
+                    M::Git { .. } | M::Malformed(_) | M::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                }
+            }
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if code == StatusCode::INTERNAL_SERVER_ERROR {
@@ -181,10 +191,18 @@ async fn op(
     Extension(p): Extension<Principal>,
     Path(name): Path<String>,
     body: Option<Json<Value>>,
-) -> ApiResult {
+) -> ApiResult<Response> {
     let caller = Caller::resolve(&hub, p).await?;
     let input = body.map_or(Value::Null, |Json(v)| v);
-    Ok(Json(ops::call(&hub, &caller, &name, input).await?))
+    match ops::call(&hub, &caller, &name, input).await {
+        Ok(v) => Ok(Json(v).into_response()),
+        // A memory conflict carries the current version, so the client can merge.
+        Err(OpError::Hub(HubError::Memory(crate::memory::MemoryError::Conflict(c)))) => {
+            let body = ApiErrorBody { error: c.to_string(), conflict: Some(*c) };
+            Ok((StatusCode::CONFLICT, Json(body)).into_response())
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {

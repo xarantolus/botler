@@ -24,8 +24,9 @@ impl Paths {
     pub fn repo(&self) -> PathBuf {
         self.root.join("repo.git")
     }
+    /// Agent memory: Markdown files in namespaces, with a git repo for history.
     pub fn memory(&self) -> PathBuf {
-        self.root.join("memory.git")
+        self.root.join("memory")
     }
     /// The hub's own short-lived git worktrees (rebases, reverts, hub-authored commits).
     pub fn worktrees(&self) -> PathBuf {

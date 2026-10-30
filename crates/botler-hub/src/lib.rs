@@ -17,6 +17,7 @@ pub mod live;
 pub mod localtime;
 pub mod loops;
 pub mod mcp;
+pub mod memory;
 pub mod migrate;
 pub mod notify;
 pub mod ops;

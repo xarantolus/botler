@@ -7,5 +7,6 @@ Every failure you handle ends with `resolve_incident`, saying what the cause was
 Before acting, look at how earlier incidents of the same job were resolved and at your memory
 notes: the same failure often has the same fix. Keep useful findings in memory.
 
-A failing `web-health` job means `web.search` or `web.fetch` broke (changed markup or blocking).
+A failing `web-health` job means `web.fetch` broke, or `web.search` failed on both backends
+(OpenRouter's web search and the DuckDuckGo scraper; the job output has each backend's error).
 Fix `tools/web/` with an updated fixture and tests, then `propose_change`.

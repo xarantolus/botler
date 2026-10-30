@@ -1,0 +1,98 @@
+{
+ "id": "gen-REDACTED",
+ "object": "chat.completion",
+ "created": 1793378548,
+ "model": "mistralai/mistral-nemo",
+ "provider": "DekaLLM",
+ "system_fingerprint": null,
+ "service_tier": null,
+ "choices": [
+  {
+   "index": 0,
+   "logprobs": null,
+   "finish_reason": "length",
+   "native_finish_reason": "length",
+   "message": {
+    "role": "assistant",
+    "content": "**Python** is a high-level, interpreted, general-purpose programming language that is",
+    "refusal": null,
+    "reasoning": null,
+    "annotations": [
+     {
+      "type": "url_citation",
+      "url_citation": {
+       "url": "https://www.britannica.com/technology/Python-computer-language",
+       "title": "Python | Definition, Language, History, & Facts | Britannica",
+       "start_index": 0,
+       "end_index": 0,
+       "content": "Python programming language Python was publicly released in 1994 by Dutch programmer Guido van Rossum. (more)\n\nPython\n\ncomputer language\nAsk Anything Homework Help\nWritten by\n\n...\n\nPython , general-purpose high-level computer programming language valued for its English-like syntax and powerful built-in data analysis and data science functions and libraries.\n\nCreation and rise in popularity\n\nDutch programmer Guido van Rossum developed Python in 1991 after expressing frustration with the limitations of the programming language ABC.\n\n...\n\nFeatures\n\nThe Python Software Foundation describes Python as “an interpreted, object-oriented, high-level programming language with dynamic semantics.” Unlike such languages as Java , Python is an interpreted language, indicating that its source code can be directly used and executed without needing a compiler ."
+      }
+     },
+     {
+      "type": "url_citation",
+      "url_citation": {
+       "url": "https://docs.python.org/3/faq/general.html",
+       "title": "General Python FAQ — Python 3.15.2 documentation",
+       "start_index": 0,
+       "end_index": 0,
+       "content": "Python is an interpreted, interactive, object-oriented programming language. It incorporates modules, exceptions, dynamic typing, very high level dynamic data types, and classes. It supports multiple programming paradigms beyond object-oriented programming, such as procedural and functional programming. Python combines remarkable power with very clear syntax.\n\n...\n\nThe PSF’s mission is to advance open source technology related to the Python programming language and to publicize the use of Python. The PSF’s home page is at https://www.python.org/psf/ .\n\n...\n\nWe needed a better way to do system administration than by writing either C programs or Bourne shell scripts, since Amoeba had its own system call interface which wasn’t easily accessible from the Bourne shell.\n\n...\n\nThere are already millions of lines of Python code around the world, so any change in the language that invalidates more than a very small fraction of existing programs has to be frowned upon."
+      }
+     },
+     {
+      "type": "url_citation",
+      "url_citation": {
+       "url": "http://python.org/doc/essays/blurb",
+       "title": "What is Python?  Executive Summary | Python.org",
+       "start_index": 0,
+       "end_index": 0,
+       "content": "Executive Summary\n\nWhat is Python? Executive Summary\n\nPython is an interpreted, object-oriented, high-level programming language with dynamic semantics. Its high-level built in data structures, combined with dynamic typing and dynamic binding, make it very attractive for Rapid Application Development, as well as for use as a scripting or glue language to connect existing components together. Python's simple, easy to learn syntax emphasizes readability and therefore reduces the cost of program maintenance. Python supports modules and packages, which encourages program modularity and code reuse. The Python interpreter and the extensive standard library are available in source or binary form without charge for all major platforms, and can be freely distributed.\nOften, programmers fall in love with Python because of the increased productivity it provides."
+      }
+     },
+     {
+      "type": "url_citation",
+      "url_citation": {
+       "url": "https://en.wikipedia.org/wiki/Python_(programming_language)",
+       "title": "Python (programming language) - Wikipedia",
+       "start_index": 0,
+       "end_index": 0,
+       "content": "Python is a high-level , general-purpose programming language that\n\n...\n\nPython supports multiple programming paradigms but with an emphasis on object-oriented programming and dynamic typing .\nGuido van Rossum began working on Python in the late 1980s as a successor to the ABC programming language.\n\n...\n\nEarlier versions in the 3.x series have reached end-of-life and no longer receive security updates.\nPython is widely taught as an introductory programming language. [ 42 ]\n\nHistory\n\n[ edit ]\n\n...\n\n[ 59 ] Releases receive two years of full support followed by three years of security support.\n\nDesign philosophy and features\n\n[ edit ]\nPython is a multi-paradigm programming language ."
+      }
+     },
+     {
+      "type": "url_citation",
+      "url_citation": {
+       "url": "http://groups.umd.umich.edu/cis/course.des/cis400/python/python.html",
+       "title": "The Python Programming Language - University of Michigan",
+       "start_index": 0,
+       "end_index": 0,
+       "content": "The Python Programming Language\n\n* Click below to go directly to a specific section:\n* History | Significant Language Features | Areas of Application | Sample Programs\n* Related Links | Printed References | Acknowledgements\n\nHistory Python is a very new language; in fact it was released by its designer, Guido Van Rossum,\n\n...\n\nSince he was a fan of the show he thought this name was great. * * * ## Significant Language Features Python is an interpreted, interactive, object-oriented programming language. It incorporates modules, exceptions, dynamic typing, very high level dynamic data types, and classes. Python combines remarkable power with very clear syntax. It has interfaces to many system calls and libraries, as well as to various window systems, and is extensible in C or C++."
+      }
+     }
+    ]
+   }
+  }
+ ],
+ "usage": {
+  "prompt_tokens": 1016,
+  "completion_tokens": 16,
+  "total_tokens": 1032,
+  "cost": 0.001018768,
+  "is_byok": false,
+  "prompt_tokens_details": {
+   "cached_tokens": 0,
+   "cache_write_tokens": 0,
+   "audio_tokens": 0,
+   "video_tokens": 0
+  },
+  "cost_details": {
+   "upstream_inference_cost": 1.8768e-05,
+   "upstream_inference_prompt_cost": 1.8288e-05,
+   "upstream_inference_completions_cost": 4.8e-07
+  },
+  "completion_tokens_details": {
+   "reasoning_tokens": 0,
+   "image_tokens": 0,
+   "audio_tokens": 0
+  }
+ }
+}

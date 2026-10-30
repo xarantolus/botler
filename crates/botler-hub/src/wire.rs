@@ -16,6 +16,9 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::api::{Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, RevertRequest, SecretValue, UserMessage};
+use crate::memory::{
+    MemoryCommit, MemoryConflict, MemoryEntry, MemoryFile, MemoryList, MemoryPath, MemoryWrite, MemoryWritten,
+};
 use crate::ops::{GetRunLogs, IdArg, ProposalDetail, RunLogs};
 use crate::phase::WakePhase;
 use crate::secret_requests::{NewField, Submission};
@@ -25,6 +28,10 @@ use crate::sessions::Item;
 #[derive(Debug, Serialize, TS)]
 pub struct ApiErrorBody {
     pub error: String,
+    /// For memory writes based on a stale version (409): the current version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub conflict: Option<MemoryConflict>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -304,4 +311,8 @@ routes! {
     clear_breaker: POST "/api/v1/breakers/clear", body: ClearBreaker => BreakerCleared;
     run_logs: POST "/api/v1/ops/get_run_logs", body: GetRunLogs => RunLogs;
     proposal: POST "/api/v1/ops/get_proposal", body: IdArg => ProposalDetail;
+    memory_list: POST "/api/v1/ops/memory_list", body: MemoryList => Vec<MemoryEntry>;
+    memory_read: POST "/api/v1/ops/memory_read", body: MemoryPath => MemoryFile;
+    memory_write: POST "/api/v1/ops/memory_write", body: MemoryWrite => MemoryWritten;
+    memory_history: POST "/api/v1/ops/memory_history", body: MemoryPath => Vec<MemoryCommit>;
 }
