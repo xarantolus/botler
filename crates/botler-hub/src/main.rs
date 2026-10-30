@@ -266,13 +266,7 @@ async fn status(paths: Paths) -> anyhow::Result<()> {
     }
     for s in botler_hub::services::status(&hub).await? {
         let urls: Vec<&str> = s.published.iter().map(|p| p.url.as_str()).collect();
-        let state = if s.failed {
-            "failed"
-        } else if s.running {
-            "running"
-        } else {
-            "stopped"
-        };
+        let state = format!("{:?}", s.state).to_lowercase();
         println!("service    {:<28} {state:<9} {}", s.name, urls.join(" "));
     }
     for b in hub.store.breakers().await? {

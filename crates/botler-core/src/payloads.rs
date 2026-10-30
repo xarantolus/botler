@@ -259,6 +259,13 @@ pub struct SchedulePayload {
     pub skipped: u32,
 }
 
+/// The user started a job by hand ("Run now" in the web app).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct ManualPayload {
+    /// The job.
+    pub runnable: String,
+}
+
 /// `access.changed`: a grant of this chat was added without a request dialog (an `auto`
 /// policy) or revoked. Its container changes on the next wake.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -352,6 +359,8 @@ pub enum BuiltinPayload {
     Timer(TimerPayload),
     #[serde(rename = "schedule")]
     Schedule(SchedulePayload),
+    #[serde(rename = "manual")]
+    Manual(ManualPayload),
     #[serde(rename = "access.changed")]
     AccessChanged(AccessChangedPayload),
     #[serde(rename = "chat.restored")]
@@ -379,6 +388,7 @@ impl BuiltinPayload {
             Self::ReplyOverdue(_) => kinds::REPLY_OVERDUE,
             Self::Timer(_) => kinds::TIMER,
             Self::Schedule(_) => kinds::SCHEDULE,
+            Self::Manual(_) => kinds::MANUAL,
             Self::AccessChanged(_) => kinds::ACCESS_CHANGED,
             Self::ChatRestored(_) => kinds::CHAT_RESTORED,
             Self::EnvironmentUpdated(_) => kinds::ENVIRONMENT_UPDATED,
@@ -402,6 +412,7 @@ impl BuiltinPayload {
             Self::ReplyOverdue(p) => serde_json::to_value(p),
             Self::Timer(p) => serde_json::to_value(p),
             Self::Schedule(p) => serde_json::to_value(p),
+            Self::Manual(p) => serde_json::to_value(p),
             Self::AccessChanged(p) => serde_json::to_value(p),
             Self::ChatRestored(p) => serde_json::to_value(p),
             Self::EnvironmentUpdated(p) => serde_json::to_value(p),
@@ -435,6 +446,7 @@ pub fn builtin_schema(kind: &str) -> Option<serde_json::Value> {
         kinds::REPLY_OVERDUE => s::<ReplyOverduePayload>(),
         kinds::TIMER => s::<TimerPayload>(),
         kinds::SCHEDULE => s::<SchedulePayload>(),
+        kinds::MANUAL => s::<ManualPayload>(),
         kinds::TRIAL_FINISHED => s::<TrialFinishedPayload>(),
         kinds::ACCESS_CHANGED => s::<AccessChangedPayload>(),
         kinds::CHAT_RESTORED => s::<ChatRestoredPayload>(),
@@ -487,6 +499,7 @@ mod tests {
             (kinds::REPLY_OVERDUE, fields::<ReplyOverduePayload>()),
             (kinds::TIMER, fields::<TimerPayload>()),
             (kinds::SCHEDULE, fields::<SchedulePayload>()),
+            (kinds::MANUAL, fields::<ManualPayload>()),
             (kinds::ACCESS_CHANGED, fields::<AccessChangedPayload>()),
             (kinds::CHAT_RESTORED, fields::<ChatRestoredPayload>()),
             (kinds::ENVIRONMENT_UPDATED, fields::<EnvironmentUpdatedPayload>()),

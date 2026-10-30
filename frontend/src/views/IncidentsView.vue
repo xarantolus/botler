@@ -44,7 +44,9 @@ const columns: TableColumn<Incident>[] = [
     </template>
     <UTable :data="incidents ?? []" :columns="columns" :loading="loading && !incidents" sticky class="flex-1" :ui="{ td: 'py-2.5' }">
       <template #runnable-cell="{ row }">
-        <span class="font-medium text-highlighted">{{ row.original.runnable }}</span>
+        <ULink :to="{ name: 'system', query: { job: row.original.runnable } }" class="font-medium text-highlighted hover:underline">
+          {{ row.original.runnable }}
+        </ULink>
         <p v-if="row.original.resolution" class="text-xs text-muted">{{ row.original.resolution }}</p>
       </template>
       <template #kind-cell="{ row }"><UBadge color="error" variant="subtle" size="sm" :label="row.original.kind" /></template>

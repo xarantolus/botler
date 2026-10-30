@@ -266,6 +266,13 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         guidance: "Do what the timer was set for.",
     },
     BuiltinEvent {
+        kind: kinds::MANUAL,
+        summary: "The user started a job by hand (Run now).",
+        fields: &[("runnable", "the job")],
+        follow_up: &[],
+        guidance: "Nothing to do: it only starts the job.",
+    },
+    BuiltinEvent {
         kind: kinds::ACCESS_CHANGED,
         summary: "Something this chat may use changed: a grant was given without asking (policy `auto`) or revoked.",
         fields: &[

@@ -13,6 +13,7 @@ import PhaseBadge from "../common/PhaseBadge.vue";
 import TimeAgo from "../common/TimeAgo.vue";
 
 const selected = computed(() => state.session?.instance.name ?? null);
+const waitingChats = computed(() => Object.keys(waitingByInstance.value).length);
 
 const chats = computed(() => {
   const door = frontDoorName.value;
@@ -66,7 +67,12 @@ const items = computed((): ChatItem[] =>
 <template>
   <div class="flex min-h-0 flex-col gap-1">
     <div class="flex items-center justify-between ps-2.5">
-      <span class="text-xs font-semibold text-muted uppercase tracking-wide">Chats</span>
+      <span class="flex items-center gap-1.5 text-xs font-semibold text-muted uppercase tracking-wide">
+        Chats
+        <UTooltip v-if="waitingChats" :text="`${waitingChats} waiting for you`">
+          <UBadge color="warning" variant="subtle" size="sm" :label="String(waitingChats)" />
+        </UTooltip>
+      </span>
       <UTooltip text="New chat">
         <UButton icon="i-lucide-square-pen" color="neutral" variant="ghost" size="sm" aria-label="New chat" @click="shell.newChat = true" />
       </UTooltip>

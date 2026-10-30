@@ -66,6 +66,7 @@ const groups = computed((): CommandPaletteGroup<CommandPaletteItem>[] => {
       items: sections.value.map((s) => ({
         label: s.label,
         icon: s.icon,
+        suffix: s.count ? `${s.count}` : undefined,
         onSelect: () => void router.push({ name: s.name }),
       })),
     },

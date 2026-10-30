@@ -9,10 +9,13 @@ import MemoryView from "./views/MemoryView.vue";
 import ProposalReviewView from "./views/ProposalReviewView.vue";
 import ProposalsView from "./views/ProposalsView.vue";
 import RequestsView from "./views/RequestsView.vue";
-import RunsView from "./views/RunsView.vue";
 import SearchView from "./views/SearchView.vue";
 import SecretsView from "./views/SecretsView.vue";
+<<<<<<< HEAD
 import StorageView from "./views/StorageView.vue";
+=======
+import SystemView from "./views/SystemView.vue";
+>>>>>>> 145861c
 import "./style.css";
 
 const router = createRouter({
@@ -22,7 +25,9 @@ const router = createRouter({
     { path: "/chat/:instance", name: "chat", component: ChatView, props: true },
     { path: "/events", name: "events", component: EventsView },
     { path: "/requests", name: "requests", component: RequestsView },
-    { path: "/runs", name: "runs", component: RunsView },
+    { path: "/system", name: "system", component: SystemView },
+    // The run list moved into System's History tab; old links keep their filters.
+    { path: "/runs", redirect: (to) => ({ name: "system", query: { ...to.query, tab: "history" } }) },
     { path: "/incidents", name: "incidents", component: IncidentsView },
     { path: "/proposals", name: "proposals", component: ProposalsView },
     { path: "/proposals/:id", name: "proposal", component: ProposalReviewView, props: true },

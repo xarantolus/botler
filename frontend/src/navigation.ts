@@ -9,8 +9,10 @@ export interface Section {
   icon: string;
   /** Something needs attention there (a count). */
   count?: number;
-  countColor?: "warning" | "error";
+  countColor?: "warning" | "error" | "neutral";
 }
+
+const attention = computed(() => state.status?.attention);
 
 export const sections = computed((): Section[] => [
   { name: "home", label: "Chat", icon: "i-lucide-message-square" },
@@ -23,7 +25,6 @@ export const sections = computed((): Section[] => [
   },
   { name: "search", label: "Search", icon: "i-lucide-text-search" },
   { name: "events", label: "Events", icon: "i-lucide-activity" },
-  { name: "runs", label: "Runs", icon: "i-lucide-play" },
   {
     name: "incidents",
     label: "Incidents",
@@ -31,7 +32,22 @@ export const sections = computed((): Section[] => [
     count: state.status?.open_incidents ?? 0,
     countColor: "error",
   },
-  { name: "proposals", label: "Proposals", icon: "i-lucide-git-pull-request-arrow" },
+  {
+    // Failed (red) wins over backing off (yellow).
+    name: "system",
+    label: "System",
+    icon: "i-lucide-server",
+    count: (attention.value?.system_failed ?? 0) + (attention.value?.system_backoff ?? 0),
+    countColor: attention.value?.system_failed ? "error" : "warning",
+  },
+  {
+    // In flight; yellow when some wait for you.
+    name: "proposals",
+    label: "Proposals",
+    icon: "i-lucide-git-pull-request-arrow",
+    count: attention.value?.proposals_in_flight ?? 0,
+    countColor: attention.value?.proposals_awaiting_user ? "warning" : "neutral",
+  },
   { name: "secrets", label: "Secrets", icon: "i-lucide-key-round" },
   { name: "memory", label: "Memory", icon: "i-lucide-brain" },
   { name: "storage", label: "Storage", icon: "i-lucide-hard-drive" },

@@ -207,7 +207,7 @@ function onSelect(_e: Event, row: TableRow<BotlerEvent>) {
             <ULink
               v-for="r in trace.runs"
               :key="r.id"
-              :to="{ name: 'runs', query: { run: r.id } }"
+              :to="{ name: 'system', query: { tab: 'history', run: r.id } }"
               class="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-elevated"
             >
               <UIcon name="i-lucide-play" class="size-4 text-muted" />
