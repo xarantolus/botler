@@ -1,7 +1,7 @@
 [project]
 name = "web"
 version = "0.1.0"
-description = "web.search (DuckDuckGo HTML scraper) and web.fetch (page to markdown). Maintained here: fix it when it breaks."
+description = "web.search (OpenRouter web search, DuckDuckGo HTML scraper) and web.fetch (page to markdown). Maintained here: fix it when it breaks."
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2.6", "httpx>=0.27", "selectolax>=1.0", "trafilatura>=2.0"]
 

@@ -1,7 +1,9 @@
 version = 1
-description = "Daily live check that web.search and web.fetch still work. A failure goes to triage, which fixes tools/web/."
+description = "Daily live check that web.search (each backend, and auto) and web.fetch still work. A failure goes to triage, which fixes tools/web/."
 command = ["/app/.venv/bin/python", "-m", "web_health"]
 timeout = "5m"
+# web.search's OpenRouter backend needs OPENROUTER_API_KEY (about $0.002 per run).
+secrets = ["openrouter"]
 # No on_failure: failures open an incident for the `triage` agent.
 
 [[trigger]]
