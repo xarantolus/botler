@@ -646,7 +646,7 @@ impl ChangeSummary {
 }
 
 /// Reviewer verdict on a proposal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize, schemars::JsonSchema, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
     Approve,

@@ -26,7 +26,8 @@ pub struct NewField {
 }
 
 /// What an agent asks for. All lists may be combined in one request.
-#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, ts_rs::TS)]
+#[ts(optional_fields)]
 pub struct SecretRequest {
     /// The group (existing, or new: then `description` and `add` are required).
     pub group: String,
@@ -40,12 +41,15 @@ pub struct SecretRequest {
     pub class: Option<SecretClass>,
     /// Fields to add (the user enters their values).
     #[serde(default)]
+    #[ts(optional, as = "Option<Vec<NewField>>")]
     pub add: Vec<NewField>,
     /// Existing fields whose values the user should (re-)enter.
     #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
     pub fill: Vec<String>,
     /// Fields to remove from the group (their values are deleted).
     #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
     pub remove: Vec<String>,
 }
 

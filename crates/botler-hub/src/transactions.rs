@@ -16,7 +16,6 @@ use botler_core::payloads::{BuiltinPayload, ProposalUpdatedPayload};
 use botler_runtime::{ContainerSpec, Mount, NetworkMode};
 use botler_store::{DialogKind, NewDialog, NewProposal, Priority, Proposal, ProposalKind, ProposalStatus};
 use chrono::Utc;
-use serde_json::json;
 use tokio::io::AsyncReadExt;
 
 use crate::hub::{Hub, HubError, Result, load_at};
@@ -366,8 +365,25 @@ async fn update(hub: &Hub, id: &str, status: &str, detail: &str) -> Result<()> {
     Ok(())
 }
 
+/// A branch's deployment summary against main.
+#[derive(Debug, serde::Serialize, ts_rs::TS)]
+pub struct ChangePreview {
+    pub valid: bool,
+    pub diagnostics: Vec<String>,
+    /// The rest is for valid changes only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub needs_user_approval: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+}
+
 /// The deployment summary of a branch against main, without proposing it.
-pub async fn preview_branch(hub: &Hub, instance: &str, branch: &str) -> Result<serde_json::Value> {
+pub async fn preview_branch(hub: &Hub, instance: &str, branch: &str) -> Result<ChangePreview> {
     let prefix = format!("agents/{instance}/");
     if !branch.starts_with(&prefix) {
         return Err(HubError::Forbidden(format!("you can only preview your own branches ({prefix}...)")));
@@ -382,18 +398,18 @@ pub async fn preview_branch(hub: &Hub, instance: &str, branch: &str) -> Result<s
     let report = botler_core::load_with(&tree, crate::localtime::host());
     let diagnostics: Vec<String> = report.diagnostics.iter().map(ToString::to_string).collect();
     let Some(new) = report.definitions else {
-        return Ok(json!({ "valid": false, "diagnostics": diagnostics }));
+        return Ok(ChangePreview { valid: false, diagnostics, summary: None, needs_user_approval: None, note: None });
     };
     let old = hub.applied().await;
     let changed = hub.repo.changed_paths(&base, &head).await?;
     let summary = preview(&old.defs, &new, &changed, Utc::now());
-    Ok(json!({
-        "valid": true,
-        "diagnostics": diagnostics,
-        "summary": summary.to_markdown(new.timezone),
-        "needs_user_approval": !summary.escalations.is_empty(),
-        "note": "Relative to the current main. Proposing rebases first, so it may differ if main moves.",
-    }))
+    Ok(ChangePreview {
+        valid: true,
+        diagnostics,
+        summary: Some(summary.to_markdown(new.timezone)),
+        needs_user_approval: Some(!summary.escalations.is_empty()),
+        note: Some("Relative to the current main. Proposing rebases first, so it may differ if main moves.".into()),
+    })
 }
 
 /// Revert a merged commit (user action): validated, committed and applied directly.

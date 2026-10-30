@@ -440,7 +440,7 @@ async fn container_spec(
             "headers": { "Authorization": "Bearer ${BOTLER_TOKEN}" },
             "description": "The botler hub: messaging, timers, spawning agents, asking the user, proposing changes, incidents.",
             // The extension's turn-ending tools replace these.
-            "toolExposure": ops::TURN_ENDING.iter().map(|n| (*n, "hidden")).collect::<BTreeMap<_, _>>(),
+            "toolExposure": ops::turn_ending().map(|n| (n, "hidden")).collect::<BTreeMap<_, _>>(),
         }),
     );
     servers.extend(mcp_servers(applied, def));

@@ -54,18 +54,16 @@ impl ServerHandler for BotlerMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let caller = self.caller(&ctx).await?;
-        let tools = ops::OPS
-            .iter()
-            .filter(|o| (o.visible)(&caller))
+        let tools = ops::visible(&caller)
             .map(|o| {
-                let schema = match (o.schema)() {
+                let schema = match o.schema() {
                     Value::Object(m) => m,
                     other => {
-                        tracing::error!(op = o.name, schema = %other, "tool schema is not an object");
+                        tracing::error!(op = o.name(), schema = %other, "tool schema is not an object");
                         serde_json::Map::new()
                     }
                 };
-                Tool::new(o.name, o.description, Arc::new(schema))
+                Tool::new(o.name(), o.description(), Arc::new(schema))
             })
             .collect();
         Ok(ListToolsResult::with_all_items(tools))

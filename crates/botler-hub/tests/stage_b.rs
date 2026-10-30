@@ -52,7 +52,7 @@ async fn message_wakes_botler_and_is_delivered_once() {
     let ask = turn.as_array().unwrap().iter().find(|t| t["name"] == "ask_user").unwrap();
     assert_eq!(ask["parameters"]["required"], json!(["question"]), "{ask}");
     let hidden = &read_json("mcp.json")["mcpServers"]["botler"]["toolExposure"];
-    for op in botler_hub::ops::TURN_ENDING {
+    for op in botler_hub::ops::turn_ending() {
         assert_eq!(hidden[op], "hidden", "{hidden}");
     }
     assert!(e.hub.paths.workspace("botler").join(".git").exists());

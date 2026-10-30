@@ -4,4 +4,4 @@ export type GetRunLogs = { run_id: string,
 /**
  * Last N lines (default 200).
  */
-tail: number | null, };
+tail?: number, };

@@ -1,0 +1,329 @@
+//! Chats (agent instances): naming, spawning, listing, reading and archiving them.
+
+use std::sync::Arc;
+
+use botler_core::defs::{AgentKind, Capability};
+use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use ts_rs::TS;
+
+use super::{Caller, Op, OpError, SendMessage, Who};
+use crate::hub::{Hub, HubError};
+use crate::router;
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct SetChatTitle {
+    pub title: String,
+    /// Lowercase words joined by dashes, 3 to 60 characters.
+    pub slug: String,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct ChatTitled {
+    pub instance: String,
+    pub title: String,
+    pub slug: String,
+}
+
+impl Op for SetChatTitle {
+    const NAME: &'static str = "set_chat_title";
+    const DESCRIPTION: &'static str = "Name your chat so the user can find it: a short title and a unique slug like `groundstation-antenna-fix` (lowercase words joined by dashes, project or topic first). Others can then message you by the slug. Do this after the first message of a new chat, and again if the topic changes.";
+    const WHO: Who = Who::UserAndAgents;
+    type Output = ChatTitled;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<ChatTitled, OpError> {
+        let instance = caller.agent("only agents name chats")?;
+        let slug_ok = (3..=60).contains(&self.slug.len())
+            && botler_core::defs::valid_name(&self.slug)
+            && !self.slug.ends_with('-')
+            && !self.slug.contains("--");
+        if !slug_ok {
+            return Err(OpError::BadRequest(
+                "slug must be 3-60 lowercase letters/digits in dash-separated words".into(),
+            ));
+        }
+        let title = self.title.trim();
+        if title.is_empty() || title.len() > 120 {
+            return Err(OpError::BadRequest("title must be 1-120 characters".into()));
+        }
+        hub.store.set_instance_title(instance, title, &self.slug).await.map_err(|e| match e {
+            botler_store::Error::SlugTaken(s) => OpError::BadRequest(format!("{s} is taken; pick another slug")),
+            other => other.into(),
+        })?;
+        Ok(ChatTitled { instance: instance.into(), title: title.into(), slug: self.slug })
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct SpawnAgent {
+    /// Agent definition under `agents/`, e.g. `dev`.
+    pub definition: String,
+    pub task: String,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct AgentSpawned {
+    pub instance: String,
+}
+
+impl Op for SpawnAgent {
+    const NAME: &'static str = "spawn_agent";
+    const DESCRIPTION: &'static str =
+        "Start a new instance of an agent definition with a task. It reports back to you by message.";
+    const WHO: Who = Who::UserAndAgents;
+    type Output = AgentSpawned;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<AgentSpawned, OpError> {
+        let instance = router::spawn(hub, &self.definition, caller.instance(), Some(&self.task), None, None).await?;
+        Ok(AgentSpawned { instance })
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct ListChats {}
+
+#[derive(Debug, Serialize, TS)]
+pub struct Chats {
+    pub chats: Vec<ChatSummary>,
+    pub agent_definitions: Vec<AgentDefinitionSummary>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct ChatSummary {
+    pub chat: String,
+    pub title: Option<String>,
+    pub slug: Option<String>,
+    pub definition: String,
+    pub state: ChatState,
+    pub task: Option<String>,
+    pub last_active: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatState {
+    /// Working on a turn.
+    Working,
+    /// Awake, waiting for input.
+    Idle,
+    Asleep,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct AgentDefinitionSummary {
+    pub definition: String,
+    pub description: String,
+    pub kind: AgentKind,
+}
+
+impl Op for ListChats {
+    const NAME: &'static str = "list_chats";
+    const DESCRIPTION: &'static str = "Every chat (agent instance), running or asleep, with its title, slug and what it was doing, plus the agent definitions you can spawn. Messaging a sleeping chat wakes it with its conversation and workspace intact.";
+    const WHO: Who = Who::UserAndAgents;
+    type Output = Chats;
+
+    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<Chats, OpError> {
+        let applied = hub.applied().await;
+        let agent_definitions = applied
+            .defs
+            .agents
+            .values()
+            .map(|d| AgentDefinitionSummary {
+                definition: d.name.clone(),
+                description: d.spec.description.clone(),
+                kind: d.spec.kind,
+            })
+            .collect();
+        let mut chats = Vec::new();
+        for i in hub.store.live_instances().await? {
+            let busy = hub.agents.get(&i.name).await.is_some_and(|a| a.busy());
+            let state = match i.state {
+                _ if busy => ChatState::Working,
+                botler_store::InstanceState::Running => ChatState::Idle,
+                _ => ChatState::Asleep,
+            };
+            chats.push(ChatSummary {
+                chat: i.name,
+                title: i.title,
+                slug: i.slug,
+                definition: i.definition,
+                state,
+                task: i.task,
+                last_active: i.last_active,
+            });
+        }
+        Ok(Chats { chats, agent_definitions })
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+#[ts(optional_fields)]
+pub struct ReadSession {
+    pub instance: String,
+    /// How many of the most recent messages (default 20, max 200).
+    #[serde(default)]
+    pub last: Option<u32>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct SessionMessages {
+    /// Absent when the session has no messages yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub instance: Option<String>,
+    pub messages: Vec<SessionMessage>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct SessionMessage {
+    pub role: String,
+    /// The text parts, at most 4000 characters.
+    pub text: String,
+    /// pi's timestamp, as recorded.
+    pub at: Option<Value>,
+}
+
+impl Op for ReadSession {
+    const NAME: &'static str = "read_session";
+    const DESCRIPTION: &'static str =
+        "Read the recent messages of another instance's session (what it has been doing).";
+    const WHO: Who = Who::Capable(Capability::ReadSessions);
+    type Output = SessionMessages;
+
+    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<SessionMessages, OpError> {
+        let inst = hub
+            .store
+            .resolve_instance(&self.instance)
+            .await?
+            .ok_or_else(|| OpError::BadRequest(format!("no chat named {}", self.instance)))?;
+        let path = hub.paths.sessions(&inst.name).join(&inst.session_file);
+        let last = self.last.unwrap_or(20).min(200) as usize;
+        let text = match tokio::fs::read_to_string(&path).await {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(SessionMessages { instance: None, messages: vec![] });
+            }
+            Err(e) => return Err(HubError::Io(e).into()),
+        };
+        let mut messages: Vec<SessionMessage> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|e| e.get("type").and_then(Value::as_str) == Some("message"))
+            .filter_map(|e| {
+                let m = e.get("message")?;
+                let role = m.get("role")?.as_str()?;
+                if role == "system" {
+                    return None;
+                }
+                let text: String = m
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .map(|c| {
+                        c.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
+                    })
+                    .unwrap_or_default();
+                Some(SessionMessage {
+                    role: role.into(),
+                    text: text.chars().take(4000).collect(),
+                    at: e.get("timestamp").cloned(),
+                })
+            })
+            .collect();
+        let start = messages.len().saturating_sub(last);
+        Ok(SessionMessages { instance: Some(inst.name), messages: messages.split_off(start) })
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+#[ts(optional_fields)]
+pub struct ArchiveReady {
+    /// Everything you did in this chat, for someone who has not read it.
+    pub summary: String,
+    /// Work you did not finish.
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub outstanding: Vec<String>,
+    /// Where your state lives: branches, files, memory notes, external systems.
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub state: Vec<String>,
+    /// Who should continue the outstanding work, if anyone.
+    #[serde(default)]
+    pub handoff: Option<Handoff>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+#[ts(rename = "ArchiveHandoff", optional_fields)]
+pub struct Handoff {
+    /// An existing chat (name or slug) to send the work to...
+    #[serde(default)]
+    pub to: Option<String>,
+    /// ...or an agent definition to spawn for it.
+    #[serde(default)]
+    pub spawn: Option<String>,
+    /// What they should do; include everything they need.
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct Archived {
+    pub archived: String,
+    /// The chat that continues the outstanding work.
+    pub handed_to: Option<String>,
+    pub note: String,
+}
+
+impl Op for ArchiveReady {
+    const NAME: &'static str = "archive_ready";
+    const DESCRIPTION: &'static str = "Hand over before this chat is archived (only after an archive.requested event): what you did, what is outstanding, where your state lives, and optionally who should continue.";
+    const WHO: Who = Who::UserAndAgents;
+    const ENDS_TURN: bool = true;
+    type Output = Archived;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<Archived, OpError> {
+        let name = caller.agent("only agents archive")?;
+        let inst = hub.store.instance(name).await?;
+        if inst.archive_requested_at.is_none() {
+            return Err(OpError::BadRequest("nobody asked to archive this chat; keep working".into()));
+        }
+        if self.summary.trim().len() < 20 {
+            return Err(OpError::BadRequest("the summary must describe what you did".into()));
+        }
+        let mut handed_to = None;
+        if let Some(h) = &self.handoff {
+            handed_to = Some(match (&h.to, &h.spawn) {
+                (Some(to), None) => {
+                    let message =
+                        SendMessage { to: to.clone(), text: h.message.clone(), urgent: false, reply_to: None };
+                    message.call(hub, caller).await?;
+                    to.clone()
+                }
+                (None, Some(def)) => router::spawn(hub, def, Some(name), Some(&h.message), None, None).await?,
+                _ => return Err(OpError::BadRequest("handoff needs exactly one of `to` or `spawn`".into())),
+            });
+        }
+        let report = botler_store::ArchiveRecord {
+            confirmed_by_agent: true,
+            forced: false,
+            reason: None,
+            report: Some(botler_store::HandoverReport {
+                summary: self.summary,
+                outstanding: self.outstanding,
+                state: self.state,
+                handoff: self.handoff.map(|h| botler_store::Handoff { to: h.to, spawn: h.spawn, message: h.message }),
+            }),
+            handed_to: handed_to.clone(),
+            at: Utc::now(),
+        };
+        hub.store.archive_instance(name, &report).await?;
+        crate::agents::stop_after_reply(hub, name).await;
+        tracing::info!(instance = name, handed_to = ?handed_to, "chat archived");
+        Ok(Archived {
+            archived: name.into(),
+            handed_to,
+            note: "Archived. Stop now; you will be restored if messaged.".into(),
+        })
+    }
+}

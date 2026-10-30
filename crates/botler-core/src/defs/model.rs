@@ -47,7 +47,7 @@ pub struct EventsPolicy {
 }
 
 /// What happens to an event type that no file declares.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Undeclared {
     /// Reject it: every event type must be declared (with a schema to be validated).
@@ -252,7 +252,7 @@ impl Agent {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     Persistent,
@@ -474,7 +474,7 @@ pub struct Trigger {
 }
 
 /// A target: *what* a trigger does.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Target {
     /// Deliver into an existing persistent instance.

@@ -8,7 +8,7 @@ from typing import Any
 from ._client import call
 
 
-def send_message(*, text: str, to: str, reply_to: str | None = None, urgent: bool | None = None) -> Any:
+def send_message(*, text: str, to: str, reply_to: str | None = None, urgent: bool | None = None) -> dict[str, Any]:
     """Send a message to an agent instance (e.g. `botler`). Replies come back to you as messages. Set `reply_to` to the event you are answering to keep the thread.
 
     Args:
@@ -19,7 +19,7 @@ def send_message(*, text: str, to: str, reply_to: str | None = None, urgent: boo
     return call("send_message", {"text": text, "to": to, "reply_to": reply_to, "urgent": urgent})
 
 
-def emit_event(*, type: str, payload: Any = None, provenance: Any = None) -> Any:
+def emit_event(*, type: str, payload: Any = None, provenance: Any = None) -> dict[str, Any]:
     """Emit a typed event. Triggers subscribed to its type react to it. Use for facts (`mail.received`), not for talking to someone (use send_message).
 
     Args:
@@ -29,7 +29,7 @@ def emit_event(*, type: str, payload: Any = None, provenance: Any = None) -> Any
     return call("emit_event", {"type": type, "payload": payload, "provenance": provenance})
 
 
-def set_timer(*, prompt: str, at: str | None = None, in_: str | None = None, instance: str | None = None) -> Any:
+def set_timer(*, prompt: str, at: str | None = None, in_: str | None = None, instance: str | None = None) -> dict[str, Any]:
     """Wake an agent later with a prompt: at an RFC 3339 time or after a delay like "2h". Defaults to waking you. One-off only; recurring work belongs in a trigger file.
 
     Args:
@@ -41,17 +41,17 @@ def set_timer(*, prompt: str, at: str | None = None, in_: str | None = None, ins
     return call("set_timer", {"prompt": prompt, "at": at, "in": in_, "instance": instance})
 
 
-def cancel_timer(*, id: str) -> Any:
+def cancel_timer(*, id: str) -> dict[str, Any]:
     """Cancel a pending timer."""
     return call("cancel_timer", {"id": id})
 
 
-def list_timers() -> Any:
+def list_timers() -> list[dict[str, Any]]:
     """Pending timers you created (all timers for the user)."""
     return call("list_timers", {})
 
 
-def set_chat_title(*, slug: str, title: str) -> Any:
+def set_chat_title(*, slug: str, title: str) -> dict[str, Any]:
     """Name your chat so the user can find it: a short title and a unique slug like `groundstation-antenna-fix` (lowercase words joined by dashes, project or topic first). Others can then message you by the slug. Do this after the first message of a new chat, and again if the topic changes.
 
     Args:
@@ -60,7 +60,7 @@ def set_chat_title(*, slug: str, title: str) -> Any:
     return call("set_chat_title", {"slug": slug, "title": title})
 
 
-def spawn_agent(*, definition: str, task: str) -> Any:
+def spawn_agent(*, definition: str, task: str) -> dict[str, Any]:
     """Start a new instance of an agent definition with a task. It reports back to you by message.
 
     Args:
@@ -69,12 +69,12 @@ def spawn_agent(*, definition: str, task: str) -> Any:
     return call("spawn_agent", {"definition": definition, "task": task})
 
 
-def list_chats() -> Any:
+def list_chats() -> dict[str, Any]:
     """Every chat (agent instance), running or asleep, with its title, slug and what it was doing, plus the agent definitions you can spawn. Messaging a sleeping chat wakes it with its conversation and workspace intact."""
     return call("list_chats", {})
 
 
-def propose_change(*, branch: str, title: str) -> Any:
+def propose_change(*, branch: str, title: str) -> dict[str, Any]:
     """Propose your pushed branch (agents/<you>/...) for merging into main. Runs asynchronously: rebase, validation, a plain-language deployment summary (what will run when, what needs the user's approval), the gate (gate/run), a reviewer, maybe the user. Progress arrives as proposal.updated events; nothing takes effect until it is merged.
 
     Args:
@@ -84,22 +84,22 @@ def propose_change(*, branch: str, title: str) -> Any:
     return call("propose_change", {"branch": branch, "title": title})
 
 
-def preview_change(*, branch: str) -> Any:
+def preview_change(*, branch: str) -> dict[str, Any]:
     """The deployment summary of your pushed branch against main without proposing it: validation problems, triggers in plain words with next fire times, new capabilities, and whether the user must approve."""
     return call("preview_change", {"branch": branch})
 
 
-def get_proposal(*, id: str) -> Any:
+def get_proposal(*, id: str) -> dict[str, Any]:
     """A proposal's status, deployment summary, gate report and review notes."""
     return call("get_proposal", {"id": id})
 
 
-def submit_review(*, notes: str, proposal_id: str, verdict: Any) -> Any:
+def submit_review(*, notes: str, proposal_id: str, verdict: Any) -> dict[str, Any]:
     """Your verdict on the proposal you were asked to review: approve, escalate (fine, but the user should look) or reject, with notes for a busy reader."""
     return call("submit_review", {"notes": notes, "proposal_id": proposal_id, "verdict": verdict})
 
 
-def request_secrets(*, group: str, reason: str, add: list[Any] | None = None, class_: Any = None, description: str | None = None, fill: list[str] | None = None, remove: list[str] | None = None) -> Any:
+def request_secrets(*, group: str, reason: str, add: list[Any] | None = None, class_: Any = None, description: str | None = None, fill: list[str] | None = None, remove: list[str] | None = None) -> dict[str, Any]:
     """Ask the user for secrets, asynchronously: create a group, add fields to one, re-enter values (`fill`) or remove fields. The user gets a form; you get a request id now and a `dialog.answered` event later saying what was provided (never the values). Do not continue work that needs the secrets until that event arrives. Using a group in a container still needs a grant (`secrets = ["<group>"]` in a definition, proposed as a change).
 
     Args:
@@ -114,12 +114,12 @@ def request_secrets(*, group: str, reason: str, add: list[Any] | None = None, cl
     return call("request_secrets", {"group": group, "reason": reason, "add": add, "class": class_, "description": description, "fill": fill, "remove": remove})
 
 
-def list_requests() -> Any:
+def list_requests() -> dict[str, Any]:
     """Your outstanding requests to the user (questions, secret requests) with their ids."""
     return call("list_requests", {})
 
 
-def cancel_request(*, id: str, reason: str) -> Any:
+def cancel_request(*, id: str, reason: str) -> dict[str, Any]:
     """Withdraw one of your outstanding requests by id (it disappears for the user; a late answer is rejected).
 
     Args:
@@ -128,7 +128,7 @@ def cancel_request(*, id: str, reason: str) -> Any:
     return call("cancel_request", {"id": id, "reason": reason})
 
 
-def archive_ready(*, summary: str, handoff: Any = None, outstanding: list[str] | None = None, state: list[str] | None = None) -> Any:
+def archive_ready(*, summary: str, handoff: Any = None, outstanding: list[str] | None = None, state: list[str] | None = None) -> dict[str, Any]:
     """Hand over before this chat is archived (only after an archive.requested event): what you did, what is outstanding, where your state lives, and optionally who should continue.
 
     Args:
@@ -140,12 +140,12 @@ def archive_ready(*, summary: str, handoff: Any = None, outstanding: list[str] |
     return call("archive_ready", {"summary": summary, "handoff": handoff, "outstanding": outstanding, "state": state})
 
 
-def list_event_types() -> Any:
+def list_event_types() -> dict[str, Any]:
     """Declared event types with their payload schemas. emit_event validates payloads against these."""
     return call("list_event_types", {})
 
 
-def read_session(*, instance: str, last: int | None = None) -> Any:
+def read_session(*, instance: str, last: int | None = None) -> dict[str, Any]:
     """Read the recent messages of another instance's session (what it has been doing).
 
     Args:
@@ -154,7 +154,7 @@ def read_session(*, instance: str, last: int | None = None) -> Any:
     return call("read_session", {"instance": instance, "last": last})
 
 
-def memory_write(*, content: str, path: str, expected_sha256: str | None = None) -> Any:
+def memory_write(*, content: str, path: str, expected_sha256: str | None = None) -> dict[str, Any]:
     """Write a memory file (Markdown) in one of your namespaces: `agents/<definition>/...` (mounted at /memory/self), `projects/<home>/...` (/memory/project) or `user/...` (/memory/user). Pass the sha256 of the version you read as `expected_sha256` (`sha256sum`), or omit it to create a new file. If someone changed it meanwhile you get a conflict with the current content: merge and write again.
 
     Args:
@@ -165,7 +165,7 @@ def memory_write(*, content: str, path: str, expected_sha256: str | None = None)
     return call("memory_write", {"content": content, "path": path, "expected_sha256": expected_sha256})
 
 
-def memory_append(*, path: str, text: str) -> Any:
+def memory_append(*, path: str, text: str) -> dict[str, Any]:
     """Append line(s) to a memory file, creating it if needed. No version needed: use it for logs and lists.
 
     Args:
@@ -174,7 +174,7 @@ def memory_append(*, path: str, text: str) -> Any:
     return call("memory_append", {"path": path, "text": text})
 
 
-def memory_delete(*, expected_sha256: str, path: str) -> Any:
+def memory_delete(*, expected_sha256: str, path: str) -> dict[str, Any]:
     """Delete a memory file; `expected_sha256` is the sha256 of the version you are deleting.
 
     Args:
@@ -183,12 +183,12 @@ def memory_delete(*, expected_sha256: str, path: str) -> Any:
     return call("memory_delete", {"expected_sha256": expected_sha256, "path": path})
 
 
-def memory_read(*, path: str) -> Any:
+def memory_read(*, path: str) -> dict[str, Any]:
     """Read a memory file with its sha256."""
     return call("memory_read", {"path": path})
 
 
-def memory_list(*, prefix: str | None = None) -> Any:
+def memory_list(*, prefix: str | None = None) -> list[dict[str, Any]]:
     """Memory files you may read, optionally under a directory such as `user` or `agents/dev`.
 
     Args:
@@ -197,17 +197,17 @@ def memory_list(*, prefix: str | None = None) -> Any:
     return call("memory_list", {"prefix": prefix})
 
 
-def memory_history(*, path: str) -> Any:
+def memory_history(*, path: str) -> list[dict[str, Any]]:
     """The commits that changed a memory file, newest first, with their authors."""
     return call("memory_history", {"path": path})
 
 
-def get_events(*, correlation: str | None = None, limit: int | None = None, type: str | None = None) -> Any:
+def get_events(*, correlation: str | None = None, limit: int | None = None, type: str | None = None) -> list[dict[str, Any]]:
     """Read the event journal, newest first: filter by type (`mail.*`) or conversation (`correlation`)."""
     return call("get_events", {"correlation": correlation, "limit": limit, "type": type})
 
 
-def ask_user(*, question: str, about: list[str] | None = None, detail: str | None = None, expires_in: str | None = None, options: list[str] | None = None, priority: str | None = None) -> Any:
+def ask_user(*, question: str, about: list[str] | None = None, detail: str | None = None, expires_in: str | None = None, options: list[str] | None = None, priority: str | None = None) -> dict[str, Any]:
     """Ask the user a question and get the answer later as a `dialog.answered` event. `options` are the allowed answers; `about` lists objects (e.g. `proposal:<id>`) whose change withdraws the question.
 
     Args:
@@ -220,7 +220,7 @@ def ask_user(*, question: str, about: list[str] | None = None, detail: str | Non
     return call("ask_user", {"question": question, "about": about, "detail": detail, "expires_in": expires_in, "options": options, "priority": priority})
 
 
-def get_run_logs(*, run_id: str, tail: int | None = None) -> Any:
+def get_run_logs(*, run_id: str, tail: int | None = None) -> dict[str, Any]:
     """Output of a job run.
 
     Args:
@@ -229,17 +229,17 @@ def get_run_logs(*, run_id: str, tail: int | None = None) -> Any:
     return call("get_run_logs", {"run_id": run_id, "tail": tail})
 
 
-def get_incident(*, id: str) -> Any:
+def get_incident(*, id: str) -> dict[str, Any]:
     """One incident: what failed, how often, how it was resolved."""
     return call("get_incident", {"id": id})
 
 
-def get_incident_history(*, runnable: str) -> Any:
+def get_incident_history(*, runnable: str) -> list[dict[str, Any]]:
     """Past incidents of a job or service with their resolutions, newest first. Check this before fixing anything."""
     return call("get_incident_history", {"runnable": runnable})
 
 
-def resolve_incident(*, id: str, resolution: str) -> Any:
+def resolve_incident(*, id: str, resolution: str) -> dict[str, Any]:
     """Close an incident with what caused it and what you did (or why nothing needs doing). Required at the end of every triage.
 
     Args:
@@ -248,17 +248,17 @@ def resolve_incident(*, id: str, resolution: str) -> Any:
     return call("resolve_incident", {"id": id, "resolution": resolution})
 
 
-def state_get(*, key: str) -> Any:
+def state_get(*, key: str) -> dict[str, Any]:
     """Read this job's persistent key-value state."""
     return call("state_get", {"key": key})
 
 
-def state_set(*, key: str, value: str) -> Any:
+def state_set(*, key: str, value: str) -> dict[str, Any]:
     """Write this job's persistent key-value state (cursors, dedup keys; up to 64 KiB per value)."""
     return call("state_set", {"key": key, "value": value})
 
 
-def health(*, ok: bool, reason: str | None = None) -> Any:
+def health(*, ok: bool, reason: str | None = None) -> dict[str, Any]:
     """Report this service's health: `ok=true` is the heartbeat its job.toml `[health]` asks for; `ok=false` with a reason stops and restarts it and reports an unhealthy incident.
 
     Args:

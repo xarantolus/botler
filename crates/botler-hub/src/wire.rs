@@ -16,10 +16,8 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::api::{Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, RevertRequest, SecretValue, UserMessage};
-use crate::memory::{
-    MemoryCommit, MemoryConflict, MemoryEntry, MemoryFile, MemoryList, MemoryPath, MemoryWrite, MemoryWritten,
-};
-use crate::ops::{GetRunLogs, IdArg, ProposalDetail, RunLogs};
+use crate::memory::{MemoryConflict, MemoryHistory, MemoryList, MemoryRead, MemoryWrite};
+use crate::ops::{GetProposal, GetRunLogs, Op};
 use crate::phase::WakePhase;
 use crate::secret_requests::{NewField, Submission};
 use crate::sessions::Item;
@@ -243,7 +241,7 @@ pub struct Usage {
 pub struct RouteSpec {
     pub name: &'static str,
     pub method: &'static str,
-    pub path: &'static str,
+    pub path: String,
     /// TypeScript names of the query, body and response types.
     pub query: Option<String>,
     pub body: Option<String>,
@@ -255,24 +253,40 @@ pub trait TypeSink {
     fn add<T: TS + 'static + ?Sized>(&mut self);
 }
 
-/// The route table: `name: METHOD "path" [, query: Q] [, body: B] => Response;`. Path parameters are
-/// written `{name}`. Handlers in `api.rs` are registered at the same paths; a test checks that
-/// every path here is served.
+/// The route table: the ops the web app calls as `ops { name: OpInput; }` (`POST
+/// /api/v1/ops/{op}` with the op's input and output; listed last), then
+/// `name: METHOD "path" [, query: Q] [, body: B] => Response;`. Path parameters are written
+/// `{name}`. Handlers in `api.rs` are registered at the same paths; a test checks that every path
+/// here is served.
 macro_rules! routes {
     (@name $cfg:ident) => { None };
     (@name $cfg:ident $t:ty) => { Some(<$t as TS>::name($cfg)) };
-    ($( $name:ident : $method:ident $path:literal $(, query: $query:ty)? $(, body: $body:ty)? => $resp:ty ; )*) => {
+    (
+        ops { $( $op_route:ident : $op:ty ; )* }
+        $( $name:ident : $method:ident $path:literal $(, query: $query:ty)? $(, body: $body:ty)? => $resp:ty ; )*
+    ) => {
         pub fn route_table(cfg: &ts_rs::Config) -> Vec<RouteSpec> {
-            vec![$(
+            let mut table = vec![$(
                 RouteSpec {
                     name: stringify!($name),
                     method: stringify!($method),
-                    path: $path,
+                    path: $path.into(),
                     query: routes!(@name cfg $($query)?),
                     body: routes!(@name cfg $($body)?),
                     response: <$resp as TS>::name(cfg),
                 }
-            ),*]
+            ),*];
+            $(
+                table.push(RouteSpec {
+                    name: stringify!($op_route),
+                    method: "POST",
+                    path: format!("/api/v1/ops/{}", <$op as Op>::NAME),
+                    query: None,
+                    body: Some(<$op as TS>::name(cfg)),
+                    response: <<$op as Op>::Output as TS>::name(cfg),
+                });
+            )*
+            table
         }
 
         /// Hand every type the routes use to `sink`.
@@ -282,11 +296,23 @@ macro_rules! routes {
                 $( sink.add::<$body>(); )?
                 sink.add::<$resp>();
             )*
+            $(
+                sink.add::<$op>();
+                sink.add::<<$op as Op>::Output>();
+            )*
         }
     };
 }
 
 routes! {
+    ops {
+        run_logs: GetRunLogs;
+        proposal: GetProposal;
+        memory_list: MemoryList;
+        memory_read: MemoryRead;
+        memory_write: MemoryWrite;
+        memory_history: MemoryHistory;
+    }
     status: GET "/api/v1/status" => HubStatus;
     usage: GET "/api/v1/usage" => Usage;
     send_message: POST "/api/v1/messages", body: UserMessage => EventPosted;
@@ -309,10 +335,4 @@ routes! {
     pause: POST "/api/v1/pause" => PauseState;
     resume: POST "/api/v1/resume" => PauseState;
     clear_breaker: POST "/api/v1/breakers/clear", body: ClearBreaker => BreakerCleared;
-    run_logs: POST "/api/v1/ops/get_run_logs", body: GetRunLogs => RunLogs;
-    proposal: POST "/api/v1/ops/get_proposal", body: IdArg => ProposalDetail;
-    memory_list: POST "/api/v1/ops/memory_list", body: MemoryList => Vec<MemoryEntry>;
-    memory_read: POST "/api/v1/ops/memory_read", body: MemoryPath => MemoryFile;
-    memory_write: POST "/api/v1/ops/memory_write", body: MemoryWrite => MemoryWritten;
-    memory_history: POST "/api/v1/ops/memory_history", body: MemoryPath => Vec<MemoryCommit>;
 }
