@@ -3,10 +3,12 @@
 // chats and the hub's status; the current view beside it; the command palette and the new-chat
 // modal on top.
 import type { NavigationMenuItem } from "@nuxt/ui";
+import { defineShortcuts } from "@nuxt/ui/composables/defineShortcuts";
 import { computed } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { sections } from "../../navigation";
 import { shell } from "../../shell";
+import { SHORTCUTS } from "../../shortcuts";
 import AppSearch from "./AppSearch.vue";
 import ChatList from "./ChatList.vue";
 import ColorModeCycle from "./ColorModeCycle.vue";
@@ -14,6 +16,16 @@ import HubMenu from "./HubMenu.vue";
 import NewChatModal from "./NewChatModal.vue";
 
 const route = useRoute();
+const router = useRouter();
+defineShortcuts(Object.fromEntries(SHORTCUTS.map((s) => [s.key, () => s.run(router)])));
+
+/** Move focus past the sidebar, to the view's scrolling body. */
+function skipToContent() {
+  const body = document.querySelector<HTMLElement>("[data-slot=body]:not([data-slot=sidebar] *)");
+  if (!body) return;
+  body.tabIndex = -1;
+  body.focus();
+}
 
 const nav = computed((): NavigationMenuItem[] =>
   sections.value.map((s) => ({
@@ -28,6 +40,14 @@ const nav = computed((): NavigationMenuItem[] =>
 
 <template>
   <UDashboardGroup unit="rem" storage="local" storage-key="botler.dashboard">
+    <!-- Keyboard users skip the sidebar. -->
+    <a
+      href="#main"
+      @click.prevent="skipToContent"
+      class="sr-only z-50 rounded-md bg-default px-3 py-2 text-sm font-medium text-primary ring ring-primary focus:not-sr-only focus:fixed focus:start-3 focus:top-3"
+    >
+      Skip to content
+    </a>
     <UDashboardSidebar
       id="sidebar"
       v-model:open="shell.sidebar"

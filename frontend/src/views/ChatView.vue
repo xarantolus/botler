@@ -168,7 +168,8 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
       <UDashboardNavbar v-else title="Chat">
         <template #leading><UDashboardSidebarCollapse /></template>
       </UDashboardNavbar>
-      <div v-if="inst" class="border-b border-default px-4 py-3 empty:hidden sm:px-6">
+      <!-- Shown only when a banner is: the banners root is always there, comments make :empty miss. -->
+      <div v-if="inst" class="hidden border-b border-default px-4 py-3 has-[>div>*]:block sm:px-6">
         <ChatBanners :instance="inst" :status="status" :badge="badge" class="mx-auto max-w-3xl" @show-request="showRequest" />
       </div>
     </template>
