@@ -41,6 +41,30 @@ function onReasoningClick(e: MouseEvent, id: string) {
       <DialogCard v-else-if="part.type === 'data-dialog'" :dialog="part.data" class="my-1" />
       <EnvelopeCard v-else-if="part.type === 'data-envelope'" :env="part.data.envelope" :at="part.data.at" />
       <NotePart v-else-if="part.type === 'data-note'" :note="part.data" />
+      <UCollapsible v-else-if="part.type === 'data-session'" class="rounded-md border border-dashed border-primary/50">
+        <UButton
+          color="neutral"
+          variant="ghost"
+          size="sm"
+          block
+          icon="i-lucide-history"
+          trailing-icon="i-lucide-chevron-down"
+          :label="`New session started from handover (previous: ${part.data.previous})`"
+          class="justify-start text-muted"
+          :ui="{ trailingIcon: 'ms-auto group-data-[state=open]:rotate-180 transition-transform' }"
+        />
+        <template #content>
+          <div class="space-y-2 border-t border-default px-3 py-2.5 text-sm text-muted">
+            <MarkdownText :source="part.data.summary" />
+            <ul v-if="part.data.outstanding.length" class="list-disc ps-5">
+              <li v-for="o in part.data.outstanding" :key="o">outstanding: {{ o }}</li>
+            </ul>
+            <ul v-if="part.data.state.length" class="list-disc ps-5">
+              <li v-for="s in part.data.state" :key="s">state: {{ s }}</li>
+            </ul>
+          </div>
+        </template>
+      </UCollapsible>
       <UCollapsible v-else-if="part.type === 'data-compaction'" class="rounded-md border border-dashed border-default">
         <UButton
           color="neutral"

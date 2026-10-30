@@ -11,7 +11,15 @@ import { currentStatus, phaseBadge } from "../lib/phase";
 import { buildTranscript } from "../lib/transcript";
 import { watch as watchLive } from "../live";
 import { shell } from "../shell";
-import { allDialogs, clearSession, frontDoorName, refreshSession, state, waitingByInstance } from "../store";
+import {
+  allDialogs,
+  clearSession,
+  frontDoorName,
+  refreshSession,
+  showSessionFile,
+  state,
+  waitingByInstance,
+} from "../store";
 
 const props = defineProps<{ instance?: string }>();
 const route = useRoute();
@@ -170,6 +178,21 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
       </UDashboardNavbar>
       <div v-if="inst" class="border-b border-default px-4 py-3 empty:hidden sm:px-6">
         <ChatBanners :instance="inst" :status="status" :badge="badge" class="mx-auto max-w-3xl" @show-request="showRequest" />
+      </div>
+      <div
+        v-if="name && session && session.sessions.length > 1"
+        class="flex items-center gap-2 border-b border-default px-4 py-1.5 text-xs text-muted sm:px-6"
+      >
+        <UIcon name="i-lucide-history" class="size-4" />
+        Session
+        <USelect
+          :model-value="session.file"
+          :items="session.sessions"
+          size="xs"
+          aria-label="Session"
+          @update:model-value="(f: string) => void showSessionFile(name!, f === session!.instance.session_file ? null : f)"
+        />
+        <span v-if="session.file !== session.instance.session_file">an earlier session, before a handover (read only)</span>
       </div>
     </template>
 

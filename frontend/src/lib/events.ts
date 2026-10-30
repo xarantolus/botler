@@ -20,6 +20,8 @@ const BUILTIN = {
   "access.changed": true,
   "environment.updated": true,
   "chat.stopped": true,
+  "handover.requested": true,
+  "session.started": true,
 } as const satisfies Record<BuiltinPayload["type"], true>;
 
 /** The typed payload of a built-in event, or null for agent-defined event types. */
@@ -46,6 +48,8 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   "access.changed": "i-lucide-shield-plus",
   "environment.updated": "i-lucide-refresh-cw",
   "chat.stopped": "i-lucide-circle-stop",
+  "handover.requested": "i-lucide-history",
+  "session.started": "i-lucide-history",
 };
 
 /** An icon for an event type (agent-defined types get a generic one). */
@@ -102,6 +106,10 @@ export function eventSummary(ev: BotlerEvent): string {
       return `schedule ${b.payload.trigger}${b.payload.skipped ? ` (${b.payload.skipped} missed)` : ""}`;
     case "access.changed":
       return `${b.payload.resource} ${b.payload.change}`;
+    case "handover.requested":
+      return `handover to ${b.payload.to} requested${b.payload.reason ? `: ${b.payload.reason}` : ""}`;
+    case "session.started":
+      return `new session after ${b.payload.previous}`;
     case "chat.stopped":
       return `${b.payload.chat} stopped${b.payload.reason ? `: ${b.payload.reason}` : ""}`;
     case "environment.updated":

@@ -45,6 +45,8 @@ struct State {
     fail_turns: BTreeMap<String, VecDeque<String>>,
     /// `compact` commands each instance's pi received.
     compactions: BTreeMap<String, u32>,
+    /// The context size `get_session_stats` reports, keyed by `BOTLER_INSTANCE`.
+    context_tokens: BTreeMap<String, u64>,
     /// Delivery ids each pi has seen, persisted per session file like the real extension.
     seen: BTreeMap<String, HashSet<String>>,
     events: Vec<mpsc::Sender<ContainerEvent>>,
@@ -113,6 +115,11 @@ impl Fake {
     /// per turn; later turns succeed.
     pub fn fail_turns(&self, instance: &str, errors: &[&str]) {
         self.lock().fail_turns.entry(instance.into()).or_default().extend(errors.iter().map(|e| e.to_string()));
+    }
+
+    /// Make `instance`'s pi report a context of `tokens`.
+    pub fn set_context_tokens(&self, instance: &str, tokens: u64) {
+        self.lock().context_tokens.insert(instance.into(), tokens);
     }
 
     /// How often `instance`'s pi was asked to compact its context.
@@ -491,6 +498,10 @@ impl Fake {
                 out
             }
             "get_state" => vec![ok(json!({"isStreaming": self.lock().busy.contains(name), "isCompacting": false}))],
+            "get_session_stats" => {
+                let tokens = self.lock().context_tokens.get(instance).copied().unwrap_or(1000);
+                vec![ok(json!({"sessionFile": session, "contextUsage": {"tokens": tokens, "contextWindow": 200000}}))]
+            }
             "get_last_assistant_text" => {
                 let text = self.lock().last_reply.get(name).cloned().unwrap_or_else(|| "fake reply".into());
                 vec![ok(json!({"text": text}))]

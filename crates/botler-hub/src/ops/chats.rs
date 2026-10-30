@@ -273,14 +273,28 @@ impl Op for ReadSession {
         if caller.instance() != Some(inst.name.as_str()) {
             caller.require(Capability::ReadSessions)?;
         }
-        let path = hub.paths.sessions(&inst.name).join(&inst.session_file);
-        let text = match tokio::fs::read_to_string(&path).await {
-            Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(SessionMessages { instance: inst.name, messages: vec![] });
+        // The current session, or for `around` the (possibly older) session holding that entry.
+        let mut files = crate::sessions::files(hub, &inst.name).await?;
+        files.reverse();
+        let mut text = String::new();
+        for (i, f) in files.iter().enumerate() {
+            let path = hub.paths.sessions(&inst.name).join(f);
+            let t = match tokio::fs::read_to_string(&path).await {
+                Ok(t) => t,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(HubError::Io(e).into()),
+            };
+            let found = self.around.as_deref().is_none_or(|id| t.contains(&format!("\"id\":\"{id}\"")));
+            if i == 0 || found {
+                text = t;
             }
-            Err(e) => return Err(HubError::Io(e).into()),
-        };
+            if found {
+                break;
+            }
+        }
+        if text.is_empty() {
+            return Ok(SessionMessages { instance: inst.name, messages: vec![] });
+        }
         // Every entry in file order: compaction keeps the history, so this includes what was compacted.
         let mut messages: Vec<SessionMessage> = text
             .lines()
@@ -294,6 +308,7 @@ impl Op for ReadSession {
                     Item::ToolResult { id, at, text, .. } => (id, at, "toolResult", text),
                     Item::Note { id, at, text, .. } => (id, at, "note", text),
                     Item::Compaction { id, at, summary } => (id, at, "compaction", summary),
+                    Item::SessionStarted { id, at, summary, .. } => (id, at, "handover", summary),
                 };
                 (!text.is_empty()).then(|| SessionMessage { id, role, text: text.chars().take(4000).collect(), at })
             })
@@ -316,7 +331,7 @@ impl Op for ReadSession {
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]
 #[ts(optional_fields)]
-pub struct ArchiveReady {
+pub struct HandoverReady {
     /// Everything you did in this chat, for someone who has not read it.
     pub summary: String,
     /// Work you did not finish.
@@ -346,28 +361,67 @@ pub struct Handoff {
 }
 
 #[derive(Debug, Serialize, TS)]
-pub struct Archived {
-    pub archived: String,
+pub struct HandedOver {
+    pub chat: String,
     /// The chat that continues the outstanding work.
     pub handed_to: Option<String>,
+    pub archived: bool,
+    /// For a handover to yourself: the fresh session file you continue in.
+    pub session: Option<String>,
     pub note: String,
 }
 
-impl Op for ArchiveReady {
-    const NAME: &'static str = "archive_ready";
-    const DESCRIPTION: &'static str = "Hand over before this chat is archived (only after an archive.requested event): what you did, what is outstanding, where your state lives, and optionally who should continue.";
+impl Op for HandoverReady {
+    const NAME: &'static str = "handover_ready";
+    const DESCRIPTION: &'static str = "Hand over, only after an archive.requested or handover.requested event: what you did, what is outstanding, where your state lives, and (when archiving) optionally who should continue. For a handover to yourself you continue on a fresh session that starts from this report.";
     const WHO: Who = Who::UserAndAgents;
     const ENDS_TURN: bool = true;
-    type Output = Archived;
+    type Output = HandedOver;
 
-    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<Archived, OpError> {
-        let name = caller.agent("only agents archive")?;
+    async fn call(mut self, hub: &Arc<Hub>, caller: &Caller) -> Result<HandedOver, OpError> {
+        let name = caller.agent("only agents hand over")?;
         let inst = hub.store.instance(name).await?;
-        if inst.archive_requested_at.is_none() {
-            return Err(OpError::BadRequest("nobody asked to archive this chat; keep working".into()));
+        let to = crate::handover::pending(hub, name).await?;
+        if inst.archive_requested_at.is_none() && to.is_none() {
+            return Err(OpError::BadRequest("nobody asked for a handover; keep working".into()));
         }
         if self.summary.trim().len() < 20 {
             return Err(OpError::BadRequest("the summary must describe what you did".into()));
+        }
+        let report = |s: &Self| botler_store::HandoverReport {
+            summary: s.summary.clone(),
+            outstanding: s.outstanding.clone(),
+            state: s.state.clone(),
+            handoff: None,
+        };
+        if to.as_deref() == Some(crate::handover::SELF) {
+            let session = crate::handover::rollover(hub, name, &report(&self)).await?;
+            crate::handover::done(hub, name).await?;
+            return Ok(HandedOver {
+                chat: name.into(),
+                handed_to: None,
+                archived: false,
+                session: Some(session),
+                note: "Stop now: you continue on a fresh session that starts from this report.".into(),
+            });
+        }
+        // A handover the user aimed at someone: they get the report unless the agent named one.
+        if let (Some(to), None) = (&to, &self.handoff) {
+            let mut text = format!("Taking over from `{name}`.\n\n{}", self.summary);
+            for o in &self.outstanding {
+                text.push_str(&format!("\n- outstanding: {o}"));
+            }
+            for s in &self.state {
+                text.push_str(&format!("\n- state: {s}"));
+            }
+            // A chat, or a persistent agent (one chat of its own); anything else is spawned.
+            let existing = hub.store.resolve_instance(to).await?.is_some()
+                || hub.applied().await.defs.agents.get(to).is_some_and(|d| d.spec.kind == AgentKind::Persistent);
+            self.handoff = Some(Handoff {
+                to: existing.then(|| to.clone()),
+                spawn: (!existing).then(|| to.clone()),
+                message: text,
+            });
         }
         let mut handed_to = None;
         if let Some(h) = &self.handoff {
@@ -401,11 +455,14 @@ impl Op for ArchiveReady {
             at: Utc::now(),
         };
         hub.store.archive_instance(name, &report).await?;
+        crate::handover::done(hub, name).await?;
         crate::agents::stop_after_reply(hub, name).await;
         tracing::info!(instance = name, handed_to = ?handed_to, "chat archived");
-        Ok(Archived {
-            archived: name.into(),
+        Ok(HandedOver {
+            chat: name.into(),
             handed_to,
+            archived: true,
+            session: None,
             note: "Archived. Stop now; you will be restored if messaged.".into(),
         })
     }

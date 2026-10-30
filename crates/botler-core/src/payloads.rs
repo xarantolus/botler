@@ -300,6 +300,30 @@ pub struct ChatStoppedPayload {
     pub with: Option<String>,
 }
 
+/// `handover.requested`: write a handover report (`handover_ready`). `to = "self"` starts this chat
+/// on a fresh session seeded with the report; otherwise the report goes to `to` (a chat, or an
+/// agent definition to spawn) and this chat is archived.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct HandoverRequestedPayload {
+    pub to: String,
+    /// Why (e.g. the context is nearly full), if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+}
+
+/// `session.started`: this chat continues on a fresh session; the report it wrote before.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct SessionStartedPayload {
+    /// The previous session file (still readable and searchable).
+    pub previous: String,
+    pub summary: String,
+    #[serde(default)]
+    pub outstanding: Vec<String>,
+    #[serde(default)]
+    pub state: Vec<String>,
+}
+
 /// What the hub sends pi for one delivery (`botler:delivery <json>`); the botler pi extension
 /// parses it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -367,6 +391,10 @@ pub enum BuiltinPayload {
     EnvironmentUpdated(EnvironmentUpdatedPayload),
     #[serde(rename = "chat.stopped")]
     ChatStopped(ChatStoppedPayload),
+    #[serde(rename = "handover.requested")]
+    HandoverRequested(HandoverRequestedPayload),
+    #[serde(rename = "session.started")]
+    SessionStarted(SessionStartedPayload),
 }
 
 impl BuiltinPayload {
@@ -391,6 +419,8 @@ impl BuiltinPayload {
             Self::AccessChanged(_) => kinds::ACCESS_CHANGED,
             Self::EnvironmentUpdated(_) => kinds::ENVIRONMENT_UPDATED,
             Self::ChatStopped(_) => kinds::CHAT_STOPPED,
+            Self::HandoverRequested(_) => kinds::HANDOVER_REQUESTED,
+            Self::SessionStarted(_) => kinds::SESSION_STARTED,
         }
     }
 
@@ -414,6 +444,8 @@ impl BuiltinPayload {
             Self::AccessChanged(p) => serde_json::to_value(p),
             Self::EnvironmentUpdated(p) => serde_json::to_value(p),
             Self::ChatStopped(p) => serde_json::to_value(p),
+            Self::HandoverRequested(p) => serde_json::to_value(p),
+            Self::SessionStarted(p) => serde_json::to_value(p),
         }
     }
 
@@ -448,6 +480,8 @@ pub fn builtin_schema(kind: &str) -> Option<serde_json::Value> {
         kinds::ACCESS_CHANGED => s::<AccessChangedPayload>(),
         kinds::ENVIRONMENT_UPDATED => s::<EnvironmentUpdatedPayload>(),
         kinds::CHAT_STOPPED => s::<ChatStoppedPayload>(),
+        kinds::HANDOVER_REQUESTED => s::<HandoverRequestedPayload>(),
+        kinds::SESSION_STARTED => s::<SessionStartedPayload>(),
         _ => None,
     }
 }
@@ -499,6 +533,8 @@ mod tests {
             (kinds::ACCESS_CHANGED, fields::<AccessChangedPayload>()),
             (kinds::ENVIRONMENT_UPDATED, fields::<EnvironmentUpdatedPayload>()),
             (kinds::CHAT_STOPPED, fields::<ChatStoppedPayload>()),
+            (kinds::HANDOVER_REQUESTED, fields::<HandoverRequestedPayload>()),
+            (kinds::SESSION_STARTED, fields::<SessionStartedPayload>()),
         ];
         for b in BUILTIN {
             assert!(builtin_schema(b.kind).is_some(), "{} has no schema", b.kind);

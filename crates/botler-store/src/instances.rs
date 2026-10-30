@@ -245,6 +245,19 @@ impl Store {
         Ok(())
     }
 
+    /// Continue `name` in session file `file` (a rollover; the old file stays).
+    pub async fn set_session_file(&self, name: &str, file: &str) -> Result<()> {
+        let r = sqlx::query("UPDATE instances SET session_file = ? WHERE name = ?")
+            .bind(file)
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        if r.rows_affected() == 0 {
+            return Err(crate::not_found("instance", name));
+        }
+        Ok(())
+    }
+
     /// Restore an archived chat to sleeping; its report stays for reference.
     pub async fn restore_instance(&self, name: &str) -> Result<()> {
         sqlx::query(

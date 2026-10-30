@@ -222,7 +222,7 @@ messages around it.
   - adds system-prompt sections via `before_agent_start` (identity, inbox semantics, what needs approval, how to propose changes);
   - renders deliveries as `custom_message` entries with provenance labels;
   - records delivery ids for idempotency;
-  - registers the turn-ending hub ops (those with `Op::ENDS_TURN`: `ask_user`, `request_secrets`, `propose_change`, `submit_review`, `archive_ready`) as `model-only` tools that call `POST /api/v1/ops/{name}` and return `terminate: true`, so no model call follows (MCP results cannot end a turn). The hub renders their specs from `OPS` into `turn-tools.json` and hides the MCP duplicates via `toolExposure` in `mcp.json`. A failed call does not end the turn;
+  - registers the turn-ending hub ops (those with `Op::ENDS_TURN`: `ask_user`, `request_secrets`, `propose_change`, `submit_review`, `handover_ready`) as `model-only` tools that call `POST /api/v1/ops/{name}` and return `terminate: true`, so no model call follows (MCP results cannot end a turn). The hub renders their specs from `OPS` into `turn-tools.json` and hides the MCP duplicates via `toolExposure` in `mcp.json`. A failed call does not end the turn;
   - can block tool calls via `tool_call` (defence in depth only).
 - pi's own `AGENTS.md` loading carries each agent's prompt (`agents/<name>/AGENTS.md`). Agent-authored pi skills, prompts and extensions live in the monorepo `pi/` directory and are loaded per agent. This is the agent-editable layer.
 - The hub reads usage/cost from the RPC `message_end` events for budgets and sends `abort` when a budget is exceeded (stop and report, never truncate).
