@@ -318,6 +318,14 @@ pub fn render(event: &Event, prompt: Option<&str>) -> String {
             out.push('\n');
             out.push_str(text);
             out.push('\n');
+            let files = event.payload.get("files").and_then(|f| f.as_array()).into_iter().flatten();
+            let files: Vec<&str> = files.filter_map(|f| f.as_str()).collect();
+            if !files.is_empty() {
+                out.push_str("\nAttached files (read-only; `read` shows images to you if your model takes images):\n");
+                for f in files {
+                    out.push_str(&format!("- {f}\n"));
+                }
+            }
         }
         _ if !event.payload.is_null() => {
             if event.provenance != Provenance::Trusted {

@@ -17,7 +17,7 @@ botler runs on any Linux host as your own unprivileged user: one binary, one dat
   ```
 - **Lingering**, so your user services keep running after you log out and start at boot:
   `sudo loginctl enable-linger "$USER"`.
-- `git`, `tar` and (optionally) `zstd` on `PATH`. To build: Rust 1.90 or newer.
+- `git`, `tar`, `curl` (for ntfy push) and (optionally) `zstd` on `PATH`. To build: Rust 1.90 or newer.
 
 ## Steps
 

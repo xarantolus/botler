@@ -54,6 +54,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/usage", get(usage))
         .route("/api/v1/messages", post(user_message))
+        .route("/api/v1/uploads", put(upload))
         .route("/api/v1/messages/{id}", delete(cancel_message))
         .route("/api/v1/dialogs", get(dialogs))
         .route("/api/v1/dialogs/{id}/answer", post(answer_dialog))
@@ -261,6 +262,40 @@ pub struct UserMessage {
     #[serde(default)]
     #[ts(optional, as = "Option<SendMode>")]
     mode: SendMode,
+    /// Uploads to attach (`file` from `PUT /api/v1/uploads`); the chat reads them at
+    /// `/inbox/files/<file>`.
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    files: Vec<String>,
+}
+
+#[derive(Deserialize, ts_rs::TS)]
+pub struct UploadQuery {
+    /// The file's name, e.g. `photo.jpg`.
+    name: String,
+}
+
+impl From<crate::uploads::UploadError> for ApiError {
+    fn from(e: crate::uploads::UploadError) -> Self {
+        use crate::uploads::UploadError as U;
+        let code = match &e {
+            U::BadName(_) => StatusCode::BAD_REQUEST,
+            U::Missing(_) => StatusCode::NOT_FOUND,
+            U::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        ApiError(code, e.to_string())
+    }
+}
+
+/// Store the raw request body as a new upload.
+async fn upload(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Query(q): Query<UploadQuery>,
+    body: Bytes,
+) -> ApiResult<Json<crate::uploads::Uploaded>> {
+    user_only(&p)?;
+    Ok(Json(crate::uploads::save(&hub, &q.name, &body).await?))
 }
 
 fn main_instance() -> String {
@@ -273,7 +308,8 @@ async fn user_message(
     Json(m): Json<UserMessage>,
 ) -> ApiResult<Json<EventPosted>> {
     user_only(&p)?;
-    let payload = MessagePayload { text: m.text, files: vec![], mode: Some(m.mode) };
+    let files = crate::uploads::attach(&hub, &m.to, &m.files).await?;
+    let payload = MessagePayload { text: m.text, files, mode: Some(m.mode) };
     let ev = user_event(BuiltinPayload::Message(payload))?.to(m.to);
     let ev = hub.emit(ev).await?;
     Ok(Json(EventPosted { event_id: ev.id }))

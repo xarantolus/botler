@@ -74,6 +74,10 @@ impl Paths {
     pub fn uploads(&self) -> PathBuf {
         self.root.join("uploads")
     }
+    /// Uploads attached to messages to `instance` (hard links), mounted at `/inbox/files`.
+    pub fn inbox(&self, instance: &str) -> PathBuf {
+        self.root.join("inbox").join(instance)
+    }
     /// Full logs of finished runs.
     pub fn run_log(&self, run_id: &str) -> PathBuf {
         self.root.join("logs").join(format!("{run_id}.log"))
@@ -95,6 +99,7 @@ impl Paths {
             "exports",
             "worktrees",
             "run",
+            "inbox",
         ] {
             std::fs::create_dir_all(self.root.join(d))?;
         }

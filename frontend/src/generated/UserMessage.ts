@@ -9,4 +9,9 @@ to?: string, text: string,
 /**
  * While the agent works: wait for its turn to end (the default) or interrupt it.
  */
-mode?: SendMode, };
+mode?: SendMode, 
+/**
+ * Uploads to attach (`file` from `PUT /api/v1/uploads`); the chat reads them at
+ * `/inbox/files/<file>`.
+ */
+files?: Array<string>, };

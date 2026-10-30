@@ -205,6 +205,8 @@ export type * from "./TriggerPreview";
 export type * from "./Undeclared";
 export type * from "./Unsubscribe";
 export type * from "./Unsubscribed";
+export type * from "./UploadQuery";
+export type * from "./Uploaded";
 export type * from "./Usage";
 export type * from "./UsageTotals";
 export type * from "./UserMessage";

@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::api::{
     Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, ProposalVerdict, RevertRequest, SecretValue,
-    UserMessage,
+    UploadQuery, UserMessage,
 };
 use crate::memory::{MemoryConflict, MemoryHistory, MemoryList, MemoryRead, MemoryWrite};
 use crate::ops::{GetProposal, GetRunLogs, ListConnections, Op, RevokeAccess, Unsubscribe};
@@ -356,6 +356,7 @@ routes! {
     status: GET "/api/v1/status" => HubStatus;
     usage: GET "/api/v1/usage" => Usage;
     send_message: POST "/api/v1/messages", body: UserMessage => EventPosted;
+    upload: PUT "/api/v1/uploads", query: UploadQuery => crate::uploads::Uploaded;
     cancel_message: DELETE "/api/v1/messages/{id}" => Cancelled;
     dialogs: GET "/api/v1/dialogs" => Dialogs;
     answer_dialog: POST "/api/v1/dialogs/{id}/answer", body: Answer => DialogAnswer;

@@ -52,6 +52,8 @@ import type { Submission } from "./Submission";
 import type { Trace } from "./Trace";
 import type { Unsubscribe } from "./Unsubscribe";
 import type { Unsubscribed } from "./Unsubscribed";
+import type { UploadQuery } from "./UploadQuery";
+import type { Uploaded } from "./Uploaded";
 import type { Usage } from "./Usage";
 import type { UserMessage } from "./UserMessage";
 
@@ -60,6 +62,7 @@ export interface Routes {
   status: { method: "GET"; path: "/api/v1/status"; params: Record<string, never>; query: never; body: never; response: HubStatus };
   usage: { method: "GET"; path: "/api/v1/usage"; params: Record<string, never>; query: never; body: never; response: Usage };
   send_message: { method: "POST"; path: "/api/v1/messages"; params: Record<string, never>; query: never; body: UserMessage; response: EventPosted };
+  upload: { method: "PUT"; path: "/api/v1/uploads"; params: Record<string, never>; query: UploadQuery; body: never; response: Uploaded };
   cancel_message: { method: "DELETE"; path: "/api/v1/messages/{id}"; params: { id: string }; query: never; body: never; response: Cancelled };
   dialogs: { method: "GET"; path: "/api/v1/dialogs"; params: Record<string, never>; query: never; body: never; response: Dialogs };
   answer_dialog: { method: "POST"; path: "/api/v1/dialogs/{id}/answer"; params: { id: string }; query: never; body: Answer; response: DialogAnswer };
@@ -99,6 +102,7 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   status: { method: "GET", path: "/api/v1/status" },
   usage: { method: "GET", path: "/api/v1/usage" },
   send_message: { method: "POST", path: "/api/v1/messages" },
+  upload: { method: "PUT", path: "/api/v1/uploads" },
   cancel_message: { method: "DELETE", path: "/api/v1/messages/{id}" },
   dialogs: { method: "GET", path: "/api/v1/dialogs" },
   answer_dialog: { method: "POST", path: "/api/v1/dialogs/{id}/answer" },

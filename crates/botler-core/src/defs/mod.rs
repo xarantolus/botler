@@ -552,6 +552,14 @@ fn validate_models(l: &mut Loader<'_>, defs: &Definitions) {
             check_route_secret(l, defs, "botler.toml", s);
         }
     }
+    if let Some(p) = &defs.instance.push {
+        if !(p.ntfy_url.starts_with("https://") || p.ntfy_url.starts_with("http://")) {
+            l.err("botler.toml", format!("push.ntfy_url {:?} must be an http(s) URL", p.ntfy_url));
+        }
+        if !defs.secrets.contains_key(&p.topic_secret) {
+            l.err("botler.toml", format!("push.topic_secret {} is not declared in secrets.toml", p.topic_secret));
+        }
+    }
 }
 
 /// A grant of a secret group to a container.

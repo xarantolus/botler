@@ -617,7 +617,11 @@ async fn container_spec(
     if let Some(u) = &route.base_url {
         provider.insert("baseUrl".into(), json!(u));
     }
-    provider.insert("modelOverrides".into(), json!({ route.model.clone(): { "maxTokens": route.max_tokens } }));
+    let mut model = json!({ "maxTokens": route.max_tokens });
+    if let Some(input) = &route.input {
+        model["input"] = json!(input);
+    }
+    provider.insert("modelOverrides".into(), json!({ route.model.clone(): model }));
     let models = json!({ "providers": { route.provider.clone(): provider } });
     let mut servers = serde_json::Map::new();
     servers.insert(
@@ -661,6 +665,9 @@ async fn container_spec(
         dst: "/botler/extension".into(),
         read_only: true,
     });
+    let inbox = hub.paths.inbox(&instance.name);
+    tokio::fs::create_dir_all(&inbox).await?;
+    mounts.push(Mount::Bind { src: inbox, dst: crate::uploads::INBOX.into(), read_only: true });
     mounts.push(Mount::Bind {
         src: hub.paths.assets().join("forward"),
         dst: "/botler/forward".into(),

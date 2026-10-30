@@ -87,6 +87,10 @@ pub struct ModelRoute {
     pub max_tokens: u32,
     #[serde(default)]
     pub thinking: Option<String>,
+    /// What the model takes, e.g. `["text", "image"]`. Unset: pi's own knowledge of the model.
+    /// Agents only see images (attachments, `read` of a picture) when it includes `image`.
+    #[serde(default)]
+    pub input: Option<Vec<ModelInput>>,
     /// `local` routes may never fall back to a hosted route.
     #[serde(default)]
     pub privacy: Privacy,
@@ -99,6 +103,13 @@ impl ModelRoute {
     fn default_max_tokens() -> u32 {
         16_384
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelInput {
+    Text,
+    Image,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -40,6 +40,7 @@ pub mod template;
 pub mod transactions;
 pub mod trials;
 pub mod turns;
+pub mod uploads;
 pub mod web;
 pub mod wire;
 
