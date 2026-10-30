@@ -1,0 +1,8 @@
+# Which resources a chat may get without asking you (`spawn_agent(env = ...)`, `request_access`).
+# Resources are `secret:<group>`, `service:<name>`, `mount:<name>` and `event:<type>`; anything
+# not listed is "ask". Answering an access request with "always allow" adds a line here.
+# Grants are always recorded and shown in the chat's Connections panel, whichever way they came.
+version = 1
+
+[resources]
+# "secret:github-ssh" = "auto"

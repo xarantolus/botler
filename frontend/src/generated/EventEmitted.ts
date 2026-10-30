@@ -4,4 +4,8 @@ export type EventEmitted = { event_id: string,
 /**
  * What is off about the event, if it was accepted anyway.
  */
-warning?: string, };
+warning?: string, 
+/**
+ * A trial run: recorded, not carried out.
+ */
+dry_run?: boolean, };

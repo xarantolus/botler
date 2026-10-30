@@ -14,7 +14,7 @@ use crate::limits::RateLimit;
 
 pub const FORMAT_VERSION: u32 = 1;
 
-fn default_version() -> u32 {
+pub(crate) fn default_version() -> u32 {
     FORMAT_VERSION
 }
 
@@ -295,6 +295,10 @@ pub struct Job {
     pub description: String,
     #[serde(default)]
     pub lifetime: Lifetime,
+    /// `false` keeps it defined but never run: a service is not started, triggers skip it.
+    /// `trial_run` still runs it. Enabling a service needs the user's approval once.
+    #[serde(default = "enabled_default")]
+    pub enabled: bool,
     /// Command run inside the image built from this directory's Dockerfile.
     pub command: Vec<String>,
     #[serde(default)]
@@ -312,6 +316,20 @@ pub struct Job {
     pub limits: BTreeMap<String, RateLimit>,
     #[serde(default, rename = "trigger")]
     pub triggers: Vec<Trigger>,
+    /// Declared event types this job or service emits (listed as their producer).
+    #[serde(default)]
+    pub emits: Vec<String>,
+}
+
+fn enabled_default() -> bool {
+    true
+}
+
+impl Job {
+    /// An enabled service: the hub keeps it running.
+    pub fn is_service(&self) -> bool {
+        self.enabled && self.lifetime == Lifetime::Service
+    }
 }
 
 /// A service port published on the host: `<bind>:<host_port>` forwards to `port` in the container.
@@ -576,6 +594,9 @@ pub struct EventDecl {
     /// Optional JSON Schema for the payload.
     #[serde(default)]
     pub schema: Option<serde_json::Value>,
+    /// Subscribing at runtime needs an access grant (`event:<type>`), e.g. for raw mail contents.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restricted: bool,
 }
 
 /// `policies/capabilities.toml`: what forces human approval of a change.

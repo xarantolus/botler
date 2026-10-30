@@ -4,4 +4,8 @@ export type MessageSent = { event_id: string,
 /**
  * The recipient's instance name.
  */
-to: string, };
+to: string, 
+/**
+ * A trial run: recorded, not carried out.
+ */
+dry_run?: boolean, };

@@ -1,52 +1,27 @@
 <script setup lang="ts">
-// Changes agents proposed to the monorepo: their status, and per proposal the deployment summary,
-// the review and the gate report. Merged ones can be reverted.
+// Changes agents proposed to the monorepo and their status (live). A row opens its review page;
+// merged ones can be reverted.
 import type { TableColumn, TableRow } from "@nuxt/ui";
-import { onMounted, ref, shallowRef } from "vue";
+import { onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { call } from "../api/client";
-import ChangeSummary from "../components/common/ChangeSummary.vue";
-import CodeBlock from "../components/common/CodeBlock.vue";
-import MarkdownText from "../components/common/MarkdownText.vue";
 import TimeAgo from "../components/common/TimeAgo.vue";
 import ViewPanel from "../components/common/ViewPanel.vue";
 import { confirm } from "../confirm";
-import type { Proposal, ProposalDetail } from "../generated";
+import type { Proposal } from "../generated";
 import { proposalStatusColor, proposalStatusLabel } from "../lib/runs";
 import { notifyError, notifySuccess } from "../notify";
-import { refreshStatus } from "../store";
+import { refreshProposals, refreshStatus, state } from "../store";
 
-const proposals = shallowRef<Proposal[] | null>(null);
+const router = useRouter();
 const loading = ref(false);
 
 async function load() {
   loading.value = true;
-  try {
-    proposals.value = await call("proposals", {});
-  } catch (e) {
-    notifyError("Could not load proposals", e);
-  } finally {
-    loading.value = false;
-  }
+  await refreshProposals();
+  loading.value = false;
 }
 onMounted(load);
-
-const detail = shallowRef<ProposalDetail | null>(null);
-const open = ref(false);
-const loadingDetail = ref(false);
-
-async function show(p: Proposal) {
-  open.value = true;
-  loadingDetail.value = true;
-  detail.value = null;
-  try {
-    detail.value = await call("proposal", { body: { id: p.id } });
-  } catch (e) {
-    notifyError("Could not load the proposal", e);
-    open.value = false;
-  } finally {
-    loadingDetail.value = false;
-  }
-}
 
 async function revert(commit: string, title: string) {
   const ok = await confirm({
@@ -76,7 +51,7 @@ const columns: TableColumn<Proposal>[] = [
 ];
 
 function onSelect(_e: Event, row: TableRow<Proposal>) {
-  void show(row.original);
+  void router.push({ name: "proposal", params: { id: row.original.id } });
 }
 </script>
 
@@ -86,9 +61,9 @@ function onSelect(_e: Event, row: TableRow<Proposal>) {
       <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="Refresh" :loading="loading" @click="load" />
     </template>
     <UTable
-      :data="proposals ?? []"
+      :data="state.proposals ?? []"
       :columns="columns"
-      :loading="loading && !proposals"
+      :loading="loading && !state.proposals"
       sticky
       class="flex-1"
       :ui="{ td: 'py-2.5', tr: 'cursor-pointer' }"
@@ -127,48 +102,5 @@ function onSelect(_e: Event, row: TableRow<Proposal>) {
       </template>
     </UTable>
 
-    <USlideover
-      v-model:open="open"
-      :title="detail?.title ?? 'Proposal'"
-      :description="detail?.branch ?? undefined"
-      :ui="{ content: 'sm:max-w-2xl' }"
-    >
-      <template #body>
-        <div v-if="loadingDetail" class="space-y-3">
-          <USkeleton class="h-6 w-1/3" />
-          <USkeleton class="h-40 w-full" />
-        </div>
-        <div v-else-if="detail" class="space-y-6">
-          <div class="flex flex-wrap items-center gap-2 text-sm">
-            <UBadge :color="proposalStatusColor(detail.status)" variant="subtle" :label="proposalStatusLabel(detail.status)" />
-            <span v-if="detail.merged_commit" class="text-muted">
-              merged as <code class="font-mono">{{ detail.merged_commit.slice(0, 10) }}</code>
-            </span>
-          </div>
-          <section v-if="detail.summary" class="space-y-2">
-            <h3 class="text-sm font-semibold text-highlighted">Deployment summary</h3>
-            <ChangeSummary :markdown="detail.summary" />
-          </section>
-          <section v-if="detail.verdict || detail.notes" class="space-y-2">
-            <h3 class="text-sm font-semibold text-highlighted">Review</h3>
-            <p v-if="detail.verdict" class="text-sm">Verdict: <strong>{{ detail.verdict }}</strong></p>
-            <MarkdownText v-if="detail.notes" :source="detail.notes" class="text-sm" />
-          </section>
-          <section v-if="detail.gate_report" class="space-y-2">
-            <h3 class="text-sm font-semibold text-highlighted">Gate report</h3>
-            <CodeBlock :text="detail.gate_report" max-height="24rem" />
-          </section>
-        </div>
-      </template>
-      <template v-if="detail?.merged_commit" #footer>
-        <UButton
-          color="warning"
-          variant="outline"
-          icon="i-lucide-undo-2"
-          label="Revert"
-          @click="revert(detail.merged_commit, detail.title)"
-        />
-      </template>
-    </USlideover>
   </ViewPanel>
 </template>

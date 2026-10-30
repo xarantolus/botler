@@ -5,4 +5,12 @@ import type { SecretFieldView } from "./SecretFieldView";
 /**
  * A declared secret group: its fields and whether each has a value (never the values).
  */
-export type SecretGroupView = { name: string, description: string, class: SecretClass, complete: boolean, fields: Array<SecretFieldView>, granted_to: Array<string>, };
+export type SecretGroupView = { name: string, description: string, class: SecretClass, complete: boolean, fields: Array<SecretFieldView>, 
+/**
+ * Definitions and model routes it is granted to.
+ */
+granted_to: Array<string>, 
+/**
+ * Chats holding it through a grant (also archived ones, whose grants are suspended).
+ */
+held_by: Array<string>, };

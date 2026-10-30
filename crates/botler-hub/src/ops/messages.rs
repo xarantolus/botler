@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use botler_core::defs::Undeclared;
 use botler_core::{Event, Provenance};
 use botler_store::EventQuery;
 use chrono::Utc;
@@ -40,6 +39,10 @@ pub struct MessageSent {
     pub event_id: Uuid,
     /// The recipient's instance name.
     pub to: String,
+    /// A trial run: recorded, not carried out.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, as = "Option<bool>")]
+    pub dry_run: bool,
 }
 
 impl Op for SendMessage {
@@ -82,6 +85,10 @@ impl Op for SendMessage {
             let parent = hub.store.event(parent).await?;
             ev = ev.in_reply_to(&parent);
         }
+        if let Some(trial) = crate::trials::of_caller(hub, caller).await? {
+            crate::trials::record(hub, &trial, Self::NAME, &ev).await?;
+            return Ok(MessageSent { event_id: ev.id, to, dry_run: true });
+        }
         let ev = hub.emit(ev).await?;
         if let (Some(me), Some(w)) = (caller.instance(), within) {
             crate::turns::expect_reply(hub, me, &to, Some(&ev.id.to_string()), Some(w.0)).await?;
@@ -91,7 +98,7 @@ impl Op for SendMessage {
         {
             live.record_message(&to);
         }
-        Ok(MessageSent { event_id: ev.id, to })
+        Ok(MessageSent { event_id: ev.id, to, dry_run: false })
     }
 }
 
@@ -117,6 +124,10 @@ pub struct EventEmitted {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub warning: Option<String>,
+    /// A trial run: recorded, not carried out.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, as = "Option<bool>")]
+    pub dry_run: bool,
 }
 
 impl Op for EmitEvent {
@@ -141,55 +152,26 @@ impl Op for EmitEvent {
             (false, _) => Provenance::External,
         };
         let applied = hub.applied().await;
-        let check = botler_core::event_check::check(&applied.defs, &self.kind, &self.payload);
+        // A trial checks against its branch, where a new event type is declared.
+        let trial = crate::trials::of_caller(hub, caller).await?;
+        let branch_defs = match &trial {
+            Some(run_id) => Some(crate::trials::definitions(hub, run_id).await?),
+            None => None,
+        };
+        let defs = branch_defs.as_ref().unwrap_or(&applied.defs);
+        let check = botler_core::event_check::check(defs, &self.kind, &self.payload);
         let warning = check.feedback(&self.kind);
         if !check.accepted() {
             tracing::info!(kind = %self.kind, caller = %caller.subject(), "rejected invalid event");
             return Err(OpError::InvalidEvent(warning.unwrap_or_else(|| format!("event {} rejected", self.kind))));
         }
-        let ev = hub.emit(Event::new(self.kind, caller.source(), provenance, Utc::now()).payload(self.payload)).await?;
-        Ok(EventEmitted { event_id: ev.id, warning })
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema, TS)]
-pub struct ListEventTypes {}
-
-#[derive(Debug, Serialize, TS)]
-pub struct EventTypes {
-    pub declared: Vec<DeclaredEvent>,
-    pub undeclared_policy: Undeclared,
-}
-
-#[derive(Debug, Serialize, TS)]
-pub struct DeclaredEvent {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub description: String,
-    /// JSON Schema of the payload.
-    pub schema: Option<Value>,
-}
-
-impl Op for ListEventTypes {
-    const NAME: &'static str = "list_event_types";
-    const DESCRIPTION: &'static str =
-        "Declared event types with their payload schemas. emit_event validates payloads against these.";
-    const WHO: Who = Who::Everyone;
-    type Output = EventTypes;
-
-    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<EventTypes, OpError> {
-        let applied = hub.applied().await;
-        let declared = applied
-            .defs
-            .events
-            .values()
-            .map(|e| DeclaredEvent {
-                kind: e.kind.clone(),
-                description: e.description.clone(),
-                schema: e.schema.clone(),
-            })
-            .collect();
-        Ok(EventTypes { declared, undeclared_policy: applied.defs.instance.events.undeclared })
+        let ev = Event::new(self.kind, caller.source(), provenance, Utc::now()).payload(self.payload);
+        if let Some(trial) = trial {
+            crate::trials::record(hub, &trial, Self::NAME, &ev).await?;
+            return Ok(EventEmitted { event_id: ev.id, warning, dry_run: true });
+        }
+        let ev = hub.emit(ev).await?;
+        Ok(EventEmitted { event_id: ev.id, warning, dry_run: false })
     }
 }
 

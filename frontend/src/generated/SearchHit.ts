@@ -4,11 +4,11 @@ import type { SearchSource } from "./SearchSource";
 export type SearchHit = { source: SearchSource, 
 /**
  * Session: the entry id (`read_session(instance=owner, around=ref)`); memory and repo: the
- * path; event: the event id.
+ * path; event: the event id; event type: the type.
  */
 ref: string, 
 /**
- * Session: the instance; memory: the namespace; event: the sender; repo: empty.
+ * Session: the instance; memory: the namespace; event: the sender; repo and event type: empty.
  */
 owner: string, 
 /**

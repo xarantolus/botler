@@ -87,6 +87,8 @@ Recurring behaviour is a trigger file in the monorepo (reviewed, with a summary)
 
 ### 5. Grants (one policy engine for every escalation)
 
+**Built** for chats: the `grants` table (secret groups, mounts, services, restricted event types), `spawn_agent(env = ...)`, `request_access`, `policies/grants.toml` with "always allow" written by a hub commit, grants applied on every wake through `Environment::extend`, revoke with an `access.changed` event, suspension while archived, and the Connections panel. Definition-held grants are still the definitions' own `secrets`/`mcp` lists. See ARCHITECTURE.md, "The per-chat graph".
+
 Anything an agent can't give itself is a **grant** of a *resource* to a *holder*:
 
 | resource | examples | holder |
@@ -99,7 +101,8 @@ Anything an agent can't give itself is a **grant** of a *resource* to a *holder*
 **How grants arise:**
 - **Definitions:** reviewed, and escalations require the user's approval.
 - **Spawn:** `spawn_agent(env=...)`.
-- **Later request:** `request_access(resource, reason)`. A chat sleeps after its turn and wakes with the grant applied.
+- **Later request:** `request_access(resource, reason)` with `resource` = `secret:<group>`, `service:<name>`, `mount:<name>` or `event:<type>`. A chat sleeps after its turn and wakes with the grant applied.
+- **Spawn rule:** what the spawning chat holds itself, it may pass on; anything else follows the policy (or asks the user).
 
 **One policy file** (`policies/grants.toml`, a protected path) says, per resource, whether to `ask` (default) or `auto` (allow without asking, still logged). The choice "always allow for …" in an access request writes that policy through a hub commit.
 
@@ -111,7 +114,7 @@ There is one typed, asynchronous primitive. It has kinds:
 - **question:** free text or multiple choice
 - **credentials:** a typed form of env and file fields, with file upload, binary-safe
 - **approval:** a change summary, or an action with arguments
-- **access:** a grant (5)
+- **access:** a grant (5): *allow for this chat*, *always allow* (writes `policies/grants.toml`), *deny*
 
 **Properties:**
 - Every request has an id and can be cancelled. It can be aborted automatically when the thing it is about changes.
@@ -141,7 +144,8 @@ New request kinds count as core features under rule 3 of the test. Everything el
 | a new event type | pydantic model in `packages/`, which generates the manifest |
 | agent behaviour | `agents/<x>/AGENTS.md`, pi skills and extensions in `pi/` |
 | something periodic | `triggers/*.toml` |
-| a poller or long-running helper | `jobs/<x>` with `lifetime = "service"` |
+| a poller or long-running helper | `jobs/<x>` with `lifetime = "service"` (skill `background-service`; its first deployment asks the user) |
+| trying a job or service before proposing it | `trial_run(job, branch, minutes ≤ 10)`: branch code, held secrets only, own `state`; emits recorded, never routed; `trial.finished` reports |
 | something reachable from the user's network | a service with `publish` (escalation) |
 | an integration that sends to others | a hub-held action job (approval per call) |
 

@@ -8,4 +8,4 @@ export type Escalation = { "kind": "protected_path", path: string, } | { "kind":
 /**
  * e.g. `your network at 0.0.0.0:8080`.
  */
-reach: string, } | { "kind": "mcp_stdio_added", agent: string, server: string, command: string, } | { "kind": "invalid_policy", detail: string, };
+reach: string, } | { "kind": "mcp_stdio_added", agent: string, server: string, command: string, } | { "kind": "grant_auto", resource: string, } | { "kind": "invalid_policy", detail: string, };

@@ -132,6 +132,7 @@ pub mod kinds {
     pub const DIALOG_ANSWERED: &str = "dialog.answered";
     pub const DIALOG_ABORTED: &str = "dialog.aborted";
     pub const PROPOSAL_UPDATED: &str = "proposal.updated";
+    pub const TRIAL_FINISHED: &str = "trial.finished";
     pub const ACTION_RESULT: &str = "action.result";
     pub const BREAKER_TRIPPED: &str = "breaker.tripped";
     pub const TIMER: &str = "timer";
@@ -140,6 +141,7 @@ pub mod kinds {
     pub const AGENT_TURN_FAILED: &str = "agent.turn_failed";
     pub const REPLY_OVERDUE: &str = "reply.overdue";
     pub const SCHEDULE: &str = "schedule";
+    pub const ACCESS_CHANGED: &str = "access.changed";
 }
 
 #[cfg(test)]

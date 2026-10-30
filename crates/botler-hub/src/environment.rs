@@ -29,6 +29,11 @@ pub enum Runnable<'a> {
     Gate { id: &'a str },
 }
 
+/// The name of the container running the gate for proposal `id`.
+pub fn gate_container(hub: &Hub, id: &str) -> String {
+    format!("botler-{}-gate-{id}", hub.id)
+}
+
 /// The container for `what` in `env`, running `command` in `image`. `extra_secrets` are single
 /// secrets besides the environment's groups (a model route's API key).
 pub async fn container_spec(
@@ -43,6 +48,7 @@ pub async fn container_spec(
     let mut mounts = vec![Mount::Bind { src: hub.paths.assets().join("sdk"), dst: SDK_DIR.into(), read_only: true }];
     let mut spec = ContainerSpec { image, command, ..Default::default() };
     let mut service = false;
+    let mut agent_home = None;
     let token = match what {
         Runnable::Agent { instance, wake } => {
             spec.name = crate::agents::container_name(hub, &instance.name);
@@ -50,6 +56,7 @@ pub async fn container_spec(
             spec.labels.insert("botler.instance".into(), instance.name.clone());
             // The home first: the monorepo clone and file secrets may be mounted inside it.
             let home = crate::agents::home_dir(hub, instance, env);
+            agent_home = Some(home.clone());
             mounts.insert(0, Mount::Bind { src: home, dst: HOME.into(), read_only: false });
             if env.workspace() == Workspace::Monorepo {
                 // Per instance even when the home is shared: each instance works on its own branch.
@@ -67,7 +74,11 @@ pub async fn container_spec(
         Runnable::Run { run, ttl } => {
             service = run.kind == RunKind::Service;
             spec.name = crate::jobs::run_container(hub, run);
-            spec.labels = hub.labels(if service { "service" } else { "job" });
+            spec.labels = hub.labels(match run.kind {
+                RunKind::Service => "service",
+                RunKind::Trial => "trial",
+                _ => "job",
+            });
             spec.labels.insert(RUN_LABEL.into(), run.id.clone());
             spec.labels.insert(RUNNABLE_LABEL.into(), run.runnable.clone());
             // Agents reach a service by its plain name on the network.
@@ -76,14 +87,19 @@ pub async fn container_spec(
             }
             vars.insert("BOTLER_RUN_ID".into(), run.id.clone());
             vars.insert("BOTLER_RUNNABLE".into(), run.runnable.clone());
-            if env.volume {
-                mounts.push(Mount::Volume { name: format!("botler-job-{}", run.runnable), dst: "/data".into() });
+            // A trial never touches the production volume: it gets an empty, throwaway `/data`.
+            match (env.volume, run.kind) {
+                (true, RunKind::Trial) => mounts.push(Mount::Tmpfs { dst: "/data".into() }),
+                (true, _) => {
+                    mounts.push(Mount::Volume { name: format!("botler-job-{}", run.runnable), dst: "/data".into() });
+                }
+                (false, _) => {}
             }
             let secrets = hub.paths.root.join("runs").join(&run.id).join("secrets");
             Some((Principal::Run { run_id: run.id.clone() }, ttl, secrets))
         }
         Runnable::Gate { id } => {
-            spec.name = format!("botler-{}-gate-{id}", hub.id);
+            spec.name = gate_container(hub, id);
             spec.labels = hub.labels("gate");
             spec.remove_on_exit = true;
             None
@@ -93,6 +109,9 @@ pub async fn container_spec(
         vars.insert("BOTLER_URL".into(), hub.config.container_url.clone());
         vars.insert("BOTLER_TOKEN".into(), hub.tokens.issue(&who, ttl, Utc::now()));
         secrets(hub, env, extra_secrets, &secret_dir, &mut vars, &mut mounts).await?;
+    }
+    if let Some(home) = agent_home {
+        ssh_dir(&home, &mounts).await?;
     }
     let applied = hub.applied().await;
     crate::localtime::apply(applied.defs.timezone, Path::new(crate::localtime::ZONEINFO), &mut vars, &mut mounts);
@@ -161,6 +180,24 @@ async fn secrets(
                 mounts.push(Mount::Bind { src: host, dst: dst.clone(), read_only: true });
             }
         }
+    }
+    Ok(())
+}
+
+/// ssh wants `~/.ssh` private (0700) when keys are delivered into it; the runtime would otherwise
+/// create the mount point world-readable inside the agent's home. The key files themselves are
+/// written 0600 ([`write_private`]) and owned by the container's root, as ssh requires.
+async fn ssh_dir(home: &Path, mounts: &[Mount]) -> Result<()> {
+    let ssh = format!("{HOME}/.ssh/");
+    if !mounts.iter().any(|m| matches!(m, Mount::Bind { dst, .. } if dst.starts_with(&ssh))) {
+        return Ok(());
+    }
+    let dir = home.join(".ssh");
+    tokio::fs::create_dir_all(&dir).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).await?;
     }
     Ok(())
 }

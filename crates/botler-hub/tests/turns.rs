@@ -18,9 +18,9 @@ async fn with_key(e: &common::Env) {
     e.hub.store.set_secret(&e.hub.secret_key, "OPENROUTER_API_KEY", "sk-test").await.unwrap();
 }
 
-/// Poll `check` until it returns `Some`, for up to 10 s.
+/// Poll `check` until it returns `Some`, for up to 30 s (the workspace tests run in parallel).
 async fn until<T, F: Future<Output = Option<T>>>(what: &str, mut check: impl FnMut() -> F) -> T {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(v) = check().await {
             return v;
@@ -71,7 +71,7 @@ async fn transient_error_is_retried_with_backoff_and_succeeds() {
     let before = Utc::now();
     let at = run_retry(&e, &child).await;
     let wait = (at - before).num_seconds();
-    assert!((25..=35).contains(&wait), "first retry after ~30s, got {wait}s");
+    assert!((29..=45).contains(&wait), "first retry after ~30s, got {wait}s");
 
     let idle = until("the parent hears the result", || async {
         Some(events(&e, kinds::AGENT_IDLE).await).filter(|v| !v.is_empty())
@@ -95,7 +95,9 @@ async fn exhausted_retries_open_an_incident_and_tell_the_parent() {
         let now = Utc::now();
         gaps.push((run_retry(&e, &child).await - now).num_seconds());
     }
-    assert!(gaps[0] <= 30 && gaps[1] > 100 && gaps[2] > 500 && gaps[3] > 1700, "backoff grows: {gaps:?}");
+    // Measured from before each failed turn, so a slow machine adds a few seconds.
+    let expected = [30, 120, 600, 1800];
+    assert!(gaps.iter().zip(expected).all(|(g, want)| (want - 1..=want + 15).contains(g)), "backoff: {gaps:?}");
     let failed = until("agent.turn_failed", || async {
         Some(events(&e, kinds::AGENT_TURN_FAILED).await).filter(|v| !v.is_empty())
     })
@@ -284,4 +286,18 @@ async fn review_without_a_deadline_gets_one_at_boot() {
     assert_eq!(e.hub.store.expectations_on(&reviewer).await.unwrap().len(), 1, "idempotent");
     turns::sweep(&e.hub, x[0].due_at).await.unwrap();
     awaiting_user(&e, &p.id).await;
+}
+
+#[tokio::test]
+async fn review_timeout_after_the_user_rejected_does_nothing() {
+    let e = env().await;
+    let (p, _) = in_review(&e).await;
+    transactions::on_approval(&e.hub, &p.id, false, Some("not now")).await.unwrap();
+    turns::sweep(&e.hub, Utc::now() + chrono::Duration::minutes(21)).await.unwrap();
+    let p = e.hub.store.proposal(&p.id).await.unwrap();
+    assert_eq!(p.status, ProposalStatus::Rejected);
+    assert_eq!(p.decision.as_deref(), Some("rejected by you while it was being reviewed"));
+    assert!(p.review_notes.is_none_or(|n| !n.contains("reviewer unavailable")));
+    let dialogs = e.hub.store.open_dialogs().await.unwrap();
+    assert!(dialogs.iter().all(|d| d.proposal_id.as_deref() != Some(p.id.as_str())), "no approval asked");
 }

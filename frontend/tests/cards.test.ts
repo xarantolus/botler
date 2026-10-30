@@ -92,6 +92,34 @@ describe("DialogCard", () => {
     });
   });
 
+  it("offers an access request's three answers and names SSH keys", async () => {
+    const w = await mountInApp(DialogCard, {
+      dialog: dialog({
+        kind: "access",
+        question: "Give `secret:github-ssh` to Repo sync?",
+        detail: "push to GitHub",
+        ctas: ["allow for this chat", "always allow", "deny"],
+      }),
+    });
+    expect(w.text()).toContain("Access");
+    const allow = w.findAll("button").find((b) => b.text() === "allow for this chat")!;
+    await allow.trigger("click");
+    await flushPromises();
+    expect(calls[0]).toEqual({
+      name: "answer_dialog",
+      args: { params: { id: "d1" }, body: { answer: "allow for this chat" } },
+    });
+    const key = await mountInApp(DialogCard, {
+      dialog: dialog({
+        kind: "credentials",
+        ctas: [],
+        group: "github-ssh",
+        form: [{ name: "GITHUB_SSH_KEY", description: "deploy key", file: "/home/agent/.ssh/id_ed25519" }],
+      }),
+    });
+    expect(key.text()).toContain("SSH private key at /home/agent/.ssh/id_ed25519");
+  });
+
   it("renders an approval's change summary", async () => {
     const w = await mountInApp(DialogCard, {
       dialog: dialog({
@@ -104,6 +132,34 @@ describe("DialogCard", () => {
     expect(w.text()).toContain("Will start happening");
     expect(w.text()).toContain("passed");
     expect(w.findAll("button").map((b) => b.text())).toEqual(expect.arrayContaining(["approve", "reject"]));
+  });
+
+  it("rejects an approval only with a reason, which reaches the hub", async () => {
+    const w = await mountInApp(DialogCard, {
+      dialog: dialog({ kind: "approval", ctas: ["approve", "reject"], proposal_id: "p1", detail: null }),
+    });
+    expect(w.find('a[href="/proposals/p1"]').text()).toContain("Review changes");
+    await w.findAll("button").find((b) => b.text() === "reject")!.trigger("click");
+    await flushPromises();
+    const modal = () => document.querySelector('[role="dialog"]')!;
+    const confirmButton = () => [...modal().querySelectorAll("button")].find((b) => b.textContent?.trim() === "Reject")!;
+    expect(modal().textContent).toContain("Reject this change?");
+    expect(confirmButton().disabled).toBe(true);
+    const box = modal().querySelector("textarea")!;
+    box.value = "   ";
+    box.dispatchEvent(new Event("input"));
+    await flushPromises();
+    expect(confirmButton().disabled, "blank is no reason").toBe(true);
+    box.value = "Not on weekdays";
+    box.dispatchEvent(new Event("input"));
+    await flushPromises();
+    expect(confirmButton().disabled).toBe(false);
+    confirmButton().click();
+    await flushPromises();
+    expect(calls.find((c) => c.name === "answer_dialog")).toEqual({
+      name: "answer_dialog",
+      args: { params: { id: "d1" }, body: { answer: "reject", reason: "Not on weekdays" } },
+    });
   });
 });
 

@@ -11,7 +11,7 @@ export type Search = {
  */
 query: string, 
 /**
- * Restrict to these sources (`session`, `memory`, `event`, `repo`); default all.
+ * Restrict to these sources (`session`, `memory`, `event`, `repo`, `event_type`); default all.
  */
 sources?: Array<SearchSource>, 
 /**

@@ -8,7 +8,8 @@
 //!   by [`crate::sessions::retarget_cwd`], has a new header and is read again from the start);
 //!   every entry is indexed, so messages from before a compaction stay findable;
 //! - **memory**: Markdown files under `<data>/memory/`, by modification time;
-//! - **the monorepo**: text files of the applied commit, replaced whenever it changes.
+//! - **the monorepo**: text files of the applied commit, replaced whenever it changes;
+//! - **event types**: built-in and declared, with their producers, replaced with the monorepo.
 //!
 //! Each document has a fixed rowid derived from `(source, ref, owner)`, so indexing it again
 //! replaces it.
@@ -34,7 +35,7 @@ use crate::ops::{Caller, Op, OpError, Who};
 use crate::sessions::Item;
 
 /// Bump to rebuild every index on upgrade (when what is indexed changes).
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "2";
 /// Monorepo files larger than this are not indexed.
 const MAX_REPO_FILE: u64 = 256 * 1024;
 /// Text kept per document.
@@ -81,6 +82,8 @@ pub enum SearchSource {
     Event,
     /// Files of the applied monorepo commit; `ref` is the path.
     Repo,
+    /// Event types (built-in and declared); `ref` is the type.
+    EventType,
 }
 
 impl SearchSource {
@@ -90,6 +93,7 @@ impl SearchSource {
             Self::Memory => "memory",
             Self::Event => "event",
             Self::Repo => "repo",
+            Self::EventType => "event_type",
         }
     }
 }
@@ -102,8 +106,9 @@ impl FromStr for SearchSource {
             "memory" => Ok(Self::Memory),
             "event" => Ok(Self::Event),
             "repo" => Ok(Self::Repo),
+            "event_type" => Ok(Self::EventType),
             other => Err(SearchError::Query(format!(
-                "unknown source `{other}`; sources are session, memory, event and repo"
+                "unknown source `{other}`; sources are session, memory, event, repo and event_type"
             ))),
         }
     }
@@ -125,7 +130,7 @@ pub enum Scope {
 pub struct Search {
     /// Words to find; a result contains all of them (stemmed, so `deploy` finds `deployed`).
     pub query: String,
-    /// Restrict to these sources (`session`, `memory`, `event`, `repo`); default all.
+    /// Restrict to these sources (`session`, `memory`, `event`, `repo`, `event_type`); default all.
     #[serde(default)]
     pub sources: Option<Vec<SearchSource>>,
     /// `self` searches only your own conversation (also from before compaction) and your memory.
@@ -145,7 +150,7 @@ pub struct Search {
 #[derive(Debug, Deserialize, TS)]
 pub struct SearchQuery {
     pub q: String,
-    /// Comma-separated sources (`session,memory,event,repo`); default all.
+    /// Comma-separated sources (`session,memory,event,repo,event_type`); default all.
     #[ts(optional)]
     pub sources: Option<String>,
     #[ts(optional)]
@@ -169,10 +174,10 @@ impl SearchQuery {
 pub struct SearchHit {
     pub source: SearchSource,
     /// Session: the entry id (`read_session(instance=owner, around=ref)`); memory and repo: the
-    /// path; event: the event id.
+    /// path; event: the event id; event type: the type.
     #[serde(rename = "ref")]
     pub reference: String,
-    /// Session: the instance; memory: the namespace; event: the sender; repo: empty.
+    /// Session: the instance; memory: the namespace; event: the sender; repo and event type: empty.
     pub owner: String,
     /// When it happened (RFC 3339), if known.
     pub at: Option<String>,
@@ -612,7 +617,28 @@ async fn index_repo(hub: &Hub, pool: &SqlitePool) -> Result<usize> {
     drop(conn);
     let tree = crate::images::applied_tree(hub, &commit).await.map_err(|e| SearchError::Hub(Box::new(e)))?;
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM docs WHERE source = 'repo'").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM docs WHERE source IN ('repo', 'event_type')").execute(&mut *tx).await?;
+    let defs = &hub.applied().await.defs;
+    for t in crate::ops::catalog(defs, &[]) {
+        let mut body = format!("{}\n", t.description);
+        if !t.producers.is_empty() {
+            body.push_str(&format!("produced by {}\n", t.producers.join(", ")));
+        }
+        body.push_str(&t.subscribers.join("\n"));
+        if let Some(fields) = botler_core::event_check::payload_fields(defs, &t.kind) {
+            body.push_str(&format!("\nfields: {}", fields.join(", ")));
+        }
+        let title = format!("event type {}", t.kind);
+        let doc = Doc {
+            source: SearchSource::EventType,
+            reference: &t.kind,
+            owner: "",
+            at: None,
+            title: &title,
+            body: &body,
+        };
+        put(&mut tx, &doc).await?;
+    }
     let mut n = 0;
     for (rel, meta) in walk(&tree).await? {
         if meta.len() > MAX_REPO_FILE {
@@ -662,7 +688,7 @@ fn plain_query(q: &str) -> String {
 
 impl Op for Search {
     const NAME: &'static str = "search";
-    const DESCRIPTION: &'static str = "Full-text search over sessions, memory notes, the event journal and the monorepo, best matches first. `scope=\"self\"` searches only your own conversation (including what was compacted away) and your memory. Session results: read the context with `read_session(instance=owner, around=ref)`.";
+    const DESCRIPTION: &'static str = "Full-text search over sessions, memory notes, the event journal, the monorepo and event types (`event_type`: what can happen, who emits it), best matches first. `scope=\"self\"` searches only your own conversation (including what was compacted away) and your memory. Session results: read the context with `read_session(instance=owner, around=ref)`.";
     const WHO: Who = Who::UserAndAgents;
     type Output = SearchResults;
 
@@ -710,7 +736,7 @@ pub async fn search(hub: &Hub, caller: &Caller, a: Search) -> Result<SearchResul
                 qb.push(" OR source = 'session'");
             }
             if !own {
-                qb.push(" OR source IN ('event', 'repo')");
+                qb.push(" OR source IN ('event', 'repo', 'event_type')");
             }
             let mut list = qb.push(" OR (source = 'memory' AND owner IN (").separated(", ");
             for (_, ns) in namespaces {

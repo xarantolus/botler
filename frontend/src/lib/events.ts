@@ -8,6 +8,7 @@ const BUILTIN = {
   "dialog.answered": true,
   "dialog.aborted": true,
   "proposal.updated": true,
+  "trial.finished": true,
   "action.result": true,
   "breaker.tripped": true,
   "archive.requested": true,
@@ -16,6 +17,7 @@ const BUILTIN = {
   "reply.overdue": true,
   timer: true,
   schedule: true,
+  "access.changed": true,
 } as const satisfies Record<BuiltinPayload["type"], true>;
 
 /** The typed payload of a built-in event, or null for agent-defined event types. */
@@ -30,6 +32,7 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   "dialog.answered": "i-lucide-message-square-reply",
   "dialog.aborted": "i-lucide-message-square-x",
   "proposal.updated": "i-lucide-git-pull-request-arrow",
+  "trial.finished": "i-lucide-flask-conical",
   "action.result": "i-lucide-zap",
   "breaker.tripped": "i-lucide-octagon-pause",
   "archive.requested": "i-lucide-archive",
@@ -38,6 +41,7 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   "reply.overdue": "i-lucide-hourglass",
   timer: "i-lucide-alarm-clock",
   schedule: "i-lucide-calendar-clock",
+  "access.changed": "i-lucide-shield-plus",
 };
 
 /** An icon for an event type (agent-defined types get a generic one). */
@@ -74,6 +78,8 @@ export function eventSummary(ev: BotlerEvent): string {
       return `"${b.payload.question}" withdrawn: ${b.payload.reason}`;
     case "proposal.updated":
       return `${b.payload.title}: ${b.payload.status}`;
+    case "trial.finished":
+      return `trial of ${b.payload.job}: ${b.payload.outcome}, ${b.payload.effects.length} effects recorded`;
     case "action.result":
       return `${b.payload.action}: ${b.payload.ok ? "ok" : "failed"}`;
     case "breaker.tripped":
@@ -90,6 +96,8 @@ export function eventSummary(ev: BotlerEvent): string {
       return `timer ${b.payload.timer_id}${b.payload.note ? `: ${b.payload.note}` : ""}`;
     case "schedule":
       return `schedule ${b.payload.trigger}${b.payload.skipped ? ` (${b.payload.skipped} missed)` : ""}`;
+    case "access.changed":
+      return `${b.payload.resource} ${b.payload.change}`;
   }
 }
 
