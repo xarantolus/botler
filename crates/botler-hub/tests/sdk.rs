@@ -166,7 +166,7 @@ async fn granted_python_tools_reach_the_agent() {
     assert_eq!(tools[0]["module"], "example");
     let containers = e.fake.containers();
     let monorepo = |name: &str| {
-        containers[&agents::container_name(name)].spec.mounts.iter().find_map(|m| match m {
+        containers[&agents::container_name(&e.hub, name)].spec.mounts.iter().find_map(|m| match m {
             Mount::Bind { src, dst, read_only } if dst == "/botler/applied" => Some((src.clone(), *read_only)),
             _ => None,
         })

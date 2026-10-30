@@ -154,7 +154,7 @@ async fn foreign_branches_are_refused_and_preview_explains() {
     assert!(v["summary"].as_str().unwrap().contains("next:"));
     assert_eq!(v["needs_user_approval"], false);
     // The reviewer agent needs no running pi here; make sure nothing woke unexpectedly.
-    assert!(agents::container_name("botler").starts_with("botler-agent-"));
+    assert!(agents::container_name(&e.hub, "botler").starts_with(&format!("botler-{}-agent-", e.hub.id)));
 }
 
 #[tokio::test]

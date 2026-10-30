@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .events import Event
     from .tools import tool
 
-__all__ = ["BotlerError", "Event", "emit", "log", "ops", "send_message", "set_timer", "state", "tool"]
+__all__ = ["BotlerError", "Event", "emit", "health", "log", "ops", "send_message", "set_timer", "state", "tool"]
 
 
 def emit(event: Any, payload: dict[str, Any] | None = None, *, provenance: str | None = None) -> Any:
@@ -57,6 +57,20 @@ class _State:
 
 
 state = _State()
+
+
+class _Health:
+    """Services: report health. Call `ok()` at least as often as `[health] heartbeat` in job.toml;
+    `fail(reason)` stops the service, reports it unhealthy and restarts it with backoff."""
+
+    def ok(self) -> None:
+        ops.health(ok=True)
+
+    def fail(self, reason: str) -> None:
+        ops.health(ok=False, reason=reason)
+
+
+health = _Health()
 
 
 def log(message: str, **fields: Any) -> None:

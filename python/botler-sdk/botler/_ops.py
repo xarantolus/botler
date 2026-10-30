@@ -208,3 +208,12 @@ def state_get(*, key: str) -> Any:
 def state_set(*, key: str, value: str) -> Any:
     """Write this job's persistent key-value state (cursors, dedup keys; up to 64 KiB per value)."""
     return call("state_set", {"key": key, "value": value})
+
+
+def health(*, ok: bool, reason: str | None = None) -> Any:
+    """Report this service's health: `ok=true` is the heartbeat its job.toml `[health]` asks for; `ok=false` with a reason stops and restarts it and reports an unhealthy incident.
+
+    Args:
+        reason: Why it is unhealthy (with `ok = false`).
+    """
+    return call("health", {"ok": ok, "reason": reason})

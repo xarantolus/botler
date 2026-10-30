@@ -210,9 +210,15 @@ pub struct Agent {
     /// Secret groups (from `secrets.toml`) delivered into this agent's container.
     #[serde(default)]
     pub secrets: Vec<String>,
-    /// Service instances (MCP servers) this agent can reach.
+    /// Services (jobs with `lifetime = "service"` and a `port`) whose MCP server this agent uses.
+    /// The agent joins the services network and reaches each at
+    /// `http://botler-svc-<name>:<port>/mcp`.
     #[serde(default)]
     pub mcp: Vec<String>,
+    /// MCP servers pi starts inside this agent's container over stdio, by server name, e.g.
+    /// `mcp_stdio = { fs = { command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."] } }`.
+    #[serde(default)]
+    pub mcp_stdio: BTreeMap<String, StdioMcp>,
     /// Python tool name globs from `tools/` registered into pi, e.g. `["github.*"]`.
     #[serde(default)]
     pub tools: Vec<String>,
@@ -227,6 +233,17 @@ pub struct Agent {
     pub limits: BTreeMap<String, RateLimit>,
     #[serde(default, rename = "trigger")]
     pub triggers: Vec<Trigger>,
+}
+
+/// An MCP server pi runs as a subprocess in the agent's container.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StdioMcp {
+    /// Executable and arguments (not a shell string).
+    pub command: Vec<String>,
+    /// Extra environment; values may reference container env vars as `${NAME}`.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 impl Agent {
@@ -312,6 +329,13 @@ pub struct Job {
     pub volume: bool,
     #[serde(default)]
     pub network: Network,
+    /// Services: the port the service listens on inside its container. Agents granted it (`mcp`)
+    /// reach it at `http://botler-svc-<name>:<port>`.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Services: container ports published on the host, reachable from outside (LAN, tailnet).
+    #[serde(default)]
+    pub publish: Vec<Publish>,
     #[serde(default)]
     pub health: Option<Health>,
     #[serde(default)]
@@ -323,6 +347,33 @@ pub struct Job {
     pub limits: BTreeMap<String, RateLimit>,
     #[serde(default, rename = "trigger")]
     pub triggers: Vec<Trigger>,
+}
+
+/// A service port published on the host: `<bind>:<host_port>` forwards to `port` in the container.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Publish {
+    /// Port inside the container.
+    pub port: u16,
+    /// Port on the host (1024 or above: rootless Podman cannot bind lower ones).
+    pub host_port: u16,
+    /// Host address to bind: `0.0.0.0` (every interface, the default) or `127.0.0.1` (this machine
+    /// only).
+    #[serde(default = "Publish::default_bind")]
+    pub bind: String,
+}
+
+impl Publish {
+    fn default_bind() -> String {
+        "0.0.0.0".into()
+    }
+
+    /// Where it is reachable, in words: "your network at 0.0.0.0:8080" or "this machine at ...".
+    pub fn reach(&self) -> String {
+        let loopback = self.bind.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
+        let whom = if loopback { "this machine only" } else { "your network" };
+        format!("{whom} at {}:{}", self.bind, self.host_port)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

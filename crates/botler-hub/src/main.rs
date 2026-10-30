@@ -225,6 +225,17 @@ async fn status(paths: Paths) -> anyhow::Result<()> {
     for inc in hub.store.open_incidents().await? {
         println!("incident   {} {} x{}", inc.runnable, inc.kind, inc.count);
     }
+    for s in botler_hub::services::status(&hub).await? {
+        let urls: Vec<&str> = s.published.iter().map(|p| p.url.as_str()).collect();
+        let state = if s.failed {
+            "failed"
+        } else if s.running {
+            "running"
+        } else {
+            "stopped"
+        };
+        println!("service    {:<28} {state:<9} {}", s.name, urls.join(" "));
+    }
     for b in hub.store.breakers().await? {
         println!("breaker    {} ({}): {}", b.subject, b.kind, b.reason);
     }

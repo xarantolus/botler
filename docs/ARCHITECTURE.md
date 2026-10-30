@@ -92,13 +92,23 @@ The SDK surface:
 - `log`;
 - hub failures raise `BotlerError(code, status, message)`;
 - typed events: `botler.Event` (pydantic, `type: ClassVar[str]`); `python -m botler.events manifest` writes `events.manifest.json`;
-- later: `health.ok()/fail(reason)` (service heartbeats; no hub op yet) and the `@action` decorator for connectors.
+- `health.ok()/fail(reason)` (service heartbeats, the `health` op);
+- later: the `@action` decorator for connectors.
 
 Agents reach the same hub endpoints via MCP. Scripts the agent writes inside its container can also use the SDK.
 
 **Supervision (hub is the single supervisor).**
 - **Why not Podman's restart policy:** containers are started with no Podman restart policy, so there's one restart loop rather than two competing ones, and rootless `unless-stopped` doesn't survive a reboot without `podman-restart.service`.
-- **Services:** the hub subscribes to the Podman event stream (`died`, `oom`, health-status changes) and reconciles desired vs actual services on boot, after every transaction and on a periodic tick (to catch missed events). It restarts with exponential backoff. A crash loop (N exits in a window) puts the service in `failed`, stops restarting it, and escalates.
+- **Services** (`services.rs`, crash-only): one stateless `reconcile` compares the applied definitions with the runs table and the runtime. It runs at boot, after every apply, on resume, when a service container dies (the event stream only wakes it; the pass inspects the container itself) and every 5 s.
+  - **Restart and backoff** are computed from the runs table, never from memory: every exit of a service is a failure (an incident, kind `exit`/`oom`/`unhealthy`/`start`). With `n` failures in `crashloop_window`, the next start waits `min(2^n s, backoff_max)` after the last one ended.
+  - **Crash loop:** at `n >= crashloop_count` it reports `crashloop` (the same open incident, routed again) and stops restarting. The open `crashloop` incident *is* the failed state: `resolve_incident` clears it, failures before it stop counting, and the next pass restarts the service.
+  - **Restart on change:** a service is stopped (run `cancelled`, not a failure) when its image's content-addressed tag at the applied commit differs from its run's, so only a change to its inputs restarts it. Services removed from the definitions, or all of them while paused, are stopped.
+  - **Health:** `[health] heartbeat, grace`. The service calls the `health` op (`botler.health.ok()`); `runs.heartbeat_at` records it. `now > max(started + grace, heartbeat_at) + heartbeat` is unhealthy, and so is `health(ok=false, reason)`: the hub stops it, reports `unhealthy` and restarts it with backoff.
+  - **Token:** a service's run token is long-lived and dies with the run (`Caller::resolve` refuses tokens of finished runs).
+  - **Network:** services run on a hub-managed user-defined network `botler-<hub id>` (created idempotently at startup and before each start) with a stable container name and the network alias `<service>`. Agents granting a service in `mcp = [...]` join that network and reach its MCP server at `http://<service>:<port>/mcp` (`port` in `job.toml`). The hub stays reachable from that network through `host.containers.internal` while it listens on `0.0.0.0` (spike, experiment 2).
+  - **Published ports:** `[[publish]] port, host_port, bind` (default `0.0.0.0`) is rendered as `-p bind:host_port:port`. A new or moved mapping is an escalation; host ports below 1024 or claimed by two services fail validation; the hub's own port and a port taken at runtime fail the start with a message naming the port (an incident). `botler status` and `GET /api/v1/status` (`services`) list the URLs.
+- **Hub identity:** every container and network name carries the hub's id (a hash of its data directory: `botler-<id>-agent-<instance>`, `-run-<run>`, `-svc-<name>`, `-gate-<proposal>`), and every container carries the `botler.data` owner label its images already had. Lists, cleanups and container events are filtered by them, so hubs sharing one Podman never touch each other's containers.
+- **Stdio MCP servers:** `[mcp_stdio.<name>] command = [...], env = {...}` on an agent is rendered into its `mcp.json`; pi starts it inside the agent's container. Adding or changing one is an escalation (it runs code there).
 - **Schedules** (oneshot runs):
   - each declares a `missed` policy (`skip` | `run_once`) for downtime and reboots;
   - an `overlap` policy (`skip` | `queue` | `allow`);

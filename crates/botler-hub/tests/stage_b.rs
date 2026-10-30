@@ -28,7 +28,7 @@ async fn message_wakes_botler_and_is_delivered_once() {
     e.route().await;
     agents::dispatch_pending(&e.hub).await.unwrap();
 
-    let name = agents::container_name("botler");
+    let name = agents::container_name(&e.hub, "botler");
     let c = &e.fake.containers()[&name];
     let cmd = c.spec.command.join(" ");
     assert!(cmd.contains("--mode rpc") && cmd.contains("--session /botler/sessions/botler.jsonl"), "{cmd}");
@@ -123,7 +123,7 @@ async fn idle_chats_sleep_and_always_on_botler_stays() {
     e.route().await;
     agents::dispatch_pending(&e.hub).await.unwrap();
     settle().await;
-    assert!(e.fake.prompts(&agents::container_name(&child))[0].contains("build a thing"));
+    assert!(e.fake.prompts(&agents::container_name(&e.hub, &child))[0].contains("build a thing"));
 
     agents::reap_idle(&e.hub, Utc::now() + Duration::hours(2)).await.unwrap();
     settle().await;
@@ -162,8 +162,8 @@ async fn always_on_botler_starts_without_a_message() {
     with_key(&e).await;
     agents::keep_always_on(&e.hub).await.unwrap();
     assert_eq!(e.hub.store.instance("botler").await.unwrap().state, InstanceState::Running);
-    assert!(e.fake.containers().contains_key(&agents::container_name("botler")));
-    assert!(e.fake.prompts(&agents::container_name("botler")).is_empty(), "no prompt needed to be up");
+    assert!(e.fake.containers().contains_key(&agents::container_name(&e.hub, "botler")));
+    assert!(e.fake.prompts(&agents::container_name(&e.hub, "botler")).is_empty(), "no prompt needed to be up");
 }
 
 #[tokio::test]
@@ -236,7 +236,7 @@ async fn sleeping_chat_is_woken_by_a_message_with_its_workspace() {
     settle().await;
     assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running);
     assert_eq!(std::fs::read_to_string(&marker).unwrap(), "work in progress", "workspace survives sleep");
-    let prompts = e.fake.prompts(&agents::container_name(&chat));
+    let prompts = e.fake.prompts(&agents::container_name(&e.hub, &chat));
     assert!(prompts.last().unwrap().contains("continue"));
 }
 
@@ -335,7 +335,7 @@ async fn secret_groups_and_shared_homes_reach_the_container() {
     e.hub.store.set_secret(&e.hub.secret_key, "STATION_HOST", "station.lan").await.unwrap();
     message(&e, "station", "hi").await;
 
-    let c = &e.fake.containers()[&agents::container_name("station")];
+    let c = &e.fake.containers()[&agents::container_name(&e.hub, "station")];
     assert_eq!(c.spec.env["STATION_HOST"], "station.lan");
     assert!(!c.spec.env.contains_key("STATION_KEY"), "file secrets are not env vars");
     let key_mount = c.spec.mounts.iter().find_map(|m| match m {
@@ -353,7 +353,7 @@ async fn secret_groups_and_shared_homes_reach_the_container() {
     let b = router::spawn(&e.hub, "antenna", None, Some("align again"), None, None).await.unwrap();
     agents::dispatch_pending(&e.hub).await.unwrap();
     for i in [&a, &b] {
-        let c = &e.fake.containers()[&agents::container_name(i)];
+        let c = &e.fake.containers()[&agents::container_name(&e.hub, i)];
         assert_eq!(bind_src(c, "/home/agent").unwrap(), shared, "{i}");
         assert!(bind_src(c, "/home/agent/monorepo").is_none(), "workspace = none has no clone");
     }
@@ -366,7 +366,7 @@ async fn home_persists_across_wakes_and_archiving() {
     let chat = router::spawn(&e.hub, "dev", Some("botler"), Some("clone the repo"), None, None).await.unwrap();
     agents::dispatch_pending(&e.hub).await.unwrap();
     settle().await;
-    let name = agents::container_name(&chat);
+    let name = agents::container_name(&e.hub, &chat);
     let c = &e.fake.containers()[&name];
     let home = e.hub.paths.home(&chat);
     assert_eq!(bind_src(c, "/home/agent").unwrap(), home);
@@ -617,7 +617,7 @@ async fn waiting_on_the_user_sleeps_after_a_grace_and_the_answer_wakes_it() {
     agents::dispatch_pending(&e.hub).await.unwrap();
     settle().await;
     assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running);
-    let prompts = e.fake.prompts(&agents::container_name(&chat));
+    let prompts = e.fake.prompts(&agents::container_name(&e.hub, &chat));
     assert!(prompts.last().unwrap().contains("dialog.answered") && prompts.last().unwrap().contains("blue"));
 
     // Without anything to wait for, the same idle time does not stop it.
@@ -644,14 +644,17 @@ async fn deep_agent_trees_report_up_without_tripping_and_depth_is_bounded() {
     // Each level ends its turn with a report, which reaches its parent and wakes it; the parent's
     // turn then ends with its own report to its parent, up to the root.
     for (level, name) in chain.iter().enumerate() {
-        e.fake.set_last_reply(&agents::container_name(name), &format!("level {level}: built the parser and its tests"));
+        e.fake.set_last_reply(
+            &agents::container_name(&e.hub, name),
+            &format!("level {level}: built the parser and its tests"),
+        );
     }
     for _ in 0..8 {
         agents::dispatch_pending(&e.hub).await.unwrap();
         settle().await;
         e.route().await;
     }
-    let root_prompts = e.fake.prompts(&agents::container_name(&chain[0]));
+    let root_prompts = e.fake.prompts(&agents::container_name(&e.hub, &chain[0]));
     assert!(root_prompts.iter().any(|p| p.contains("level 1: built the parser")), "{root_prompts:?}");
     assert!(e.hub.store.breakers().await.unwrap().is_empty(), "{:?}", e.hub.store.breakers().await.unwrap());
 

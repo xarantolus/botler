@@ -120,7 +120,7 @@ pub struct OpSpec {
     pub visible: fn(&Caller) -> bool,
 }
 
-fn schema<T: JsonSchema>() -> Value {
+pub(crate) fn schema<T: JsonSchema>() -> Value {
     serde_json::to_value(schemars::schema_for!(T))
         .unwrap_or_else(|e| json!({ "type": "object", "description": format!("schema error: {e}") }))
 }
@@ -296,6 +296,7 @@ pub const OPS: &[OpSpec] = &[
         schema: schema::<StateSet>,
         visible: runs,
     },
+    crate::health::OP,
 ];
 
 /// Ops after which the agent's turn is over by nature: the outcome arrives later as an event that
@@ -692,6 +693,7 @@ pub async fn call(hub: &std::sync::Arc<Hub>, caller: &Caller, name: &str, input:
             hub.store.resolve_incident(&a.id, &a.resolution).await?;
             Ok(json!({ "resolved": a.id }))
         }
+        "health" => crate::health::call(hub, caller, args(input)?).await,
         "state_get" => {
             let a: StateKey = args(input)?;
             Ok(json!({ "value": hub.store.kv_get(&caller.subject(), &a.key).await? }))
@@ -1013,7 +1015,7 @@ async fn get_run_logs(hub: &Hub, a: GetRunLogs) -> OpResult {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Still running: read live.
-            let name = crate::jobs::container_name(&run.id);
+            let name = crate::jobs::run_container(hub, &run);
             hub.containers.logs(&name, 2000).await.map_err(HubError::from)?
         }
         Err(e) => return Err(HubError::Io(e).into()),
