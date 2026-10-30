@@ -254,6 +254,42 @@ pub const OPS: &[OpSpec] = &[
         visible: session_readers,
     },
     OpSpec {
+        name: "memory_write",
+        description: "Write a memory file (Markdown) in one of your namespaces: `agents/<definition>/...` (mounted at /memory/self), `projects/<home>/...` (/memory/project) or `user/...` (/memory/user). Pass the sha256 of the version you read as `expected_sha256` (`sha256sum`), or omit it to create a new file. If someone changed it meanwhile you get a conflict with the current content: merge and write again.",
+        schema: schema::<crate::memory::MemoryWrite>,
+        visible: crate::memory::writers,
+    },
+    OpSpec {
+        name: "memory_append",
+        description: "Append line(s) to a memory file, creating it if needed. No version needed: use it for logs and lists.",
+        schema: schema::<crate::memory::MemoryAppend>,
+        visible: crate::memory::writers,
+    },
+    OpSpec {
+        name: "memory_delete",
+        description: "Delete a memory file; `expected_sha256` is the sha256 of the version you are deleting.",
+        schema: schema::<crate::memory::MemoryDelete>,
+        visible: crate::memory::writers,
+    },
+    OpSpec {
+        name: "memory_read",
+        description: "Read a memory file with its sha256.",
+        schema: schema::<crate::memory::MemoryPath>,
+        visible: crate::memory::without_mount,
+    },
+    OpSpec {
+        name: "memory_list",
+        description: "Memory files you may read, optionally under a directory such as `user` or `agents/dev`.",
+        schema: schema::<crate::memory::MemoryList>,
+        visible: crate::memory::without_mount,
+    },
+    OpSpec {
+        name: "memory_history",
+        description: "The commits that changed a memory file, newest first, with their authors.",
+        schema: schema::<crate::memory::MemoryPath>,
+        visible: crate::memory::without_mount,
+    },
+    OpSpec {
         name: "get_events",
         description: "Read the event journal, newest first: filter by type (`mail.*`) or conversation (`correlation`).",
         schema: schema::<GetEvents>,
@@ -536,11 +572,11 @@ fn request_error(e: crate::secret_requests::RequestError) -> OpError {
     }
 }
 
-fn to_json<T: serde::Serialize>(v: &T) -> Result<Value, OpError> {
+pub(crate) fn to_json<T: serde::Serialize>(v: &T) -> Result<Value, OpError> {
     serde_json::to_value(v).map_err(|e| OpError::Hub(HubError::Io(std::io::Error::other(e))))
 }
 
-fn args<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, OpError> {
+pub(crate) fn args<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, OpError> {
     serde_json::from_value(if v.is_null() { json!({}) } else { v }).map_err(|e| OpError::BadRequest(e.to_string()))
 }
 
@@ -672,6 +708,7 @@ pub async fn call(hub: &std::sync::Arc<Hub>, caller: &Caller, name: &str, input:
                 .await?;
             Ok(json!({ "cancelled": closed, "id": a.id }))
         }
+        n if n.starts_with("memory_") => crate::memory::call(hub, caller, n, input).await,
         "read_session" => read_session(hub, args(input)?).await,
         "get_events" => get_events(hub, args(input)?).await,
         "ask_user" => ask_user(hub, caller, args(input)?).await,

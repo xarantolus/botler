@@ -91,6 +91,22 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
             None => "It is yours alone.".to_string(),
         }
     ));
+    let project = def
+        .spec
+        .home
+        .as_ref()
+        .map(|h| format!(", `/memory/project` (`projects/{h}/`, this project)"))
+        .unwrap_or_default();
+    s.push_str(&format!(
+        "## Memory\n\
+         Durable facts, preferences and decisions (e.g. \"dev work on GitHub repos uses secret group \
+         `github-ssh`\") go in memory: read-only at `/memory/self` (`agents/{}/`, all `{}` agents){project} \
+         and `/memory/user` (`user/`, the user's profile, shared by all agents); search it with `rg` before \
+         asking the user something they may have told you before. Change it with `memory_write`, \
+         `memory_append` and `memory_delete` (paths like `user/tools.md`) and keep a short `INDEX.md` in each. \
+         Code and definitions belong in the monorepo, working files in your home.\n\n",
+        def.name, def.name
+    ));
     s.push_str(
         "## Limits\n\
          - You never send anything to other people directly. Actions that reach others are \

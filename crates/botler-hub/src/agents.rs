@@ -461,7 +461,8 @@ async fn container_spec(
         ("tools.json", to_json(&json!(tools))?),
         ("turn-tools.json", to_json(&ops::turn_ending_tools(&caller))?),
         ("mcp.json", to_json(&json!({ "mcpServers": servers }))?),
-        ("botler.md", prompt::render(instance, def, branch)),
+        // Memory indexes are read once per wake, so the prompt stays stable within a session.
+        ("botler.md", prompt::render(instance, def, branch) + &crate::memory::index_section(hub, def).await?),
         ("AGENTS.md", def.prompt.clone().unwrap_or_default()),
     ];
     let mut mounts = p.mounts;
@@ -471,6 +472,7 @@ async fn container_spec(
         tokio::fs::write(&host, body).await?;
         mounts.push(Mount::Bind { src: host, dst: format!("/botler/agent-dir/{name}"), read_only: true });
     }
+    mounts.extend(crate::memory::mounts(hub, def).await?);
     let sessions = hub.paths.sessions(&instance.name);
     tokio::fs::create_dir_all(&sessions).await?;
     mounts.push(Mount::Bind { src: sessions, dst: "/botler/sessions".into(), read_only: false });
