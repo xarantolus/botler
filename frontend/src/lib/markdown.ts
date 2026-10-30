@@ -1,0 +1,24 @@
+import DOMPurify from "dompurify";
+import { Marked } from "marked";
+
+const marked = new Marked({ gfm: true, breaks: true, async: false });
+
+// Links open outside the app and never leak the referrer.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A") {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
+
+/** Agent text is untrusted: render markdown, then sanitize. */
+export function renderMarkdown(src: string): string {
+  const html = marked.parse(src) as string;
+  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+}
+
+/** Inline markdown (no paragraphs), e.g. for summary lines with `code`. */
+export function renderInline(src: string): string {
+  const html = marked.parseInline(src) as string;
+  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+}
