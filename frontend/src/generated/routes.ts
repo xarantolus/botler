@@ -12,16 +12,17 @@ import type { DialogAnswer } from "./DialogAnswer";
 import type { Dialogs } from "./Dialogs";
 import type { EventPosted } from "./EventPosted";
 import type { EventsQuery } from "./EventsQuery";
+import type { GetProposal } from "./GetProposal";
 import type { GetRunLogs } from "./GetRunLogs";
 import type { HubStatus } from "./HubStatus";
-import type { IdArg } from "./IdArg";
 import type { Incident } from "./Incident";
 import type { Instance } from "./Instance";
 import type { MemoryCommit } from "./MemoryCommit";
 import type { MemoryEntry } from "./MemoryEntry";
 import type { MemoryFile } from "./MemoryFile";
+import type { MemoryHistory } from "./MemoryHistory";
 import type { MemoryList } from "./MemoryList";
-import type { MemoryPath } from "./MemoryPath";
+import type { MemoryRead } from "./MemoryRead";
 import type { MemoryWrite } from "./MemoryWrite";
 import type { MemoryWritten } from "./MemoryWritten";
 import type { NewChat } from "./NewChat";
@@ -70,11 +71,11 @@ export interface Routes {
   resume: { method: "POST"; path: "/api/v1/resume"; params: Record<string, never>; query: never; body: never; response: PauseState };
   clear_breaker: { method: "POST"; path: "/api/v1/breakers/clear"; params: Record<string, never>; query: never; body: ClearBreaker; response: BreakerCleared };
   run_logs: { method: "POST"; path: "/api/v1/ops/get_run_logs"; params: Record<string, never>; query: never; body: GetRunLogs; response: RunLogs };
-  proposal: { method: "POST"; path: "/api/v1/ops/get_proposal"; params: Record<string, never>; query: never; body: IdArg; response: ProposalDetail };
+  proposal: { method: "POST"; path: "/api/v1/ops/get_proposal"; params: Record<string, never>; query: never; body: GetProposal; response: ProposalDetail };
   memory_list: { method: "POST"; path: "/api/v1/ops/memory_list"; params: Record<string, never>; query: never; body: MemoryList; response: Array<MemoryEntry> };
-  memory_read: { method: "POST"; path: "/api/v1/ops/memory_read"; params: Record<string, never>; query: never; body: MemoryPath; response: MemoryFile };
+  memory_read: { method: "POST"; path: "/api/v1/ops/memory_read"; params: Record<string, never>; query: never; body: MemoryRead; response: MemoryFile };
   memory_write: { method: "POST"; path: "/api/v1/ops/memory_write"; params: Record<string, never>; query: never; body: MemoryWrite; response: MemoryWritten };
-  memory_history: { method: "POST"; path: "/api/v1/ops/memory_history"; params: Record<string, never>; query: never; body: MemoryPath; response: Array<MemoryCommit> };
+  memory_history: { method: "POST"; path: "/api/v1/ops/memory_history"; params: Record<string, never>; query: never; body: MemoryHistory; response: Array<MemoryCommit> };
 }
 
 export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path: Routes[K]["path"] } } = {

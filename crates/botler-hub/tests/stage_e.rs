@@ -149,7 +149,8 @@ async fn foreign_branches_are_refused_and_preview_explains() {
     push_branch(&e, "agents/other/x", &[("triggers/digest.toml", TRIGGER)]);
     assert!(transactions::propose(&e.hub, "botler", "agents/other/x", "x").await.is_err());
     push_branch(&e, "agents/botler/p", &[("triggers/digest.toml", TRIGGER)]);
-    let v = transactions::preview_branch(&e.hub, "botler", "agents/botler/p").await.unwrap();
+    let v =
+        serde_json::to_value(transactions::preview_branch(&e.hub, "botler", "agents/botler/p").await.unwrap()).unwrap();
     assert_eq!(v["valid"], true);
     assert!(v["summary"].as_str().unwrap().contains("next:"));
     assert_eq!(v["needs_user_approval"], false);

@@ -205,6 +205,7 @@ pub async fn status(hub: &Hub) -> Result<Vec<crate::wire::ServiceStatus>> {
             .is_some_and(|i| i.kind == "crashloop" && i.status == botler_store::IncidentStatus::Open);
         let published = def
             .spec
+            .env
             .publish
             .iter()
             .map(|p| {
@@ -224,7 +225,7 @@ pub async fn status(hub: &Hub) -> Result<Vec<crate::wire::ServiceStatus>> {
             name: def.name.clone(),
             running: last.is_some_and(|r| r.status == RunStatus::Running),
             failed,
-            internal_url: def.spec.port.map(|p| format!("http://{}:{p}", def.name)),
+            internal_url: def.spec.env.port.map(|p| format!("http://{}:{p}", def.name)),
             published,
         });
     }

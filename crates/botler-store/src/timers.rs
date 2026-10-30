@@ -13,7 +13,7 @@ text_enum!(TimerStatus {
     Cancelled = "cancelled",
 });
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct Timer {
     pub id: String,
     pub fire_at: DateTime<Utc>,

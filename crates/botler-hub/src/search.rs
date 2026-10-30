@@ -30,7 +30,7 @@ use ts_rs::TS;
 
 use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
-use crate::ops::{Caller, OpError};
+use crate::ops::{Caller, Op, OpError, Who};
 use crate::sessions::Item;
 
 /// Bump to rebuild every index on upgrade (when what is indexed changes).
@@ -109,7 +109,7 @@ impl FromStr for SearchSource {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema, TS)]
 pub enum Scope {
     /// Only your own session (including before compaction) and your memory namespaces.
     #[serde(rename = "self")]
@@ -120,7 +120,8 @@ pub enum Scope {
 }
 
 /// The `search` operation.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+#[ts(optional_fields)]
 pub struct Search {
     /// Words to find; a result contains all of them (stemmed, so `deploy` finds `deployed`).
     pub query: String,
@@ -136,6 +137,7 @@ pub struct Search {
     /// Treat `query` as SQLite FTS5 syntax: `"exact phrase"`, `a OR b`, `a NOT b`, `prefix*`,
     /// `NEAR(a b)`.
     #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
     pub raw: bool,
 }
 
@@ -656,6 +658,17 @@ pub async fn run(hub: Arc<Hub>) {
 /// Plain words → an FTS5 query matching all of them (each quoted, so no syntax applies).
 fn plain_query(q: &str) -> String {
     q.split_whitespace().map(|w| format!("\"{}\"", w.replace('"', "\"\""))).collect::<Vec<_>>().join(" ")
+}
+
+impl Op for Search {
+    const NAME: &'static str = "search";
+    const DESCRIPTION: &'static str = "Full-text search over sessions, memory notes, the event journal and the monorepo, best matches first. `scope=\"self\"` searches only your own conversation (including what was compacted away) and your memory. Session results: read the context with `read_session(instance=owner, around=ref)`.";
+    const WHO: Who = Who::UserAndAgents;
+    type Output = SearchResults;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<SearchResults, OpError> {
+        search(hub, caller, self).await
+    }
 }
 
 /// Run a search for `caller`: the user sees everything; an agent sees its own session (others'

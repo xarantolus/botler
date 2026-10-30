@@ -304,7 +304,7 @@ async fn search_route_and_op() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // Agents see the op; jobs do not.
-    let tools = |c: &Caller| ops::OPS.iter().filter(|o| (o.visible)(c)).map(|o| o.name).collect::<Vec<_>>();
+    let tools = |c: &Caller| ops::OPS.iter().filter(|o| o.who.admits(c)).map(|o| o.name).collect::<Vec<_>>();
     assert!(tools(&agent("chat-a", vec![])).contains(&"search"));
     let run =
         Caller { principal: Principal::Run { run_id: "r".into() }, capabilities: vec![], runnable: Some("j".into()) };

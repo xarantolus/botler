@@ -95,9 +95,12 @@ fn generate() -> String {
         };
         let call_args = if props.is_some() { format!("{{{}}}", body.join(", ")) } else { "args".into() };
         let args_section = if arg_docs.is_empty() { String::new() } else { format!("\n\n    Args:{arg_docs}\n    ") };
+        // Every op returns a JSON object or a list of them.
+        let (_, output) = (op.ts_names)(&ts_rs::Config::new());
+        let ret = if output.starts_with("Array<") { "list[dict[str, Any]]" } else { "dict[str, Any]" };
         let _ = write!(
             out,
-            "\n\ndef {name}({sig}) -> Any:\n    \"\"\"{desc}{args_section}\"\"\"\n    return call(\"{name}\", {call_args})\n",
+            "\n\ndef {name}({sig}) -> {ret}:\n    \"\"\"{desc}{args_section}\"\"\"\n    return call(\"{name}\", {call_args})\n",
             name = op.name,
             desc = doc(op.description),
         );

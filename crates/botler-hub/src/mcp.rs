@@ -54,9 +54,7 @@ impl ServerHandler for BotlerMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let caller = self.caller(&ctx).await?;
-        let tools = ops::OPS
-            .iter()
-            .filter(|o| (o.visible)(&caller))
+        let tools = ops::visible(&caller)
             .map(|o| {
                 let schema = match (o.schema)() {
                     Value::Object(m) => m,

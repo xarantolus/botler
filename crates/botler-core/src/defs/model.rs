@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::Environment;
 use crate::duration::HumanDuration;
 use crate::limits::RateLimit;
 
@@ -47,7 +48,7 @@ pub struct EventsPolicy {
 }
 
 /// What happens to an event type that no file declares.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Undeclared {
     /// Reject it: every event type must be declared (with a schema to be validated).
@@ -189,44 +190,19 @@ pub struct Agent {
     /// `ephemeral` agents are templates: each spawn creates a new instance.
     #[serde(default)]
     pub kind: AgentKind,
-    /// Image name under `images/`.
-    #[serde(default = "Agent::default_image")]
-    pub image: String,
     /// Model route name from `botler.toml`.
     #[serde(default)]
     pub model: Option<String>,
-    #[serde(default)]
-    pub workspace: Workspace,
-    /// The persistent home directory mounted at `/home/agent` (`$HOME`, the working directory).
-    /// Defaults to one per instance; naming one (e.g. `"groundstation"`) shares it between every
-    /// instance of every definition that names it.
-    #[serde(default)]
-    pub home: Option<String>,
+    #[serde(flatten)]
+    pub env: Environment,
     #[serde(default)]
     pub idle_timeout: Option<HumanDuration>,
     /// Keep this agent's pi session running at all times (persistent agents only), e.g. `botler`.
     #[serde(default)]
     pub always_on: bool,
-    /// Secret groups (from `secrets.toml`) delivered into this agent's container.
-    #[serde(default)]
-    pub secrets: Vec<String>,
-    /// Services (jobs with `lifetime = "service"` and a `port`) whose MCP server this agent uses.
-    /// The agent joins the services network and reaches each at
-    /// `http://botler-svc-<name>:<port>/mcp`.
-    #[serde(default)]
-    pub mcp: Vec<String>,
-    /// MCP servers pi starts inside this agent's container over stdio, by server name, e.g.
-    /// `mcp_stdio = { fs = { command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."] } }`.
-    #[serde(default)]
-    pub mcp_stdio: BTreeMap<String, StdioMcp>,
-    /// Python tool name globs from `tools/` registered into pi, e.g. `["github.*"]`.
-    #[serde(default)]
-    pub tools: Vec<String>,
     /// Extra hub capabilities beyond the base agent role.
     #[serde(default)]
     pub capabilities: Vec<Capability>,
-    #[serde(default)]
-    pub network: Network,
     #[serde(default)]
     pub budget: Option<Budget>,
     #[serde(default)]
@@ -246,13 +222,7 @@ pub struct StdioMcp {
     pub env: BTreeMap<String, String>,
 }
 
-impl Agent {
-    fn default_image() -> String {
-        "agent".into()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     Persistent,
@@ -321,21 +291,8 @@ pub struct Job {
     pub command: Vec<String>,
     #[serde(default)]
     pub timeout: Option<HumanDuration>,
-    /// Secret groups (from `secrets.toml`) delivered into this job's container.
-    #[serde(default)]
-    pub secrets: Vec<String>,
-    /// Keep a persistent volume mounted at `/data` across runs.
-    #[serde(default)]
-    pub volume: bool,
-    #[serde(default)]
-    pub network: Network,
-    /// Services: the port the service listens on inside its container. Agents granted it (`mcp`)
-    /// reach it at `http://botler-svc-<name>:<port>`.
-    #[serde(default)]
-    pub port: Option<u16>,
-    /// Services: container ports published on the host, reachable from outside (LAN, tailnet).
-    #[serde(default)]
-    pub publish: Vec<Publish>,
+    #[serde(flatten)]
+    pub env: Environment,
     #[serde(default)]
     pub health: Option<Health>,
     #[serde(default)]
@@ -474,7 +431,7 @@ pub struct Trigger {
 }
 
 /// A target: *what* a trigger does.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Target {
     /// Deliver into an existing persistent instance.

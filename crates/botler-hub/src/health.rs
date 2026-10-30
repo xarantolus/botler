@@ -5,24 +5,20 @@
 //! `health(ok=False, reason=...)` stops it at once. Either way the hub reports an `unhealthy`
 //! failure and restarts it with backoff.
 
+use std::sync::Arc;
+
 use botler_store::RunKind;
 use chrono::Utc;
 use schemars::JsonSchema;
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::auth::Principal;
 use crate::hub::Hub;
-use crate::ops::{Caller, OpError, OpResult, OpSpec};
+use crate::ops::{Caller, Op, OpError, Who};
 
-pub const OP: OpSpec = OpSpec {
-    name: "health",
-    description: "Report this service's health: `ok=true` is the heartbeat its job.toml `[health]` asks for; `ok=false` with a reason stops and restarts it and reports an unhealthy incident.",
-    schema: crate::ops::schema::<Health>,
-    visible: |c| matches!(c.principal, Principal::Run { .. }),
-};
-
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+#[ts(optional_fields)]
 pub struct Health {
     pub ok: bool,
     /// Why it is unhealthy (with `ok = false`).
@@ -30,19 +26,35 @@ pub struct Health {
     pub reason: Option<String>,
 }
 
-pub async fn call(hub: &Hub, caller: &Caller, a: Health) -> OpResult {
-    let Principal::Run { run_id } = &caller.principal else {
-        return Err(OpError::Forbidden("only services report health".into()));
-    };
-    let run = hub.store.run(run_id).await?;
-    if run.kind != RunKind::Service {
-        return Err(OpError::BadRequest(format!("{} is a oneshot job; only services report health", run.runnable)));
+#[derive(Debug, Serialize, TS)]
+#[serde(untagged)]
+pub enum HealthRecorded {
+    /// A heartbeat; `ok` is false if the run had already ended.
+    Heartbeat { ok: bool },
+    /// Unhealthy: the service is being stopped.
+    Stopping { stopping: bool },
+}
+
+impl Op for Health {
+    const NAME: &'static str = "health";
+    const DESCRIPTION: &'static str = "Report this service's health: `ok=true` is the heartbeat its job.toml `[health]` asks for; `ok=false` with a reason stops and restarts it and reports an unhealthy incident.";
+    const WHO: Who = Who::Runs;
+    type Output = HealthRecorded;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<HealthRecorded, OpError> {
+        let Principal::Run { run_id } = &caller.principal else {
+            return Err(OpError::Forbidden("only services report health".into()));
+        };
+        let run = hub.store.run(run_id).await?;
+        if run.kind != RunKind::Service {
+            return Err(OpError::BadRequest(format!("{} is a oneshot job; only services report health", run.runnable)));
+        }
+        if self.ok {
+            let recorded = hub.store.heartbeat(run_id, Utc::now()).await?;
+            return Ok(HealthRecorded::Heartbeat { ok: recorded });
+        }
+        let reason = self.reason.unwrap_or_else(|| "reported unhealthy without a reason".into());
+        crate::services::unhealthy(hub, &run, &format!("the service reported: {reason}")).await?;
+        Ok(HealthRecorded::Stopping { stopping: true })
     }
-    if a.ok {
-        let recorded = hub.store.heartbeat(run_id, Utc::now()).await?;
-        return Ok(json!({ "ok": recorded }));
-    }
-    let reason = a.reason.unwrap_or_else(|| "reported unhealthy without a reason".into());
-    crate::services::unhealthy(hub, &run, &format!("the service reported: {reason}")).await?;
-    Ok(json!({ "stopping": true }))
 }

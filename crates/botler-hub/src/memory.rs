@@ -11,13 +11,13 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use botler_core::defs::AgentDef;
 use botler_runtime::Mount;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -25,7 +25,7 @@ use ts_rs::TS;
 
 use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
-use crate::ops::{Caller, OpError, OpResult, args, to_json};
+use crate::ops::{Caller, Op, OpError, Who};
 
 /// Largest memory file.
 pub const MAX_BYTES: usize = 64 * 1024;
@@ -141,7 +141,12 @@ pub struct MemoryDelete {
 }
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]
-pub struct MemoryPath {
+pub struct MemoryRead {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct MemoryHistory {
     pub path: String,
 }
 
@@ -204,7 +209,7 @@ fn namespace_of(path: &str) -> String {
 /// An agent's namespaces as `(mount name, namespace)`: they are mounted at `/memory/<name>`.
 pub fn namespaces(def: &AgentDef) -> Vec<(&'static str, String)> {
     let mut ns = vec![("self", format!("agents/{}", def.name))];
-    if let Some(home) = &def.spec.home {
+    if let Some(home) = &def.spec.env.home {
         ns.push(("project", format!("projects/{home}")));
     }
     ns.push(("user", "user".into()));
@@ -504,60 +509,98 @@ fn author(caller: &Caller) -> String {
     }
 }
 
-/// Callers that have no memory mount (the user, jobs) see the read ops.
-pub fn without_mount(c: &Caller) -> bool {
-    !matches!(c.principal, Principal::Agent { .. })
+/// The caller's scope and the author name its writes carry.
+async fn scoped(hub: &Hub, caller: &Caller) -> Result<(Scope, String), OpError> {
+    Ok((scope(hub, caller).await?, author(caller)))
 }
 
-/// Callers that may write memory (agents and the user).
-pub fn writers(c: &Caller) -> bool {
-    !matches!(c.principal, Principal::Run { .. })
+impl Op for MemoryWrite {
+    const NAME: &'static str = "memory_write";
+    const DESCRIPTION: &'static str = "Write a memory file (Markdown) in one of your namespaces: `agents/<definition>/...` (mounted at /memory/self), `projects/<home>/...` (/memory/project) or `user/...` (/memory/user). Pass the sha256 of the version you read as `expected_sha256` (`sha256sum`), or omit it to create a new file. If someone changed it meanwhile you get a conflict with the current content: merge and write again.";
+    const WHO: Who = Who::UserAndAgents;
+    type Output = MemoryWritten;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<MemoryWritten, OpError> {
+        let (scope, who) = scoped(hub, caller).await?;
+        permit(&scope.write, "write", &self.path)?;
+        Ok(hub.memory.write(&who, &self.path, &self.content, self.expected_sha256.as_deref()).await?)
+    }
 }
 
-/// Run memory op `name`.
-pub async fn call(hub: &Hub, caller: &Caller, name: &str, input: Value) -> OpResult {
-    let scope = scope(hub, caller).await?;
-    let who = author(caller);
-    let m = &hub.memory;
-    match name {
-        "memory_write" => {
-            let a: MemoryWrite = args(input)?;
-            permit(&scope.write, "write", &a.path)?;
-            to_json(&m.write(&who, &a.path, &a.content, a.expected_sha256.as_deref()).await?)
-        }
-        "memory_append" => {
-            let a: MemoryAppend = args(input)?;
-            permit(&scope.write, "write", &a.path)?;
-            to_json(&m.append(&who, &a.path, &a.text).await?)
-        }
-        "memory_delete" => {
-            let a: MemoryDelete = args(input)?;
-            permit(&scope.write, "delete", &a.path)?;
-            m.delete(&who, &a.path, &a.expected_sha256).await?;
-            Ok(serde_json::json!({ "deleted": a.path }))
-        }
-        "memory_read" => {
-            let a: MemoryPath = args(input)?;
-            permit(&scope.read, "read", &a.path)?;
-            to_json(&m.read(&a.path).await?.ok_or(MemoryError::NotFound(a.path))?)
-        }
-        "memory_list" => {
-            let a: MemoryList = args(input)?;
-            // Any prefix is fine: only files the caller may read are listed.
-            let files: Vec<MemoryEntry> = m
-                .list(a.prefix.as_deref())
-                .await?
-                .into_iter()
-                .filter(|f| permit(&scope.read, "read", &f.path).is_ok())
-                .collect();
-            to_json(&files)
-        }
-        "memory_history" => {
-            let a: MemoryPath = args(input)?;
-            permit(&scope.read, "read", &a.path)?;
-            to_json(&m.history(&a.path).await?)
-        }
-        other => Err(OpError::Unknown(other.into())),
+impl Op for MemoryAppend {
+    const NAME: &'static str = "memory_append";
+    const DESCRIPTION: &'static str =
+        "Append line(s) to a memory file, creating it if needed. No version needed: use it for logs and lists.";
+    const WHO: Who = Who::UserAndAgents;
+    type Output = MemoryWritten;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<MemoryWritten, OpError> {
+        let (scope, who) = scoped(hub, caller).await?;
+        permit(&scope.write, "write", &self.path)?;
+        Ok(hub.memory.append(&who, &self.path, &self.text).await?)
+    }
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct MemoryDeleted {
+    pub deleted: String,
+}
+
+impl Op for MemoryDelete {
+    const NAME: &'static str = "memory_delete";
+    const DESCRIPTION: &'static str =
+        "Delete a memory file; `expected_sha256` is the sha256 of the version you are deleting.";
+    const WHO: Who = Who::UserAndAgents;
+    type Output = MemoryDeleted;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<MemoryDeleted, OpError> {
+        let (scope, who) = scoped(hub, caller).await?;
+        permit(&scope.write, "delete", &self.path)?;
+        hub.memory.delete(&who, &self.path, &self.expected_sha256).await?;
+        Ok(MemoryDeleted { deleted: self.path })
+    }
+}
+
+// Agents read their namespaces through their mounts; the read ops are for callers without them.
+
+impl Op for MemoryRead {
+    const NAME: &'static str = "memory_read";
+    const DESCRIPTION: &'static str = "Read a memory file with its sha256.";
+    const WHO: Who = Who::UserAndRuns;
+    type Output = MemoryFile;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<MemoryFile, OpError> {
+        let scope = scope(hub, caller).await?;
+        permit(&scope.read, "read", &self.path)?;
+        Ok(hub.memory.read(&self.path).await?.ok_or(MemoryError::NotFound(self.path))?)
+    }
+}
+
+impl Op for MemoryList {
+    const NAME: &'static str = "memory_list";
+    const DESCRIPTION: &'static str =
+        "Memory files you may read, optionally under a directory such as `user` or `agents/dev`.";
+    const WHO: Who = Who::UserAndRuns;
+    type Output = Vec<MemoryEntry>;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<Vec<MemoryEntry>, OpError> {
+        let scope = scope(hub, caller).await?;
+        // Any prefix is fine: only files the caller may read are listed.
+        let files = hub.memory.list(self.prefix.as_deref()).await?;
+        Ok(files.into_iter().filter(|f| permit(&scope.read, "read", &f.path).is_ok()).collect())
+    }
+}
+
+impl Op for MemoryHistory {
+    const NAME: &'static str = "memory_history";
+    const DESCRIPTION: &'static str = "The commits that changed a memory file, newest first, with their authors.";
+    const WHO: Who = Who::UserAndRuns;
+    type Output = Vec<MemoryCommit>;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<Vec<MemoryCommit>, OpError> {
+        let scope = scope(hub, caller).await?;
+        permit(&scope.read, "read", &self.path)?;
+        Ok(hub.memory.history(&self.path).await?)
     }
 }
 

@@ -165,8 +165,8 @@ New request kinds count as core features under rule 3 of the test. Everything el
 1. **One op registry.**
    - Each op is defined once with typed input and output (schemars + ts-rs).
    - MCP tools, the HTTP ops endpoint, the Python SDK, TypeScript bindings and the terminating pi tools are all generated from it.
-   - Today `ops.rs` repeats each op in three places and is the main merge hotspot.
-2. **One `Environment` type** shared by agents, jobs and services. Spawn-time overrides are merged in, and anything beyond the definition goes through grant checks. Today the fields are spread over `Agent` and `Job`.
+   - Done: each op is one `ops::Op` impl (its input type) in the module of its domain, listed once in `ops::OPS`; a new op is one impl plus one line there.
+2. **One `Environment` type** shared by agents, jobs and services. Spawn-time overrides are merged in, and anything beyond the definition goes through grant checks. Done: `defs::Environment`, flattened into `agent.toml` and `job.toml`; `environment::container_spec` in the hub builds every container from it, and `Environment::extend` reports what an override adds (not wired to spawns yet).
 3. **One grants table and policy:**
    - It replaces per-definition secret lists as the only mechanism; fixed grants become definition-held grants.
    - It adds `request_access`.

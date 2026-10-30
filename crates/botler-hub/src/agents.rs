@@ -7,25 +7,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use botler_core::catalog;
-use botler_core::defs::{AgentDef, Budget, Network, Workspace};
+use botler_core::defs::{AgentDef, Budget, Environment, Workspace};
 use botler_core::loops::TurnLog;
 use botler_core::payloads::{AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, MessagePayload};
 use botler_core::{Event, Source};
-use botler_runtime::{ContainerSpec, Mount, NetworkMode, PiClient, PiError, PiEvent, PiEventKind, Streaming};
+use botler_runtime::{ContainerSpec, Mount, PiClient, PiError, PiEvent, PiEventKind, Streaming};
 use botler_store::{Delivery, Instance, InstanceState};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::auth::Principal;
+use crate::environment::{self, Runnable};
 use crate::hub::{Hub, HubError, Live, Result, builtin};
 use crate::phase::{AgentStatus, WakePhase, WakeStep};
-use crate::{images, ops, plumbing, prompt};
+use crate::{images, ops, prompt};
 
 /// Attempts before a delivery pi keeps rejecting is dropped.
 const MAX_ATTEMPTS: i64 = 5;
-/// Upper bound only: agent tokens die with their wake (see `Agents::wakes`).
-const AGENT_TOKEN_TTL_HOURS: i64 = 24 * 7;
 /// Every agent's persistent home: `$HOME` and the working directory.
 pub const HOME: &str = "/home/agent";
 /// Where a `workspace = "monorepo"` agent's own clone is mounted, inside its home.
@@ -275,7 +274,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
 
     hub.store.set_instance_state(&instance.name, InstanceState::Starting, None).await?;
     set_phase(hub, &instance.name, WakeStep::BuildingImage).await;
-    let image = images::ensure_agent_image(hub, &def.spec.image, &applied.commit).await?;
+    let image = images::ensure_agent_image(hub, def.spec.env.image(), &applied.commit).await?;
     set_phase(hub, &instance.name, WakeStep::PreparingWorkspace).await;
     let branch = prepare_workspace(hub, instance, def).await?;
     prepare_home(hub, instance, def).await?;
@@ -319,20 +318,20 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
 
 /// The host directory mounted as an instance's home: its own, or the shared one its definition
 /// names. Created on first use and never deleted (sleeping and archiving keep it).
-pub fn home_dir(hub: &Hub, instance: &Instance, def: &AgentDef) -> std::path::PathBuf {
-    match &def.spec.home {
+pub fn home_dir(hub: &Hub, instance: &Instance, env: &Environment) -> std::path::PathBuf {
+    match &env.home {
         Some(name) => hub.paths.shared_home(name),
         None => hub.paths.home(&instance.name),
     }
 }
 
 async fn prepare_home(hub: &Hub, instance: &Instance, def: &AgentDef) -> Result<()> {
-    let home = home_dir(hub, instance, def);
+    let home = home_dir(hub, instance, &def.spec.env);
     tokio::fs::create_dir_all(&home).await?;
     // Before homes, `workspace = "volume"` agents had a private directory at `/workspace`. The
     // home replaces it; its contents move into the home once so nothing is lost.
     let legacy = hub.paths.workspace(&instance.name);
-    if def.spec.workspace != Workspace::Monorepo && legacy.exists() {
+    if def.spec.env.workspace() != Workspace::Monorepo && legacy.exists() {
         let mut to = home.join("workspace");
         if to.exists() {
             to = home.join(format!("workspace-{}", instance.name));
@@ -346,7 +345,7 @@ async fn prepare_home(hub: &Hub, instance: &Instance, def: &AgentDef) -> Result<
 /// Clone the monorepo into a new workspace (never touching an existing one: agents own it).
 async fn prepare_workspace(hub: &Hub, instance: &Instance, def: &AgentDef) -> Result<Option<String>> {
     let dir = hub.paths.workspace(&instance.name);
-    match def.spec.workspace {
+    match def.spec.env.workspace() {
         Workspace::None | Workspace::Volume => Ok(None),
         Workspace::Monorepo => {
             let branch = branch_for(&instance.name);
@@ -403,22 +402,43 @@ async fn container_spec(
         .route_for(&def.spec)
         .ok_or_else(|| HubError::Undefined { kind: "model route", name: def.name.clone() })?;
 
+    let mut command = vec![
+        "pi".to_string(),
+        "--mode".into(),
+        "rpc".into(),
+        "--no-approve".into(),
+        "--session".into(),
+        format!("/botler/sessions/{}", instance.session_file),
+        "--model".into(),
+        format!("{}/{}", route.provider, route.model),
+        "--append-system-prompt".into(),
+        "/botler/agent-dir/botler.md".into(),
+        "-e".into(),
+        "/botler/extension/index.ts".into(),
+    ];
+    if let Some(t) = &route.thinking {
+        command.extend(["--thinking".into(), t.clone()]);
+    }
+    // Agent-authored pi resources come from the applied main commit, never from the agent's own
+    // branch, so an agent cannot load unreviewed code into itself.
+    let pi_res = crate::images::pi_resources(hub, &applied.commit).await?;
+    if let Some(pi_res) = &pi_res {
+        for (flag, sub) in [("--skill", "skills"), ("--prompt-template", "prompts")] {
+            if has_entries(&pi_res.join(sub)) {
+                command.extend([flag.into(), format!("/botler/pi/{sub}")]);
+            }
+        }
+        for ext in list_files(&pi_res.join("extensions"), "ts") {
+            command.extend(["-e".into(), format!("/botler/pi/extensions/{ext}")]);
+        }
+    }
+
     let route_key: Vec<String> = route.api_key_secret.iter().cloned().collect();
-    let principal = Principal::Agent { instance: instance.name.clone(), wake: wake.into() };
-    let p = plumbing::plumbing(
-        hub,
-        &principal,
-        Duration::hours(AGENT_TOKEN_TTL_HOURS),
-        &def.spec.secrets,
-        &route_key,
-        hub.paths.root.join("agent-secrets").join(&instance.name),
-    )
-    .await?;
-    let mut env = p.env;
+    let what = Runnable::Agent { instance, wake };
+    let mut spec = environment::container_spec(hub, &def.spec.env, what, image, command, &route_key).await?;
+    let env = &mut spec.env;
     env.insert("PI_OFFLINE".into(), "1".into());
     env.insert("BOTLER_INSTANCE".into(), instance.name.clone());
-    // Set here as well as in the base image, so images built before homes existed get it too.
-    env.insert("HOME".into(), HOME.into());
     // Lets git in the workspace push to the hub without storing the token in .git/config.
     env.insert("GIT_CONFIG_COUNT".into(), "1".into());
     env.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
@@ -446,13 +466,14 @@ async fn container_spec(
             "headers": { "Authorization": "Bearer ${BOTLER_TOKEN}" },
             "description": "The botler hub: messaging, timers, spawning agents, asking the user, proposing changes, incidents.",
             // The extension's turn-ending tools replace these.
-            "toolExposure": ops::TURN_ENDING.iter().map(|n| (*n, "hidden")).collect::<BTreeMap<_, _>>(),
+            "toolExposure": ops::turn_ending().map(|n| (n, "hidden")).collect::<BTreeMap<_, _>>(),
         }),
     );
     servers.extend(mcp_servers(applied, def));
     // Python tools this agent is granted (`tools` globs); the extension registers them.
-    let tools = applied.defs.tools_for(&def.spec);
+    let tools = applied.defs.tools_for(&def.spec.env);
     // Hub ops that end the turn; the extension registers them with `terminate: true`.
+    let principal = Principal::Agent { instance: instance.name.clone(), wake: wake.into() };
     let caller = ops::Caller { principal, capabilities: def.spec.capabilities.clone(), runnable: None };
     let files: Vec<(&str, String)> = vec![
         ("models.json", to_json(&models)?),
@@ -463,7 +484,7 @@ async fn container_spec(
         ("botler.md", prompt::render(instance, def, branch) + &crate::memory::index_section(hub, def).await?),
         ("AGENTS.md", def.prompt.clone().unwrap_or_default()),
     ];
-    let mut mounts = p.mounts;
+    let mounts = &mut spec.mounts;
     mounts.push(Mount::Tmpfs { dst: "/botler/agent-dir".into() });
     for (name, body) in &files {
         let host = dir.join(name);
@@ -479,91 +500,29 @@ async fn container_spec(
         dst: "/botler/extension".into(),
         read_only: true,
     });
-    // The home first: the monorepo clone and file secrets may be mounted inside it.
-    mounts.insert(0, Mount::Bind { src: home_dir(hub, instance, def), dst: HOME.into(), read_only: false });
-    if def.spec.workspace == Workspace::Monorepo {
-        // Per instance even when the home is shared: each instance works on its own branch.
-        mounts.insert(
-            1,
-            Mount::Bind { src: hub.paths.workspace(&instance.name), dst: MONOREPO.into(), read_only: false },
-        );
-    }
-
     if !tools.is_empty() {
         // Tool code runs from the applied main commit (not the agent's own checkout), like
-        // agent-authored pi resources below.
+        // agent-authored pi resources.
         let export = images::applied_tree(hub, &applied.commit).await?;
         mounts.push(Mount::Bind { src: export, dst: "/botler/applied".into(), read_only: true });
     }
-
-    let mut command = vec![
-        "pi".to_string(),
-        "--mode".into(),
-        "rpc".into(),
-        "--no-approve".into(),
-        "--session".into(),
-        format!("/botler/sessions/{}", instance.session_file),
-        "--model".into(),
-        format!("{}/{}", route.provider, route.model),
-        "--append-system-prompt".into(),
-        "/botler/agent-dir/botler.md".into(),
-        "-e".into(),
-        "/botler/extension/index.ts".into(),
-    ];
-    if let Some(t) = &route.thinking {
-        command.extend(["--thinking".into(), t.clone()]);
+    if let Some(src) = pi_res {
+        mounts.push(Mount::Bind { src, dst: "/botler/pi".into(), read_only: true });
     }
-    // Agent-authored pi resources come from the applied main commit, never from the agent's own
-    // branch, so an agent cannot load unreviewed code into itself.
-    if let Some(pi_res) = crate::images::pi_resources(hub, &applied.commit).await? {
-        mounts.push(Mount::Bind { src: pi_res.clone(), dst: "/botler/pi".into(), read_only: true });
-        for (flag, sub) in [("--skill", "skills"), ("--prompt-template", "prompts")] {
-            if has_entries(&pi_res.join(sub)) {
-                command.extend([flag.into(), format!("/botler/pi/{sub}")]);
-            }
-        }
-        for ext in list_files(&pi_res.join("extensions"), "ts") {
-            command.extend(["-e".into(), format!("/botler/pi/extensions/{ext}")]);
-        }
-    }
-
-    Ok(ContainerSpec {
-        name: container_name(hub, &instance.name),
-        image,
-        command,
-        env,
-        mounts,
-        labels: {
-            let mut l = hub.labels("agent");
-            l.insert("botler.instance".into(), instance.name.clone());
-            l
-        },
-        network: match def.spec.network {
-            Network::None => NetworkMode::None,
-            // Granted services are reached by name on the services network.
-            Network::Default if !def.spec.mcp.is_empty() => {
-                hub.containers.ensure_network(&hub.network()).await?;
-                NetworkMode::Named(hub.network())
-            }
-            Network::Default => NetworkMode::Default,
-        },
-        workdir: Some(HOME.into()),
-        remove_on_exit: true,
-        ..Default::default()
-    })
+    Ok(spec)
 }
 
 /// `mcp.json` entries besides the hub: granted services, reached directly on the services network
 /// (they get no botler token), and stdio servers pi starts inside the container.
 fn mcp_servers(applied: &crate::hub::Applied, def: &AgentDef) -> serde_json::Map<String, serde_json::Value> {
     let mut servers = serde_json::Map::new();
-    for svc in &def.spec.mcp {
+    for svc in &def.spec.env.mcp {
         // Validation guarantees a service with a port.
-        let Some(port) = applied.defs.jobs.get(svc).and_then(|j| j.spec.port) else { continue };
+        let Some(port) = applied.defs.jobs.get(svc).and_then(|j| j.spec.env.port) else { continue };
         let url = format!("http://{svc}:{port}/mcp"); // the service's alias on the network
         servers.insert(svc.clone(), json!({ "url": url }));
     }
-    for (name, s) in &def.spec.mcp_stdio {
+    for (name, s) in &def.spec.env.mcp_stdio {
         let Some((command, args)) = s.command.split_first() else { continue };
         servers.insert(name.clone(), json!({ "command": command, "args": args, "env": s.env }));
     }

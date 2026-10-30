@@ -8,6 +8,7 @@ pub mod bindings;
 pub mod config;
 pub mod control;
 pub mod embedded;
+pub mod environment;
 pub mod failures;
 pub mod health;
 pub mod hub;
@@ -22,7 +23,7 @@ pub mod migrate;
 pub mod notify;
 pub mod ops;
 pub mod phase;
-pub mod plumbing;
+
 pub mod prompt;
 pub mod router;
 pub mod scheduler;
