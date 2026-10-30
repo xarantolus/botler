@@ -33,6 +33,8 @@ import type { Reverted } from "./Reverted";
 import type { Run } from "./Run";
 import type { RunLogs } from "./RunLogs";
 import type { Saved } from "./Saved";
+import type { SearchQuery } from "./SearchQuery";
+import type { SearchResults } from "./SearchResults";
 import type { SecretGroupView } from "./SecretGroupView";
 import type { SecretValue } from "./SecretValue";
 import type { SecretsOutcome } from "./SecretsOutcome";
@@ -52,6 +54,7 @@ export interface Routes {
   submit_secrets: { method: "POST"; path: "/api/v1/dialogs/{id}/secrets"; params: { id: string }; query: never; body: Submission; response: SecretsOutcome };
   events: { method: "GET"; path: "/api/v1/events"; params: Record<string, never>; query: EventsQuery; body: never; response: Array<BotlerEvent> };
   trace: { method: "GET"; path: "/api/v1/events/{id}/trace"; params: { id: string }; query: never; body: never; response: Trace };
+  search: { method: "GET"; path: "/api/v1/search"; params: Record<string, never>; query: SearchQuery; body: never; response: SearchResults };
   instances: { method: "GET"; path: "/api/v1/instances"; params: Record<string, never>; query: never; body: never; response: Array<Instance> };
   session: { method: "GET"; path: "/api/v1/sessions/{instance}"; params: { instance: string }; query: never; body: never; response: SessionView };
   new_chat: { method: "POST"; path: "/api/v1/chats"; params: Record<string, never>; query: never; body: NewChat; response: ChatCreated };
@@ -83,6 +86,7 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   submit_secrets: { method: "POST", path: "/api/v1/dialogs/{id}/secrets" },
   events: { method: "GET", path: "/api/v1/events" },
   trace: { method: "GET", path: "/api/v1/events/{id}/trace" },
+  search: { method: "GET", path: "/api/v1/search" },
   instances: { method: "GET", path: "/api/v1/instances" },
   session: { method: "GET", path: "/api/v1/sessions/{instance}" },
   new_chat: { method: "POST", path: "/api/v1/chats" },

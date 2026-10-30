@@ -51,11 +51,22 @@ pub enum Mount {
     },
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum NetworkMode {
     #[default]
     Default,
     None,
+    /// A user-defined network (see [`Containers::ensure_network`]); containers on it reach each
+    /// other by container name.
+    Named(String),
+}
+
+/// A container port published on the host (`-p <bind>:<host_port>:<port>`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PortMapping {
+    pub bind: String,
+    pub host_port: u16,
+    pub port: u16,
 }
 
 /// Everything needed to start a container.
@@ -68,6 +79,9 @@ pub struct ContainerSpec {
     pub mounts: Vec<Mount>,
     pub labels: BTreeMap<String, String>,
     pub network: NetworkMode,
+    /// Extra names other containers on the (named) network reach this one by.
+    pub network_aliases: Vec<String>,
+    pub ports: Vec<PortMapping>,
     pub workdir: Option<String>,
     pub memory: Option<String>,
     pub remove_on_exit: bool,
@@ -159,6 +173,8 @@ pub trait Containers: Send + Sync {
     /// Stream of lifecycle events for hub-managed containers. Ends if the runtime's event
     /// stream ends; callers restart it.
     async fn events(&self) -> Result<mpsc::Receiver<ContainerEvent>>;
+    /// Create user-defined network `name` unless it exists.
+    async fn ensure_network(&self, name: &str) -> Result<()>;
 }
 
 /// The CLI driver.
@@ -222,8 +238,16 @@ impl Cli {
                 }
             }
         }
-        if spec.network == NetworkMode::None {
-            a.extend(["--network".into(), "none".into()]);
+        match &spec.network {
+            NetworkMode::Default => {}
+            NetworkMode::None => a.extend(["--network".into(), "none".into()]),
+            NetworkMode::Named(n) => a.extend(["--network".into(), n.clone()]),
+        }
+        for alias in &spec.network_aliases {
+            a.extend(["--network-alias".into(), alias.clone()]);
+        }
+        for p in &spec.ports {
+            a.extend(["--publish".into(), format!("{}:{}:{}", p.bind, p.host_port, p.port)]);
         }
         if let Some(w) = &spec.workdir {
             a.extend(["--workdir".into(), w.clone()]);
@@ -558,6 +582,15 @@ impl Containers for Cli {
             }
         });
         Ok(rx)
+    }
+
+    async fn ensure_network(&self, name: &str) -> Result<()> {
+        match run(&self.info.binary, &["network", "create", name]).await {
+            // podman: "network name x already used: network already exists"; docker: "network
+            // with name x already exists".
+            Err(ContainerError::Command { stderr, .. }) if stderr.contains("already exists") => Ok(()),
+            r => r.map(|_| ()),
+        }
     }
 }
 

@@ -45,6 +45,8 @@ tokio-util = "0.7"
 futures = "0.3"
 include_dir = "0.7"
 toml_edit = "0.25"
+# The search index (search.db); same version as botler-store, whose bundled SQLite has FTS5.
+sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio"] }
 
 [dev-dependencies]
 tempfile.workspace = true

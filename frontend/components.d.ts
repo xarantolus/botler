@@ -27,6 +27,7 @@ declare module 'vue' {
     UChatReasoning: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/ChatReasoning.vue')['default']
     UChatShimmer: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/ChatShimmer.vue')['default']
     UChatTool: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/ChatTool.vue')['default']
+    UCheckbox: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/Checkbox.vue')['default']
     UChip: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/Chip.vue')['default']
     UCollapsible: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/Collapsible.vue')['default']
     UColorModeButton: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/color-mode/ColorModeButton.vue')['default']

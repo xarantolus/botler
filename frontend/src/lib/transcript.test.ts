@@ -161,6 +161,8 @@ describe("buildTranscript", () => {
     });
     expect(turn.parts[3]).toMatchObject({ state: "output-error", errorText: "no such file", toolName: "read" });
     expect(turn.parts[4]).toMatchObject({ state: "input-available", toolCallId: "c3" });
+    // Every entry (results shown with their calls included) is found in the message showing it.
+    expect(t.messageOf).toEqual({ u1: "u1", a1: "a1", r1: "a1", r2: "a1", a2: "a1" });
   });
 
   it("shows a result without its call on its own", () => {

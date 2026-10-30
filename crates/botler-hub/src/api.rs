@@ -59,6 +59,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/dialogs/{id}/secrets", post(submit_secrets))
         .route("/api/v1/events", get(events))
         .route("/api/v1/events/{id}/trace", get(trace))
+        .route("/api/v1/search", get(search))
         .route("/api/v1/instances", get(instances))
         .route("/api/v1/sessions/{instance}", get(session))
         .route("/api/v1/chats", post(new_chat))
@@ -218,6 +219,7 @@ async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
         open_dialogs: hub.store.open_dialogs().await?.len(),
         open_incidents: hub.store.open_incidents().await?.len(),
         breakers: hub.store.breakers().await?,
+        services: crate::services::status(&hub).await?,
     }))
 }
 
@@ -373,6 +375,16 @@ async fn events(
     user_only(&p)?;
     let q = EventQuery { kind: q.kind, correlation: q.correlation, since: None, limit: q.limit.unwrap_or(50) };
     Ok(Json(hub.store.events(&q).await?))
+}
+
+async fn search(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Query(q): Query<crate::search::SearchQuery>,
+) -> ApiResult<Json<crate::search::SearchResults>> {
+    let caller = Caller::resolve(&hub, p).await?;
+    let args = q.into_search().map_err(OpError::from)?;
+    Ok(Json(crate::search::search(&hub, &caller, args).await?))
 }
 
 /// Everything an event caused: which chats it reached, runs it started, its thread.

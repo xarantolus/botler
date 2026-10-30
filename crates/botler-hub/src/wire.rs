@@ -21,6 +21,7 @@ use crate::memory::{
 };
 use crate::ops::{GetRunLogs, IdArg, ProposalDetail, RunLogs};
 use crate::phase::WakePhase;
+use crate::search::{SearchQuery, SearchResults};
 use crate::secret_requests::{NewField, Submission};
 use crate::sessions::Item;
 
@@ -55,6 +56,29 @@ pub struct HubStatus {
     pub open_dialogs: usize,
     pub open_incidents: usize,
     pub breakers: Vec<Breaker>,
+    pub services: Vec<ServiceStatus>,
+}
+
+/// A service of the applied definitions and where it can be reached.
+#[derive(Debug, Serialize, TS)]
+pub struct ServiceStatus {
+    pub name: String,
+    pub running: bool,
+    /// Crash-looping: not restarted until its incident is resolved.
+    pub failed: bool,
+    /// Its address for agents granted it, on the services network (`http://<name>:<port>`).
+    pub internal_url: Option<String>,
+    /// Ports published on the host, reachable from outside.
+    pub published: Vec<PublishedPort>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct PublishedPort {
+    pub bind: String,
+    pub host_port: u16,
+    pub port: u16,
+    /// A link to it: the host's name for a `0.0.0.0` bind, else the bound address.
+    pub url: String,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -272,6 +296,7 @@ routes! {
     submit_secrets: POST "/api/v1/dialogs/{id}/secrets", body: Submission => SecretsOutcome;
     events: GET "/api/v1/events", query: EventsQuery => Vec<Event>;
     trace: GET "/api/v1/events/{id}/trace" => Trace;
+    search: GET "/api/v1/search", query: SearchQuery => SearchResults;
     instances: GET "/api/v1/instances" => Vec<Instance>;
     session: GET "/api/v1/sessions/{instance}" => SessionView;
     new_chat: POST "/api/v1/chats", body: NewChat => ChatCreated;

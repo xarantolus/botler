@@ -8,10 +8,12 @@ import RunLogsModal from "../components/common/RunLogsModal.vue";
 import TimeAgo from "../components/common/TimeAgo.vue";
 import ViewPanel from "../components/common/ViewPanel.vue";
 import type { Run } from "../generated";
-import { runDuration, runStatusColor } from "../lib/runs";
+import { portUrl, runDuration, runStatusColor, serviceColor } from "../lib/runs";
 import { notifyError } from "../notify";
+import { state } from "../store";
 
 const route = useRoute();
+const location = window.location;
 const runs = shallowRef<Run[] | null>(null);
 const loading = ref(false);
 const logsOf = ref<string | null>(null);
@@ -51,6 +53,32 @@ const columns: TableColumn<Run>[] = [
   <ViewPanel id="runs" title="Runs" icon="i-lucide-play" body-class="p-0 sm:p-0">
     <template #right>
       <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="Refresh" :loading="loading" @click="load" />
+    </template>
+    <template v-if="state.status?.services.length" #toolbar>
+      <div class="flex w-full flex-wrap items-center gap-2 py-2 text-sm" aria-label="Services">
+        <span class="font-medium text-muted">Services</span>
+        <span
+          v-for="s in state.status.services"
+          :key="s.name"
+          class="inline-flex items-center gap-1 rounded-md border border-default px-1.5 py-0.5"
+        >
+          <UTooltip :text="s.failed ? 'Crash-looping: restarts once its incident is resolved' : s.running ? 'Running' : 'Stopped'">
+            <UChip :color="serviceColor(s)" standalone inset size="sm" />
+          </UTooltip>
+          <span class="font-medium">{{ s.name }}</span>
+          <UButton
+            v-for="p in s.published"
+            :key="p.host_port"
+            :to="portUrl(p, location.hostname)"
+            target="_blank"
+            size="xs"
+            variant="link"
+            trailing-icon="i-lucide-external-link"
+            :label="`:${p.host_port}`"
+            class="px-0.5"
+          />
+        </span>
+      </div>
     </template>
     <UTable :data="runs ?? []" :columns="columns" :loading="loading && !runs" sticky class="flex-1" :ui="{ td: 'py-2.5' }">
       <template #runnable-cell="{ row }"><span class="font-medium text-highlighted">{{ row.original.runnable }}</span></template>

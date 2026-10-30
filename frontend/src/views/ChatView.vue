@@ -102,10 +102,12 @@ async function toBottom(force = false) {
   if (el) el.scrollTop = el.scrollHeight;
   atBottom = true;
 }
+/** A link points at a message further up: `?delivery=` (an event trace) or `?entry=` (a search hit). */
+const linked = computed(() => typeof route.query.delivery === "string" || typeof route.query.entry === "string");
 // New messages keep the view at the end when it was there.
 watch(
   () => transcript.value?.messages.length,
-  () => typeof route.query.delivery !== "string" && void toBottom(),
+  () => !linked.value && void toBottom(),
 );
 watch(name, () => (atBottom = true));
 
@@ -123,12 +125,16 @@ async function reveal(selector: string): Promise<boolean> {
   return true;
 }
 
-// `?delivery=` (from an event's trace): scroll to that delivery once it is loaded.
+// Scroll to the linked message once it is loaded.
 watch(
-  () => [route.query.delivery, transcript.value?.messages.length] as const,
-  async ([delivery]) => {
-    if (typeof delivery !== "string" || !transcript.value) return;
-    if (await reveal(`[data-delivery="${CSS.escape(delivery)}"]`)) void router.replace({ query: {} });
+  () => [route.query.delivery, route.query.entry, transcript.value?.messages.length] as const,
+  async ([delivery, entry]) => {
+    const t = transcript.value;
+    if (!t) return;
+    let selector: string | null = null;
+    if (typeof delivery === "string") selector = `[data-delivery="${CSS.escape(delivery)}"]`;
+    else if (typeof entry === "string" && t.messageOf[entry]) selector = `[data-message="${CSS.escape(t.messageOf[entry])}"]`;
+    if (selector && (await reveal(selector))) void router.replace({ query: {} });
   },
   { immediate: true },
 );
@@ -205,7 +211,7 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
             :messages="transcript.messages"
             :status="transcript.status"
             :queued-note="queuedNote"
-            :start-at-end="typeof route.query.delivery !== 'string'"
+            :start-at-end="!linked"
           />
         </template>
         <div v-if="name" class="sticky bottom-0 z-10 mt-auto bg-default pb-4 pt-2 sm:pb-6">

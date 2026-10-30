@@ -1,6 +1,16 @@
 // Colors and labels for statuses of runs, proposals, incidents, dialogs and event provenance.
 
-import type { DialogStatus, IncidentStatus, ProposalStatus, Run, RunStatus } from "../generated";
+import type { DialogStatus, IncidentStatus, ProposalStatus, PublishedPort, Run, RunStatus, ServiceStatus } from "../generated";
+
+export function serviceColor(s: Pick<ServiceStatus, "running" | "failed">): Color {
+  return s.failed ? "error" : s.running ? "success" : "neutral";
+}
+
+/** A published service port as a link: through the name this page was reached by (`hostname`),
+ * when the service listens on every interface. */
+export function portUrl(p: PublishedPort, hostname: string): string {
+  return p.bind === "0.0.0.0" || p.bind === "::" ? `http://${hostname}:${p.host_port}` : p.url;
+}
 
 export type Color = "neutral" | "primary" | "info" | "success" | "warning" | "error";
 

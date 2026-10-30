@@ -1,11 +1,10 @@
-//! Oneshot jobs: deterministic containers started by triggers, timers, agents or replays.
-
-use std::collections::BTreeMap;
+//! Job runs: oneshot containers started by triggers, timers, agents or replays, and the shared
+//! launch and exit handling that services (`services.rs`) use too.
 
 use botler_core::defs::{Lifetime, Overlap};
 use botler_core::payloads::{BuiltinPayload, RunnableFinishedPayload};
 use botler_core::{Event, Source};
-use botler_runtime::{ContainerSpec, Mount, NetworkMode};
+use botler_runtime::{ContainerSpec, Mount, NetworkMode, PortMapping};
 use botler_store::{NewRun, Run, RunKind, RunStatus};
 use chrono::{Duration, Utc};
 use serde_json::json;
@@ -13,14 +12,22 @@ use serde_json::json;
 use crate::auth::Principal;
 use crate::failures::{self, Failure};
 use crate::hub::{Hub, HubError, Result};
-use crate::{images, plumbing};
+use crate::{images, plumbing, services};
 
 pub const ROLE_LABEL: &str = "botler.role";
 pub const RUN_LABEL: &str = "botler.run";
 pub const RUNNABLE_LABEL: &str = "botler.runnable";
 
-pub fn container_name(run_id: &str) -> String {
-    format!("botler-run-{run_id}")
+pub fn container_name(hub: &Hub, run_id: &str) -> String {
+    format!("botler-{}-run-{run_id}", hub.id)
+}
+
+/// The container of `run`: one per run for oneshots, one stable name per service.
+pub fn run_container(hub: &Hub, run: &Run) -> String {
+    match run.kind {
+        RunKind::Service => services::container_name(hub, &run.runnable),
+        _ => container_name(hub, &run.id),
+    }
 }
 
 /// Start a run of oneshot job `job`. Returns the run id, or `None` if skipped by its overlap
@@ -69,7 +76,9 @@ pub async fn launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<()> {
     }
 }
 
-async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<()> {
+/// Start the container for `run` of any kind: image, secrets, SDK, token and event file, plus a
+/// service's network, stable name and published ports.
+pub async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<()> {
     let applied = hub.applied().await;
     let def = applied
         .defs
@@ -78,12 +87,18 @@ async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<()> {
         .ok_or_else(|| HubError::Undefined { kind: "job", name: run.runnable.clone() })?;
     let commit = run.commit_id.clone().unwrap_or_else(|| applied.commit.clone());
     let image = images::ensure_job_image(hub, &run.runnable, &commit).await?;
-    let timeout = def.spec.timeout.unwrap_or(applied.defs.instance.defaults.job_timeout);
+    let service = def.spec.lifetime == Lifetime::Service;
+    // A service's token lives as long as its run: `Caller::resolve` refuses it once the run ends.
+    let ttl = if service {
+        Duration::days(3650)
+    } else {
+        def.spec.timeout.unwrap_or(applied.defs.instance.defaults.job_timeout).as_chrono() + Duration::minutes(5)
+    };
     let run_dir = hub.paths.root.join("runs").join(&run.id);
     let p = plumbing::plumbing(
         hub,
         &Principal::Run { run_id: run.id.clone() },
-        timeout.as_chrono() + Duration::minutes(5),
+        ttl,
         &def.spec.secrets,
         &[],
         run_dir.join("secrets"),
@@ -103,24 +118,58 @@ async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<()> {
     if def.spec.volume {
         mounts.push(Mount::Volume { name: format!("botler-job-{}", run.runnable), dst: "/data".into() });
     }
+    let name = run_container(hub, run);
+    let ports: Vec<PortMapping> = def
+        .spec
+        .publish
+        .iter()
+        .map(|p| PortMapping { bind: p.bind.clone(), host_port: p.host_port, port: p.port })
+        .collect();
+    if let Some(p) = ports.iter().find(|p| p.host_port == hub.config.listen.port()) {
+        return Err(HubError::Forbidden(format!("host port {} is the hub's own port; publish another", p.host_port)));
+    }
     let spec = ContainerSpec {
-        name: container_name(&run.id),
+        name: name.clone(),
         image,
         command: def.spec.command.clone(),
         env,
         mounts,
-        labels: BTreeMap::from([
-            (ROLE_LABEL.into(), "job".into()),
-            (RUN_LABEL.into(), run.id.clone()),
-            (RUNNABLE_LABEL.into(), run.runnable.clone()),
-        ]),
-        network: match def.spec.network {
-            botler_core::defs::Network::Default => NetworkMode::Default,
-            botler_core::defs::Network::None => NetworkMode::None,
+        labels: {
+            let mut l = hub.labels(if service { "service" } else { "job" });
+            l.insert(RUN_LABEL.into(), run.id.clone());
+            l.insert(RUNNABLE_LABEL.into(), run.runnable.clone());
+            l
         },
+        network: match def.spec.network {
+            botler_core::defs::Network::None => NetworkMode::None,
+            botler_core::defs::Network::Default if service => NetworkMode::Named(hub.network()),
+            botler_core::defs::Network::Default => NetworkMode::Default,
+        },
+        // Agents reach a service by its plain name on the network.
+        network_aliases: if service { vec![run.runnable.clone()] } else { vec![] },
+        ports,
         ..Default::default()
     };
-    let cid = hub.containers.run_detached(&spec).await?;
+    if service {
+        if let NetworkMode::Named(n) = &spec.network {
+            hub.containers.ensure_network(n).await?;
+        }
+        // The name is stable: clear the leftover of a run the hub could not finalize.
+        if let Some(c) = hub.containers.inspect(&name).await?
+            && !c.running
+        {
+            hub.containers.remove(&name).await?;
+        }
+    }
+    let cid = hub.containers.run_detached(&spec).await.map_err(|e| match &e {
+        botler_runtime::ContainerError::Command { stderr, .. }
+            if !spec.ports.is_empty() && stderr.contains("address already in use") =>
+        {
+            let ports: Vec<String> = spec.ports.iter().map(|p| format!("{}:{}", p.bind, p.host_port)).collect();
+            HubError::PortInUse { ports: ports.join(", "), source: e }
+        }
+        _ => e.into(),
+    })?;
     hub.store.start_run(&run.id, &cid).await?;
     tracing::info!(run = %run.id, job = %run.runnable, "job started");
     Ok(())
@@ -153,7 +202,7 @@ async fn on_timeout(hub: &Hub, run_id: &str) -> Result<()> {
         return Ok(()); // finished normally first
     }
     let run = hub.store.run(run_id).await?;
-    let name = container_name(run_id);
+    let name = run_container(hub, &run);
     let logs = collect_logs(hub, &name, run_id).await;
     match hub.containers.stop(&name, 10).await {
         Ok(()) | Err(botler_runtime::ContainerError::NotFound(_)) => {}
@@ -167,8 +216,21 @@ async fn on_timeout(hub: &Hub, run_id: &str) -> Result<()> {
 /// A job container exited (from the runtime event stream or boot reconciliation).
 pub async fn on_exit(hub: &Hub, run_id: &str, exit_code: Option<i64>, oom: bool) -> Result<()> {
     let run = hub.store.run(run_id).await?;
-    let name = container_name(run_id);
+    let name = run_container(hub, &run);
     let logs = collect_logs(hub, &name, run_id).await;
+    if run.kind == RunKind::Service {
+        // A service never ends by itself on purpose: every exit is a failure. Stops the hub makes
+        // (pause, change, removal) finish the run first, so they are not reported here.
+        let reason = if oom { "out of memory".to_string() } else { format!("service exited (code {exit_code:?})") };
+        let transitioned = hub.store.finish_run(run_id, RunStatus::Failed, exit_code, Some(&reason)).await?;
+        finalize_container(hub, &run).await;
+        if transitioned {
+            let kind = if oom { "oom" } else { "exit" };
+            failures::report(hub, failure(&run, kind, exit_code, failures::tail(&logs, 40))).await?;
+        }
+        hub.reconcile_notify.notify_one();
+        return Ok(());
+    }
     let ok = exit_code == Some(0) && !oom;
     let status = if ok { RunStatus::Succeeded } else { RunStatus::Failed };
     let reason = (!ok).then(|| if oom { "out of memory".to_string() } else { format!("exit code {exit_code:?}") });
@@ -193,7 +255,7 @@ pub async fn on_exit(hub: &Hub, run_id: &str, exit_code: Option<i64>, oom: bool)
     start_queued(hub, &run.runnable).await
 }
 
-fn failure(run: &Run, kind: &'static str, exit_code: Option<i64>, logs_tail: String) -> Failure {
+pub(crate) fn failure(run: &Run, kind: &'static str, exit_code: Option<i64>, logs_tail: String) -> Failure {
     Failure {
         runnable: run.runnable.clone(),
         kind,
@@ -217,7 +279,7 @@ async fn start_queued(hub: &Hub, job: &str) -> Result<()> {
 }
 
 /// Save the container's output to the run log and return it. Missing logs are not fatal.
-async fn collect_logs(hub: &Hub, container: &str, run_id: &str) -> String {
+pub(crate) async fn collect_logs(hub: &Hub, container: &str, run_id: &str) -> String {
     let logs = match hub.containers.logs(container, 5000).await {
         Ok(l) => l,
         Err(e) => {
@@ -232,8 +294,8 @@ async fn collect_logs(hub: &Hub, container: &str, run_id: &str) -> String {
     logs
 }
 
-async fn finalize_container(hub: &Hub, run: &Run) {
-    let name = container_name(&run.id);
+pub(crate) async fn finalize_container(hub: &Hub, run: &Run) {
+    let name = run_container(hub, run);
     if let Err(e) = hub.containers.remove(&name).await {
         tracing::error!(container = %name, error = %e, "could not remove finished container");
     }

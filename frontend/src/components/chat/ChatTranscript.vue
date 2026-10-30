@@ -40,6 +40,7 @@ function sideProps(m: TranscriptMessage) {
         :ref="(el) => registerMessageRef(m.id, el as never)"
         v-bind="{ ...m, ...sideProps(m) }"
         :data-delivery="m.metadata?.delivery ?? undefined"
+        :data-message="m.id"
         :data-role="m.role"
         :class="m.metadata?.queued && 'opacity-70'"
         :ui="{ container: m.role === 'user' ? 'max-w-[88%] sm:max-w-[75%]' : m.role === 'system' ? 'pb-2' : undefined }"

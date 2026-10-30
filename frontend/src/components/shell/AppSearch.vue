@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The command palette (Cmd/Ctrl+K): jump to a chat, a request or a section, or act.
 import type { CommandPaletteGroup, CommandPaletteItem } from "@nuxt/ui";
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { chatTitle } from "../../lib/events";
 import { sections } from "../../navigation";
@@ -9,6 +9,7 @@ import { shell } from "../../shell";
 import { frontDoorName, logout, state, waitingByInstance } from "../../store";
 
 const router = useRouter();
+const searchTerm = ref("");
 
 const groups = computed((): CommandPaletteGroup<CommandPaletteItem>[] => {
   const door = frontDoorName.value;
@@ -30,7 +31,25 @@ const groups = computed((): CommandPaletteGroup<CommandPaletteItem>[] => {
     icon: d.kind === "approval" ? "i-lucide-shield-question" : d.kind === "credentials" ? "i-lucide-key-round" : "i-lucide-message-circle-question",
     to: `/chat/${encodeURIComponent(d.instance)}`,
   }));
+  const term = searchTerm.value.trim();
   return [
+    // Typing offers the full-text search (conversations, memory, events, the monorepo) first.
+    ...(term
+      ? [
+          {
+            id: "everything",
+            label: "Search everything",
+            ignoreFilter: true,
+            items: [
+              {
+                label: `Search everything for “${term}”`,
+                icon: "i-lucide-text-search",
+                onSelect: () => void router.push({ name: "search", query: { q: term } }),
+              },
+            ],
+          },
+        ]
+      : []),
     {
       id: "actions",
       label: "Actions",
@@ -55,5 +74,5 @@ const groups = computed((): CommandPaletteGroup<CommandPaletteItem>[] => {
 </script>
 
 <template>
-  <UDashboardSearch :groups="groups" placeholder="Search chats, requests and sections…" />
+  <UDashboardSearch v-model:search-term="searchTerm" :groups="groups" placeholder="Search chats, requests, sections, or everything…" />
 </template>

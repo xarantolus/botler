@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::hub::{Hub, Result};
-use crate::{agents, api, images, router, scheduler, supervisor};
+use crate::{agents, api, images, router, scheduler, services, supervisor};
 
 async fn route_loop(hub: Arc<Hub>) {
     loop {
@@ -22,6 +22,8 @@ async fn route_loop(hub: Arc<Hub>) {
 /// the monorepo and the container runtime before work starts.
 pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()> + Send + 'static) -> Result<()> {
     crate::assets::unpack(&hub.paths)?;
+    // Services and the agents granted them meet on this network (created once, kept).
+    hub.containers.ensure_network(&hub.network()).await?;
     agents::reconcile_on_boot(&hub).await?;
     // Interrupted proposals are collected first: the template upgrade may open a new one (its
     // pipeline already runs) or supersede an interrupted one (which must not restart).
@@ -42,8 +44,10 @@ pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()
     tokio::spawn(route_loop(hub.clone()));
     tokio::spawn(scheduler::run(hub.clone()));
     tokio::spawn(supervisor::run(hub.clone()));
+    tokio::spawn(services::run(hub.clone()));
     tokio::spawn(images::collect_garbage_loop(hub.clone()));
     tokio::spawn(agents::run(hub.clone()));
+    tokio::spawn(crate::search::run(hub.clone()));
 
     let listener = tokio::net::TcpListener::bind(hub.config.listen).await?;
     tracing::info!(addr = %hub.config.listen, commit = %hub.applied().await.commit, "botler hub listening");

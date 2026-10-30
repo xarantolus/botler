@@ -9,6 +9,7 @@ import MemoryView from "./views/MemoryView.vue";
 import ProposalsView from "./views/ProposalsView.vue";
 import RequestsView from "./views/RequestsView.vue";
 import RunsView from "./views/RunsView.vue";
+import SearchView from "./views/SearchView.vue";
 import SecretsView from "./views/SecretsView.vue";
 import "./style.css";
 
@@ -23,6 +24,7 @@ const router = createRouter({
     { path: "/incidents", name: "incidents", component: IncidentsView },
     { path: "/proposals", name: "proposals", component: ProposalsView },
     { path: "/secrets", name: "secrets", component: SecretsView },
+    { path: "/search", name: "search", component: SearchView },
     { path: "/memory", name: "memory", component: MemoryView },
     { path: "/:rest(.*)*", redirect: "/" },
   ],

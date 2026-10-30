@@ -239,6 +239,17 @@ async fn status(paths: Paths) -> anyhow::Result<()> {
     for inc in hub.store.open_incidents().await? {
         println!("incident   {} {} x{}", inc.runnable, inc.kind, inc.count);
     }
+    for s in botler_hub::services::status(&hub).await? {
+        let urls: Vec<&str> = s.published.iter().map(|p| p.url.as_str()).collect();
+        let state = if s.failed {
+            "failed"
+        } else if s.running {
+            "running"
+        } else {
+            "stopped"
+        };
+        println!("service    {:<28} {state:<9} {}", s.name, urls.join(" "));
+    }
     for b in hub.store.breakers().await? {
         println!("breaker    {} ({}): {}", b.subject, b.kind, b.reason);
     }
@@ -267,7 +278,7 @@ async fn template_status(paths: Paths) -> anyhow::Result<()> {
 }
 
 /// Data directory entries that are facts. Everything else (exports, worktrees, logs, agent-dirs,
-/// assets, images) is derived and rebuilt by the hub.
+/// assets, images, the search index `search.db`) is derived and rebuilt by the hub.
 const BACKUP_DIRS: &[&str] = &["repo.git", "memory", "sessions", "workspaces", "homes", "shared-homes", "uploads"];
 
 async fn backup(paths: &Paths, dest: &std::path::Path, with_key: bool) -> anyhow::Result<()> {

@@ -44,6 +44,8 @@ pub struct Run {
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// Services: the last `health` heartbeat.
+    pub heartbeat_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +73,7 @@ fn row(r: &SqliteRow) -> Result<Run> {
         started_at: parse_opt_ts(T, r.get("started_at"))?,
         finished_at: parse_opt_ts(T, r.get("finished_at"))?,
         created_at: parse_ts(T, r.get("created_at"))?,
+        heartbeat_at: parse_opt_ts(T, r.get("heartbeat_at"))?,
     })
 }
 
@@ -106,6 +109,16 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Record a service's health heartbeat. Returns false if the run is no longer running.
+    pub async fn heartbeat(&self, id: &str, at: DateTime<Utc>) -> Result<bool> {
+        let r = sqlx::query("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND status = 'running'")
+            .bind(ts(at))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() == 1)
     }
 
     /// Move a queued/running run to a terminal status. Returns false if it was already terminal

@@ -21,6 +21,7 @@ export const sections = computed((): Section[] => [
     count: state.dialogs?.open.length ?? 0,
     countColor: "warning",
   },
+  { name: "search", label: "Search", icon: "i-lucide-text-search" },
   { name: "events", label: "Events", icon: "i-lucide-activity" },
   { name: "runs", label: "Runs", icon: "i-lucide-play" },
   {

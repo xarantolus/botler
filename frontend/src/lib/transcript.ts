@@ -81,6 +81,8 @@ export interface Transcript {
   status: ChatStatus;
   /** Tool results linking a dialog that is not in `dialogs` (older than the recent list). */
   unresolvedLinks: number;
+  /** The message showing each session entry (a search hit links an entry id). */
+  messageOf: Record<string, string>;
 }
 
 type ToolResult = Extract<SessionItem, { kind: "tool_result" }>;
@@ -119,6 +121,7 @@ export function buildTranscript(input: TranscriptInput): Transcript {
 
   const messages: TranscriptMessage[] = [];
   let unresolvedLinks = 0;
+  const messageOf: Record<string, string> = {};
   /** The agent turn being collected (consecutive assistant items and their results). */
   let turn: TranscriptMessage | null = null;
 
@@ -179,6 +182,7 @@ export function buildTranscript(input: TranscriptInput): Transcript {
         if (it.text.trim()) m.parts.push({ type: "text", text: it.text, state: "done" });
         it.tool_calls.forEach((c, i) => {
           const r = c.id ? (results.get(c.id) ?? null) : null;
+          if (r) messageOf[r.id] = m.id;
           m.parts.push(...resultParts(c, r, `${it.id}:${i}`));
         });
         if (it.error) m.parts.push({ type: "data-error", data: { text: it.error } });
@@ -221,6 +225,8 @@ export function buildTranscript(input: TranscriptInput): Transcript {
         });
         break;
     }
+    // Every kind adds to the last message, except a result shown with its call (mapped above).
+    if (!paired.has(it.id)) messageOf[it.id] = messages.at(-1)!.id;
   }
 
   // The live tail: continue the running turn, or start one.
@@ -250,7 +256,7 @@ export function buildTranscript(input: TranscriptInput): Transcript {
   });
 
   const status: ChatStatus = streaming ? "streaming" : input.busy ? "submitted" : "ready";
-  return { messages, status, unresolvedLinks };
+  return { messages, status, unresolvedLinks, messageOf };
 }
 
 /** Whether a tool call is still running (no result yet, while the agent works). */
