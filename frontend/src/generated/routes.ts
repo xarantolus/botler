@@ -9,6 +9,7 @@ import type { BreakerCleared } from "./BreakerCleared";
 import type { Cancelled } from "./Cancelled";
 import type { ChatCreated } from "./ChatCreated";
 import type { ChatRestored } from "./ChatRestored";
+import type { ChatsStopped } from "./ChatsStopped";
 import type { ClearBreaker } from "./ClearBreaker";
 import type { ClearChatCaches } from "./ClearChatCaches";
 import type { CollectGarbage } from "./CollectGarbage";
@@ -58,6 +59,7 @@ import type { SecretValue } from "./SecretValue";
 import type { SecretsOutcome } from "./SecretsOutcome";
 import type { ServiceRestarted } from "./ServiceRestarted";
 import type { SessionView } from "./SessionView";
+import type { StopChat } from "./StopChat";
 import type { StorageOverview } from "./StorageOverview";
 import type { StorageUsage } from "./StorageUsage";
 import type { Submission } from "./Submission";
@@ -113,6 +115,7 @@ export interface Routes {
   unsubscribe: { method: "POST"; path: "/api/v1/ops/unsubscribe"; params: Record<string, never>; query: never; body: Unsubscribe; response: Unsubscribed };
   run_job: { method: "POST"; path: "/api/v1/ops/run_job"; params: Record<string, never>; query: never; body: RunJob; response: JobStarted };
   restart_service: { method: "POST"; path: "/api/v1/ops/restart_service"; params: Record<string, never>; query: never; body: RestartService; response: ServiceRestarted };
+  stop_chat: { method: "POST"; path: "/api/v1/ops/stop_chat"; params: Record<string, never>; query: never; body: StopChat; response: ChatsStopped };
 }
 
 export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path: Routes[K]["path"] } } = {
@@ -159,4 +162,5 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   unsubscribe: { method: "POST", path: "/api/v1/ops/unsubscribe" },
   run_job: { method: "POST", path: "/api/v1/ops/run_job" },
   restart_service: { method: "POST", path: "/api/v1/ops/restart_service" },
+  stop_chat: { method: "POST", path: "/api/v1/ops/stop_chat" },
 };
