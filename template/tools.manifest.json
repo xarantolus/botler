@@ -62,9 +62,10 @@
   },
   {
     "approval": false,
-    "description": "Search the web with DuckDuckGo. Returns results as {title, url, snippet}; use web.fetch to read\na result. `region` is a DuckDuckGo region code such as \"us-en\", \"uk-en\" or \"de-de\" (default: none).\nThis tool scrapes DuckDuckGo and is maintained in the monorepo (tools/web/); if it breaks, fix it.",
+    "description": "Search the web. Returns {backend, cost_usd, note, results: [{title, url, snippet}]}; use web.fetch\nto read a result. `backend`: \"openrouter\" (OpenRouter's web search, about $0.001 per search),\n\"duckduckgo\" (free scraping, often blocked by its bot check), or \"auto\" (default): OpenRouter, and\nDuckDuckGo if that fails; `note` says why a backend was skipped. `region` is a DuckDuckGo region\ncode such as \"us-en\" or \"de-de\"; OpenRouter ignores it. Maintained in the monorepo (tools/web/);\nif it breaks, fix it.",
     "effects": [
-      "network"
+      "network",
+      "secret:OPENROUTER_API_KEY"
     ],
     "function": "search",
     "module": "web.search",
@@ -72,6 +73,16 @@
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "backend": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "openrouter",
+            "duckduckgo"
+          ],
+          "title": "Backend",
+          "type": "string"
+        },
         "max_results": {
           "default": 10,
           "maximum": 30,
