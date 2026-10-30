@@ -139,7 +139,7 @@ async fn spawn_grants_follow_the_chat_through_wakes_revoke_and_archive() {
 
     // Every wake gets it again.
     sleep_all(&e).await;
-    assert!(e.hub.agents.get(&dev).await.is_none());
+    assert!(e.exited(&dev).await);
     message(&e, &dev, "again").await;
     run(&e).await;
     assert_eq!(container_env(&e, &dev)["NAS_PASS"], "hunter2", "and on the next");

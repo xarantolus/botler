@@ -102,6 +102,18 @@ impl Env {
         self.hub.apply(applied).await.unwrap();
     }
 
+    /// Whether `instance`'s container exits within a few seconds. Stopping is asynchronous: the
+    /// agent stays live until the hub has seen the exit.
+    pub async fn exited(&self, instance: &str) -> bool {
+        for _ in 0..200 {
+            if self.hub.agents.get(instance).await.is_none() {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        false
+    }
+
     pub async fn route(&self) {
         while botler_hub::router::route_pending(&self.hub).await.unwrap() > 0 {}
     }
