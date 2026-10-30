@@ -145,6 +145,7 @@ pub mod kinds {
     pub const ACCESS_CHANGED: &str = "access.changed";
     pub const CHAT_RESTORED: &str = "chat.restored";
     pub const ENVIRONMENT_UPDATED: &str = "environment.updated";
+    pub const CHAT_STOPPED: &str = "chat.stopped";
 }
 
 #[cfg(test)]

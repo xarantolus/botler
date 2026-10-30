@@ -12,6 +12,8 @@ text_enum!(DeliveryStatus {
     Dropped = "dropped",
     /// Waiting for the user to clear the breaker named in `note`.
     Held = "held",
+    /// Not delivered because the user stopped the chat (`note` says why).
+    Cancelled = "cancelled",
 });
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
@@ -166,6 +168,18 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(r.rows_affected() == 1)
+    }
+
+    /// Cancel everything queued for `instance` (pending and held). Returns how many.
+    pub async fn cancel_deliveries(&self, instance: &str, note: &str) -> Result<u64> {
+        let r = sqlx::query(
+            "UPDATE deliveries SET status = 'cancelled', note = ? WHERE instance = ? AND status IN ('pending', 'held')",
+        )
+        .bind(note)
+        .bind(instance)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
     }
 
     pub async fn drop_delivery(&self, id: &str, note: &str) -> Result<()> {
