@@ -42,7 +42,7 @@ function send(msg: ClientMessage) {
 /** Follow one chat's pi events (or none). */
 export function watch(instance: string | null) {
   watched = instance;
-  state.streaming = "";
+  state.streaming = { text: "", thinking: "" };
   send({ type: "watch", instance });
 }
 
@@ -81,10 +81,12 @@ function onPi(instance: string, ev: Record<string, unknown>) {
   const type = ev.type;
   if (type === "message_update") {
     const delta = ev.assistantMessageEvent as { type?: unknown; delta?: unknown } | undefined;
-    if (delta?.type === "text_delta" && typeof delta.delta === "string") state.streaming += delta.delta;
+    if (typeof delta?.delta !== "string") return;
+    if (delta.type === "text_delta") state.streaming.text += delta.delta;
+    else if (delta.type === "thinking_delta") state.streaming.thinking += delta.delta;
     return;
   }
-  if (type === "message_end") state.streaming = "";
+  if (type === "message_end") state.streaming = { text: "", thinking: "" };
   if (
     type === "message_end" ||
     type === "agent_start" ||

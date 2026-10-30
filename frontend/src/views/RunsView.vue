@@ -1,21 +1,20 @@
 <script setup lang="ts">
-import { NButton, NDataTable, NTag, type DataTableColumns } from "naive-ui";
-import { h, onMounted, ref, watch, shallowRef } from "vue";
+// Runs of jobs, services and agents, with their logs.
+import type { TableColumn } from "@nuxt/ui";
+import { onMounted, ref, shallowRef, watch } from "vue";
 import { useRoute } from "vue-router";
 import { call } from "../api/client";
-import RunLogs from "../components/RunLogs.vue";
-import type { PublishedPort, Run, RunStatus } from "../generated";
-import { ago } from "../lib/time";
+import RunLogsModal from "../components/common/RunLogsModal.vue";
+import TimeAgo from "../components/common/TimeAgo.vue";
+import ViewPanel from "../components/common/ViewPanel.vue";
+import type { Run } from "../generated";
+import { portUrl, runDuration, runStatusColor, serviceColor } from "../lib/runs";
 import { notifyError } from "../notify";
 import { state } from "../store";
 
-/** A published service port as a link: through the name this page was reached by, when the
- * service listens on every interface. */
-const portUrl = (p: PublishedPort) =>
-  p.bind === "0.0.0.0" || p.bind === "::" ? `http://${location.hostname}:${p.host_port}` : p.url;
-
 const route = useRoute();
-const runs = shallowRef<Run[]>([]);
+const location = window.location;
+const runs = shallowRef<Run[] | null>(null);
 const loading = ref(false);
 const logsOf = ref<string | null>(null);
 
@@ -38,62 +37,65 @@ watch(
   { immediate: true },
 );
 
-const statusType = (s: RunStatus) =>
-  s === "succeeded" ? "success" : s === "running" || s === "queued" ? "info" : s === "cancelled" ? "default" : "error";
-
-function duration(r: Run): string {
-  if (!r.started_at) return "";
-  const end = r.finished_at ? new Date(r.finished_at).getTime() : Date.now();
-  const s = Math.round((end - new Date(r.started_at).getTime()) / 1000);
-  return s < 120 ? `${s}s` : `${Math.round(s / 60)} min`;
-}
-
-const columns: DataTableColumns<Run> = [
-  { title: "Runnable", key: "runnable", ellipsis: { tooltip: true } },
-  { title: "Kind", key: "kind", width: 90 },
-  {
-    title: "Status",
-    key: "status",
-    width: 110,
-    render: (r) => h(NTag, { size: "small", bordered: false, type: statusType(r.status) }, () => r.status),
-  },
-  { title: "Exit", key: "exit_code", width: 60, render: (r) => (r.exit_code === null ? "" : String(r.exit_code)) },
-  { title: "Took", key: "took", width: 80, render: duration },
-  { title: "Started", key: "created_at", width: 110, render: (r) => h("span", { title: r.created_at }, ago(r.created_at)) },
-  { title: "Reason", key: "reason", ellipsis: { tooltip: true }, render: (r) => r.reason ?? "" },
-  {
-    title: "",
-    key: "logs",
-    width: 70,
-    render: (r) => h(NButton, { size: "tiny", onClick: () => (logsOf.value = r.id) }, () => "Logs"),
-  },
+const columns: TableColumn<Run>[] = [
+  { accessorKey: "runnable", header: "Runnable" },
+  { accessorKey: "kind", header: "Kind" },
+  { accessorKey: "status", header: "Status" },
+  { accessorKey: "exit_code", header: "Exit" },
+  { id: "took", header: "Took" },
+  { accessorKey: "created_at", header: "Started" },
+  { accessorKey: "reason", header: "Reason" },
+  { id: "logs", header: "" },
 ];
 </script>
 
 <template>
-  <div style="height: 100%; padding: 8px 12px; display: flex; flex-direction: column; min-height: 0; gap: 8px">
-    <div><NButton size="small" :loading="loading" @click="load">Refresh</NButton></div>
-    <div v-if="state.status?.services.length" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center">
-      <span>Services:</span>
-      <span v-for="s in state.status.services" :key="s.name">
-        <NTag size="small" :bordered="false" :type="s.failed ? 'error' : s.running ? 'success' : 'default'">
-          {{ s.name }}
-        </NTag>
-        <a v-for="p in s.published" :key="p.host_port" :href="portUrl(p)" target="_blank" rel="noopener" style="margin-left: 4px">
-          :{{ p.host_port }}
-        </a>
-      </span>
-    </div>
-    <NDataTable
-      :columns="columns"
-      :data="runs"
-      :loading="loading"
-      :row-key="(r: Run) => r.id"
-      size="small"
-      flex-height
-      style="flex: 1; min-height: 0"
-      :scroll-x="820"
-    />
-    <RunLogs v-model="logsOf" />
-  </div>
+  <ViewPanel id="runs" title="Runs" icon="i-lucide-play" body-class="p-0 sm:p-0">
+    <template #right>
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="Refresh" :loading="loading" @click="load" />
+    </template>
+    <template v-if="state.status?.services.length" #toolbar>
+      <div class="flex w-full flex-wrap items-center gap-2 py-2 text-sm" aria-label="Services">
+        <span class="font-medium text-muted">Services</span>
+        <span
+          v-for="s in state.status.services"
+          :key="s.name"
+          class="inline-flex items-center gap-1 rounded-md border border-default px-1.5 py-0.5"
+        >
+          <UTooltip :text="s.failed ? 'Crash-looping: restarts once its incident is resolved' : s.running ? 'Running' : 'Stopped'">
+            <UChip :color="serviceColor(s)" standalone inset size="sm" />
+          </UTooltip>
+          <span class="font-medium">{{ s.name }}</span>
+          <UButton
+            v-for="p in s.published"
+            :key="p.host_port"
+            :to="portUrl(p, location.hostname)"
+            target="_blank"
+            size="xs"
+            variant="link"
+            trailing-icon="i-lucide-external-link"
+            :label="`:${p.host_port}`"
+            class="px-0.5"
+          />
+        </span>
+      </div>
+    </template>
+    <UTable :data="runs ?? []" :columns="columns" :loading="loading && !runs" sticky class="flex-1" :ui="{ td: 'py-2.5' }">
+      <template #runnable-cell="{ row }"><span class="font-medium text-highlighted">{{ row.original.runnable }}</span></template>
+      <template #status-cell="{ row }">
+        <UBadge :color="runStatusColor(row.original.status)" variant="subtle" size="sm" :label="row.original.status" />
+      </template>
+      <template #exit_code-cell="{ row }"><span class="tabular-nums">{{ row.original.exit_code ?? "" }}</span></template>
+      <template #took-cell="{ row }"><span class="tabular-nums text-muted">{{ runDuration(row.original) }}</span></template>
+      <template #created_at-cell="{ row }"><TimeAgo :at="row.original.created_at" class="whitespace-nowrap text-muted" /></template>
+      <template #reason-cell="{ row }"><span class="line-clamp-2 max-w-md text-muted">{{ row.original.reason ?? "" }}</span></template>
+      <template #logs-cell="{ row }">
+        <UButton size="xs" color="neutral" variant="outline" icon="i-lucide-scroll-text" label="Logs" @click="logsOf = row.original.id" />
+      </template>
+      <template #empty>
+        <UEmpty icon="i-lucide-play" title="No runs yet" description="Jobs, services and agent containers appear here once they start." variant="naked" />
+      </template>
+    </UTable>
+    <RunLogsModal v-model="logsOf" />
+  </ViewPanel>
 </template>

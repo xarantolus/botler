@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BotlerEvent, Dialog } from "../generated";
-import { asBuiltin, chatTitle, eventSummary, linkedDialog, redirectChat } from "./events";
+import { asBuiltin, chatTitle, eventIcon, eventSummary, linkedDialog, redirectChat } from "./events";
 
 const ev = (type: string, payload: unknown): BotlerEvent => ({
   id: "e",
@@ -11,6 +11,14 @@ const ev = (type: string, payload: unknown): BotlerEvent => ({
   urgent: false,
   at: "2026-10-30T10:00:00Z",
   payload: payload as BotlerEvent["payload"],
+});
+
+describe("eventIcon", () => {
+  it("has an icon for built-in types and a generic one for the rest", () => {
+    expect(eventIcon("timer")).toBe("i-lucide-alarm-clock");
+    expect(eventIcon(null)).toBe("i-lucide-mail");
+    expect(eventIcon("mail.received")).toBe("i-lucide-radio");
+  });
 });
 
 describe("events", () => {
