@@ -89,6 +89,15 @@ impl Store {
         Ok(rows.iter().map(|r| r.get("instance")).collect())
     }
 
+    /// Every delivery an event caused (for tracing an event to the chats it reached).
+    pub async fn deliveries_for_event(&self, event_id: &str) -> Result<Vec<Delivery>> {
+        let rows = sqlx::query("SELECT * FROM deliveries WHERE event_id = ? ORDER BY created_at")
+            .bind(event_id)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(row).collect()
+    }
+
     pub async fn mark_delivery_attempt(&self, id: &str) -> Result<()> {
         sqlx::query("UPDATE deliveries SET attempts = attempts + 1 WHERE id = ?").bind(id).execute(&self.pool).await?;
         Ok(())

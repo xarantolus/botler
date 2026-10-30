@@ -31,6 +31,7 @@ struct State {
     seen: BTreeMap<String, HashSet<String>>,
     events: Vec<mpsc::Sender<ContainerEvent>>,
     fail_builds: bool,
+    crash_on_start: bool,
 }
 
 #[derive(Clone)]
@@ -73,6 +74,27 @@ impl Fake {
 
     pub fn set_fail_builds(&self, fail: bool) {
         self.lock().fail_builds = fail;
+    }
+
+    /// Make attached containers exit immediately with code 125, like a failed `podman run`.
+    pub fn set_crash_on_start(&self, crash: bool) {
+        self.lock().crash_on_start = crash;
+    }
+
+    /// Like podman: a bind mount whose source does not exist fails the run.
+    fn check_mounts(spec: &ContainerSpec) -> Result<()> {
+        for m in &spec.mounts {
+            if let crate::container::Mount::Bind { src, .. } = m
+                && !src.exists()
+            {
+                return Err(ContainerError::Command {
+                    binary: "fake".into(),
+                    args: format!("run {}", spec.name),
+                    stderr: format!("statfs {}: no such file or directory", src.display()),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Simulate a detached container exiting.
@@ -119,12 +141,33 @@ impl Containers for Fake {
     }
 
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {
+        Self::check_mounts(spec)?;
         let mut st = self.lock();
         st.containers.insert(spec.name.clone(), FakeContainer { spec: spec.clone(), running: true, exit_code: None });
         Ok(format!("id-{}", spec.name))
     }
 
     async fn run_attached(&self, spec: &ContainerSpec) -> Result<Attached> {
+        Self::check_mounts(spec)?;
+        if self.lock().crash_on_start {
+            let (hub_w, _pi_r) = tokio::io::duplex(64);
+            let (_pi_w, hub_r) = tokio::io::duplex(64);
+            let (exit_tx, exited) = oneshot::channel();
+            let (kill, _kill_rx) = oneshot::channel::<()>();
+            let stderr = crate::container::StderrTail::default();
+            stderr.push("Error: simulated start failure".into());
+            if exit_tx.send(Some(125)).is_err() {
+                tracing::debug!("fake crash exit unobserved");
+            }
+            return Ok(Attached {
+                name: spec.name.clone(),
+                stderr,
+                stdin: Box::new(hub_w),
+                stdout: Box::new(hub_r),
+                exited,
+                kill,
+            });
+        }
         {
             let mut st = self.lock();
             st.containers
@@ -165,7 +208,14 @@ impl Containers for Fake {
                 tracing::debug!(container = %name, "fake exit unobserved");
             }
         });
-        Ok(Attached { name: spec.name.clone(), stdin: Box::new(hub_w), stdout: Box::new(hub_r), exited, kill })
+        Ok(Attached {
+            name: spec.name.clone(),
+            stderr: crate::container::StderrTail::default(),
+            stdin: Box::new(hub_w),
+            stdout: Box::new(hub_r),
+            exited,
+            kill,
+        })
     }
 
     async fn inspect(&self, name: &str) -> Result<Option<ContainerInfo>> {

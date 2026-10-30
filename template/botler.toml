@@ -6,21 +6,32 @@ timezone = "UTC"
 default = "standard"
 
 # Agents name a route, never a model. Routes carry their own token cap and privacy class.
+# Defaults are deliberately cheap; an agent opts into `smart` by setting `model = "smart"`.
+
+# Reliable tool use at very low cost (verified with pi tool calls).
 [models.routes.standard]
+provider = "openrouter"
+model = "deepseek/deepseek-v4.1-flash"
+api_key_secret = "OPENROUTER_API_KEY"
+max_tokens = 8192
+
+# Cheapest: classification, short summaries. Weaker at multi-step tool use.
+[models.routes.fast]
+provider = "openrouter"
+model = "qwen/qwen3.8-flash"
+api_key_secret = "OPENROUTER_API_KEY"
+max_tokens = 4096
+
+# Expensive; only for agents that name it.
+[models.routes.smart]
 provider = "openrouter"
 model = "anthropic/claude-sonnet-latest"
 api_key_secret = "OPENROUTER_API_KEY"
 max_tokens = 16384
-
-[models.routes.fast]
-provider = "openrouter"
-model = "anthropic/claude-haiku-latest"
-api_key_secret = "OPENROUTER_API_KEY"
-max_tokens = 8192
 
 [defaults]
 idle_timeout = "15m"
 job_timeout = "10m"
 
 [defaults.budget]
-usd_per_day = 5.0
+usd_per_day = 1.0

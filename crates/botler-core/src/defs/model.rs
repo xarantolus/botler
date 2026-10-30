@@ -171,6 +171,9 @@ pub struct Agent {
     pub workspace: Workspace,
     #[serde(default)]
     pub idle_timeout: Option<HumanDuration>,
+    /// Keep this agent's pi session running at all times (persistent agents only), e.g. `main`.
+    #[serde(default)]
+    pub always_on: bool,
     /// Container secrets granted to this agent.
     #[serde(default)]
     pub secrets: Vec<String>,

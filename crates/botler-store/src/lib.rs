@@ -49,6 +49,8 @@ pub enum Error {
     NotFound { kind: &'static str, id: String },
     #[error("instance {0} already exists")]
     InstanceExists(String),
+    #[error("the name {0} is already used by another chat")]
+    SlugTaken(String),
     #[error("dialog is {status}{}", reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default())]
     DialogClosed { status: DialogStatus, reason: Option<String> },
     #[error("answer {answer:?} is not one of {allowed:?}")]

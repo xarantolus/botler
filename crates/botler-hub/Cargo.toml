@@ -35,6 +35,14 @@ hex.workspace = true
 hmac = "0.12"
 rand = "0.9"
 base64 = "0.22"
+schemars.workspace = true
+axum = { version = "0.8", features = ["ws", "multipart"] }
+tower = "0.5"
+http = "1"
+rmcp = { version = "3.8", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+tokio-util = "0.7"
+futures = "0.3"
+include_dir = "0.7"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -32,14 +32,15 @@ async fn message_wakes_main_and_is_delivered_once() {
     let c = &e.fake.containers()[&name];
     let cmd = c.spec.command.join(" ");
     assert!(cmd.contains("--mode rpc") && cmd.contains("--session /botler/sessions/main.jsonl"), "{cmd}");
-    assert!(cmd.contains("--model openrouter/anthropic/claude-sonnet-latest"), "{cmd}");
+    assert!(cmd.contains("--model openrouter/deepseek/deepseek-v4.1-flash"), "{cmd}");
     assert_eq!(c.spec.env["OPENROUTER_API_KEY"], "sk-test");
     assert_eq!(c.spec.env["PI_OFFLINE"], "1");
     assert!(
         c.spec.mounts.iter().any(|m| matches!(m, botler_runtime::Mount::Tmpfs { dst } if dst == "/botler/agent-dir"))
     );
     let models = std::fs::read_to_string(e.hub.paths.agent_dir("main").join("models.json")).unwrap();
-    assert!(models.contains("\"$OPENROUTER_API_KEY\"") && models.contains("16384"), "{models}");
+    assert!(models.contains("\"$OPENROUTER_API_KEY\"") && models.contains("8192"), "{models}");
+    assert!(!models.contains("null"), "pi ignores models.json containing nulls: {models}");
     assert!(!models.contains("sk-test"), "secret values never land in rendered files");
     assert!(e.hub.paths.workspace("main").join(".git").exists());
 
@@ -72,7 +73,7 @@ async fn message_wakes_main_and_is_delivered_once() {
 }
 
 #[tokio::test]
-async fn idle_persistent_goes_dormant_and_ephemeral_ends() {
+async fn idle_ephemeral_ends_and_always_on_main_stays() {
     let e = env().await;
     with_key(&e).await;
     let child = router::spawn(&e.hub, "dev", Some("main"), Some("build a thing"), None, None).await.unwrap();
@@ -91,9 +92,10 @@ async fn idle_persistent_goes_dormant_and_ephemeral_ends() {
 
     agents::reap_idle(&e.hub, Utc::now() + Duration::hours(2)).await.unwrap();
     settle().await;
-    assert_eq!(e.hub.store.instance("main").await.unwrap().state, InstanceState::Dormant);
+    // `main` is always_on in the template, so it is never reaped.
+    assert_eq!(e.hub.store.instance("main").await.unwrap().state, InstanceState::Running);
     assert_eq!(e.hub.store.instance(&child).await.unwrap().state, InstanceState::Ended);
-    assert!(e.hub.agents.all().await.is_empty());
+    assert_eq!(e.hub.agents.all().await.len(), 1);
 }
 
 #[tokio::test]
@@ -113,4 +115,29 @@ async fn missing_secret_defers_delivery() {
     with_key(&e).await;
     agents::dispatch_pending(&e.hub).await.unwrap();
     assert!(e.hub.store.pending_deliveries("main").await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn always_on_main_starts_without_a_message() {
+    let e = env().await;
+    with_key(&e).await;
+    agents::keep_always_on(&e.hub).await.unwrap();
+    assert_eq!(e.hub.store.instance("main").await.unwrap().state, InstanceState::Running);
+    assert!(e.fake.containers().contains_key(&agents::container_name("main")));
+    assert!(e.fake.prompts(&agents::container_name("main")).is_empty(), "no prompt needed to be up");
+}
+
+#[tokio::test]
+async fn crashing_always_on_agent_backs_off_and_opens_an_incident() {
+    let e = env().await;
+    with_key(&e).await;
+    e.fake.set_crash_on_start(true);
+    let mut starts = 0;
+    for _ in 0..20 {
+        if agents::keep_always_on(&e.hub).await.is_ok() && e.hub.agents.get("main").await.is_some() {
+            starts += 1;
+        }
+        settle().await;
+    }
+    assert!(starts <= 2, "backoff must stop a hot restart loop (started {starts} times)");
 }

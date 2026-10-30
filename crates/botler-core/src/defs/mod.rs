@@ -475,6 +475,9 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
         } else if !a.spec.tools.is_empty() && defs.tools_for(&a.spec).is_empty() {
             l.warn(&path, "tools globs match no tool in tools.manifest.json");
         }
+        if a.spec.always_on && a.spec.kind != AgentKind::Persistent {
+            l.err(&path, "always_on only applies to persistent agents");
+        }
         if a.prompt.is_none() {
             l.warn(&path, "no AGENTS.md next to agent.toml; the agent gets only the core system prompt");
         }

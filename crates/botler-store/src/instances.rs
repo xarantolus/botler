@@ -25,6 +25,9 @@ pub struct Instance {
     pub container_id: Option<String>,
     pub parent: Option<String>,
     pub task: Option<String>,
+    pub title: Option<String>,
+    /// Unique human-friendly alias, e.g. `groundstation-antenna-fix`.
+    pub slug: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_active: DateTime<Utc>,
 }
@@ -52,6 +55,8 @@ fn row(r: &SqliteRow) -> Result<Instance> {
         container_id: r.get("container_id"),
         parent: r.get("parent"),
         task: r.get("task"),
+        title: r.get("title"),
+        slug: r.get("slug"),
         created_at: parse_ts(T, r.get("created_at"))?,
         last_active: parse_ts(T, r.get("last_active"))?,
     })
@@ -89,6 +94,38 @@ impl Store {
     pub async fn find_instance(&self, name: &str) -> Result<Option<Instance>> {
         let r = sqlx::query("SELECT * FROM instances WHERE name = ?").bind(name).fetch_optional(&self.pool).await?;
         r.as_ref().map(row).transpose()
+    }
+
+    /// Find an instance by its id or its slug.
+    pub async fn resolve_instance(&self, name_or_slug: &str) -> Result<Option<Instance>> {
+        let r = sqlx::query("SELECT * FROM instances WHERE name = ? OR slug = ? ORDER BY (name = ?) DESC LIMIT 1")
+            .bind(name_or_slug)
+            .bind(name_or_slug)
+            .bind(name_or_slug)
+            .fetch_optional(&self.pool)
+            .await?;
+        r.as_ref().map(row).transpose()
+    }
+
+    /// Set a chat's title and slug. Fails with [`Error::SlugTaken`] if another instance has it.
+    pub async fn set_instance_title(&self, name: &str, title: &str, slug: &str) -> Result<()> {
+        if let Some(other) = self.resolve_instance(slug).await?
+            && other.name != name
+        {
+            return Err(Error::SlugTaken(slug.into()));
+        }
+        let r = sqlx::query("UPDATE instances SET title = ?, slug = ? WHERE name = ?")
+            .bind(title)
+            .bind(slug)
+            .bind(name)
+            .execute(&self.pool)
+            .await;
+        match r {
+            Ok(r) if r.rows_affected() == 0 => Err(crate::not_found("instance", name)),
+            Ok(_) => Ok(()),
+            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Err(Error::SlugTaken(slug.into())),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// All instances that have not ended, newest first.

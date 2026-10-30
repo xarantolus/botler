@@ -1,6 +1,7 @@
 version = 1
 description = "The front door: talks to the user, routes work, sets things up."
 kind = "persistent"
+always_on = true
 image = "agent"
 workspace = "monorepo"
 capabilities = ["read_sessions", "spawn"]

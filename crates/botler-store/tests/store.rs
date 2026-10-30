@@ -279,3 +279,30 @@ async fn file_database_survives_reopen_and_backs_up() {
     let b = Store::open(&dir.path().join("backup.db")).await.unwrap();
     assert_eq!(b.unrouted_events(10).await.unwrap()[0].kind, "persisted");
 }
+
+#[tokio::test]
+async fn slugs_are_unique_aliases() {
+    let s = store().await;
+    for n in ["chat-a1", "chat-b2"] {
+        s.create_instance(&NewInstance {
+            name: n.into(),
+            definition: "chat".into(),
+            persistent: false,
+            session_file: format!("{n}.jsonl"),
+            branch: None,
+            parent: None,
+            task: None,
+        })
+        .await
+        .unwrap();
+    }
+    s.set_instance_title("chat-a1", "Antenna fix", "groundstation-antenna-fix").await.unwrap();
+    assert_eq!(s.resolve_instance("groundstation-antenna-fix").await.unwrap().unwrap().name, "chat-a1");
+    assert_eq!(s.resolve_instance("chat-b2").await.unwrap().unwrap().name, "chat-b2");
+    assert!(matches!(
+        s.set_instance_title("chat-b2", "x", "groundstation-antenna-fix").await,
+        Err(Error::SlugTaken(_))
+    ));
+    // a slug may not shadow another instance's id
+    assert!(matches!(s.set_instance_title("chat-a1", "x", "chat-b2").await, Err(Error::SlugTaken(_))));
+}

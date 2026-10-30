@@ -95,10 +95,33 @@ pub struct ContainerEvent {
 /// attachment; `exited` resolves with the exit code once the container is gone.
 pub struct Attached {
     pub name: String,
+    /// The last lines the container wrote to stderr (why it died, if it did).
+    pub stderr: StderrTail,
     pub stdin: Box<dyn AsyncWrite + Send + Unpin>,
     pub stdout: Box<dyn AsyncRead + Send + Unpin>,
     pub exited: oneshot::Receiver<Option<i32>>,
     pub kill: oneshot::Sender<()>,
+}
+
+/// A bounded buffer of a container's most recent stderr lines.
+#[derive(Clone, Debug, Default)]
+pub struct StderrTail(std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>);
+
+impl StderrTail {
+    const KEEP: usize = 50;
+
+    pub fn push(&self, line: String) {
+        let mut q = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if q.len() == Self::KEEP {
+            q.pop_front();
+        }
+        q.push_back(line);
+    }
+
+    pub fn text(&self) -> String {
+        let q = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        q.iter().cloned().collect::<Vec<_>>().join("\n")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -310,13 +333,18 @@ impl Containers for Cli {
         let (kill, mut kill_rx) = oneshot::channel::<()>();
         let stdin = child.stdin.take().ok_or(ContainerError::NoPipe("stdin"))?;
         let stdout = child.stdout.take().ok_or(ContainerError::NoPipe("stdout"))?;
+        let tail = StderrTail::default();
         if let Some(stderr) = child.stderr.take() {
             let name = spec.name.clone();
+            let tail = tail.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 loop {
                     match lines.next_line().await {
-                        Ok(Some(l)) => tracing::debug!(container = %name, "{l}"),
+                        Ok(Some(l)) => {
+                            tracing::debug!(container = %name, "{l}");
+                            tail.push(l);
+                        }
                         Ok(None) => break,
                         Err(e) => {
                             tracing::warn!(container = %name, error = %e, "reading container stderr failed");
@@ -349,7 +377,14 @@ impl Containers for Cli {
                 tracing::debug!(container = %name, "exit observed after the attachment was dropped");
             }
         });
-        Ok(Attached { name: spec.name.clone(), stdin: Box::new(stdin), stdout: Box::new(stdout), exited, kill })
+        Ok(Attached {
+            name: spec.name.clone(),
+            stderr: tail,
+            stdin: Box::new(stdin),
+            stdout: Box::new(stdout),
+            exited,
+            kill,
+        })
     }
 
     async fn inspect(&self, name: &str) -> Result<Option<ContainerInfo>> {

@@ -156,6 +156,14 @@ impl Store {
         rows.iter().map(row).collect()
     }
 
+    pub async fn runs_for_event(&self, event_id: &str) -> Result<Vec<Run>> {
+        let rows = sqlx::query("SELECT * FROM runs WHERE event_id = ? ORDER BY created_at")
+            .bind(event_id)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(row).collect()
+    }
+
     pub async fn recent_runs(&self, limit: u32) -> Result<Vec<Run>> {
         let rows = sqlx::query("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?")
             .bind(limit)

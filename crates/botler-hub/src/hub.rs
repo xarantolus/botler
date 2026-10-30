@@ -38,6 +38,8 @@ pub enum HubError {
     Paused,
     #[error("secret {0} has no value; enter it in the web app")]
     MissingSecret(String),
+    #[error("{instance} keeps crashing; next start allowed at {until}")]
+    Backoff { instance: String, until: chrono::DateTime<chrono::Utc> },
 }
 
 pub type Result<T> = std::result::Result<T, HubError>;
@@ -56,6 +58,7 @@ pub enum Live {
     Event { event: Event },
     Pi { instance: String, event: serde_json::Value },
     Instance { instance: String, state: String },
+    Dialog { notice: crate::notify::DialogNotice },
 }
 
 pub struct Hub {

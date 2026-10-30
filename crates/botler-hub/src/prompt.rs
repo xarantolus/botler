@@ -18,6 +18,9 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
             AgentKind::Ephemeral => "ephemeral: you exist for one task and end when idle",
         }
     ));
+    if instance.slug.is_none() && def.spec.kind == botler_core::defs::AgentKind::Ephemeral {
+        s.push_str("This chat has no name yet: after reading the first message, call `set_chat_title` with a short title and a slug like `project-topic-detail`.\n\n");
+    }
     if let Some(task) = &instance.task {
         s.push_str(&format!("Your task: {task}\n\n"));
     }

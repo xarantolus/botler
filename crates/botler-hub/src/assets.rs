@@ -19,6 +19,9 @@ pub const AGENT_BASE_LATEST: &str = "localhost/botler/agent-base:latest";
 pub fn unpack(paths: &Paths) -> std::io::Result<()> {
     let root = paths.assets();
     write(&root.join("agent-base/Dockerfile"), AGENT_BASE_DOCKERFILE)?;
+    // Mount sources must exist even while a package ships no files.
+    std::fs::create_dir_all(root.join("extension"))?;
+    std::fs::create_dir_all(root.join("sdk"))?;
     for (rel, body) in crate::embedded::EXTENSION {
         write(&root.join("extension").join(rel), body)?;
     }

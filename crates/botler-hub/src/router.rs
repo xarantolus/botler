@@ -61,7 +61,7 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
     let applied = hub.applied().await;
     match &d.action {
         Action::Deliver(name) => {
-            let instance = match hub.store.find_instance(name).await? {
+            let instance = match hub.store.resolve_instance(name).await? {
                 Some(i) if i.state == InstanceState::Ended => return Err(HubError::InstanceEnded(name.clone())),
                 Some(i) => i,
                 None => match applied.defs.agents.get(name) {

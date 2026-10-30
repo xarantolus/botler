@@ -1,0 +1,7 @@
+version = 1
+description = "A plain conversation: started from the web app for anything that does not need its own setup."
+kind = "ephemeral"
+image = "agent"
+workspace = "volume"
+model = "standard"
+idle_timeout = "30m"

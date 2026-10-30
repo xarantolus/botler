@@ -10,9 +10,7 @@ use botler_core::catalog;
 use botler_core::defs::{AgentDef, Budget, Network, Workspace};
 use botler_core::event::kinds;
 use botler_core::{Event, Provenance, Source};
-use botler_runtime::{
-    ContainerSpec, Disposition, Mount, NetworkMode, PiClient, PiError, PiEvent, PiEventKind, Streaming,
-};
+use botler_runtime::{ContainerSpec, Mount, NetworkMode, PiClient, PiError, PiEvent, PiEventKind, Streaming};
 use botler_store::{Delivery, Instance, InstanceState};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
@@ -24,10 +22,12 @@ use crate::{images, plumbing, prompt};
 
 /// Attempts before a delivery pi keeps rejecting is dropped.
 const MAX_ATTEMPTS: i64 = 5;
-const AGENT_TOKEN_TTL_HOURS: i64 = 24;
+/// Upper bound only: agent tokens die with their wake (see `Agents::wakes`).
+const AGENT_TOKEN_TTL_HOURS: i64 = 24 * 7;
 
 pub struct LiveAgent {
     pub instance: String,
+    pub wake: String,
     pub container: String,
     pub pi: PiClient,
     busy: AtomicBool,
@@ -64,6 +64,12 @@ impl LiveAgent {
 #[derive(Default)]
 pub struct Agents {
     live: Mutex<HashMap<String, Arc<LiveAgent>>>,
+    /// The current wake id per instance. Agent tokens are valid only for their wake, so a
+    /// stopped session's token is dead immediately. Registered before the container starts,
+    /// because pi connects to MCP as soon as it boots.
+    wakes: Mutex<HashMap<String, String>>,
+    /// Consecutive unexpected exits per instance, and when the next start is allowed.
+    crashes: Mutex<HashMap<String, (u32, DateTime<Utc>)>>,
     /// Serialises waking per hub so one instance is never started twice.
     waking: Mutex<()>,
 }
@@ -81,6 +87,11 @@ impl Agents {
 
     pub async fn all(&self) -> Vec<Arc<LiveAgent>> {
         self.live.lock().await.values().cloned().collect()
+    }
+
+    /// Whether `wake` is the current session of `instance`.
+    pub async fn is_current(&self, instance: &str, wake: &str) -> bool {
+        self.wakes.lock().await.get(instance).is_some_and(|w| w == wake)
     }
 }
 
@@ -157,9 +168,9 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
     match agent.pi.prompt(&text, &[], streaming).await {
         Ok(disposition) => {
             hub.store.mark_delivered(&d.id).await?;
-            if disposition != Disposition::Handled {
-                agent.busy.store(true, Ordering::SeqCst);
-            }
+            // Busy is driven only by pi's own agent_start/agent_settled events: setting it here
+            // would race with a settle that arrives before this response is processed.
+            tracing::debug!(delivery = %d.id, ?disposition, "delivered");
             agent.touch();
             Ok(())
         }
@@ -181,6 +192,11 @@ pub async fn ensure_awake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<Liv
     if let Some(a) = hub.agents.get(&instance.name).await {
         return Ok(a);
     }
+    if let Some((_, until)) = hub.agents.crashes.lock().await.get(&instance.name)
+        && *until > Utc::now()
+    {
+        return Err(HubError::Backoff { instance: instance.name.clone(), until: *until });
+    }
     let applied = hub.applied().await;
     let def = applied
         .defs
@@ -198,12 +214,21 @@ pub async fn ensure_awake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<Liv
 
     let image = images::ensure_agent_image(hub, &def.spec.image, &applied.commit).await?;
     let branch = prepare_workspace(hub, instance, def).await?;
-    let spec = container_spec(hub, instance, def, &applied, image, branch.as_deref()).await?;
-    tracing::info!(instance = %instance.name, "waking agent");
-    let attached = hub.containers.run_attached(&spec).await?;
+    let wake = uuid::Uuid::now_v7().simple().to_string();
+    let spec = container_spec(hub, instance, def, &applied, image, branch.as_deref(), &wake).await?;
+    tracing::info!(instance = %instance.name, %wake, "waking agent");
+    hub.agents.wakes.lock().await.insert(instance.name.clone(), wake.clone());
+    let attached = match hub.containers.run_attached(&spec).await {
+        Ok(a) => a,
+        Err(e) => {
+            hub.agents.wakes.lock().await.remove(&instance.name);
+            return Err(e.into());
+        }
+    };
     let (pi, events) = PiClient::connect(attached.stdin, attached.stdout, hub.config.pi_timeout);
     let agent = Arc::new(LiveAgent {
         instance: instance.name.clone(),
+        wake,
         container: spec.name.clone(),
         pi,
         busy: AtomicBool::new(false),
@@ -215,7 +240,7 @@ pub async fn ensure_awake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<Liv
     hub.store.set_instance_state(&instance.name, InstanceState::Running, Some(&spec.name)).await?;
     broadcast_state(hub, &instance.name, "running");
     tokio::spawn(pump(hub.clone(), agent.clone(), events));
-    tokio::spawn(watch_exit(hub.clone(), agent.clone(), instance.persistent, attached.exited));
+    tokio::spawn(watch_exit(hub.clone(), agent.clone(), instance.persistent, attached.exited, attached.stderr));
     Ok(agent)
 }
 
@@ -276,6 +301,7 @@ async fn container_spec(
     applied: &crate::hub::Applied,
     image: String,
     branch: Option<&str>,
+    wake: &str,
 ) -> Result<ContainerSpec> {
     let (_route_name, route) = applied
         .defs
@@ -290,7 +316,7 @@ async fn container_spec(
     }
     let p = plumbing::plumbing(
         hub,
-        &Principal::Agent(instance.name.clone()),
+        &Principal::Agent { instance: instance.name.clone(), wake: wake.into() },
         Duration::hours(AGENT_TOKEN_TTL_HOURS),
         &secrets,
         hub.paths.root.join("agent-secrets").join(&instance.name),
@@ -307,15 +333,17 @@ async fn container_spec(
     // Rendered pi config: a tmpfs agent dir with read-only files on top (pi needs to write locks).
     let dir = hub.paths.agent_dir(&instance.name);
     tokio::fs::create_dir_all(&dir).await?;
-    let models = json!({
-        "providers": {
-            route.provider.clone(): {
-                "apiKey": route.api_key_secret.as_ref().map(|s| format!("${s}")),
-                "baseUrl": route.base_url,
-                "modelOverrides": { route.model.clone(): { "maxTokens": route.max_tokens } }
-            }
-        }
-    });
+    // pi skips an invalid models.json silently (and `null` values make it invalid), so only
+    // fields that are set are written.
+    let mut provider = serde_json::Map::new();
+    if let Some(s) = &route.api_key_secret {
+        provider.insert("apiKey".into(), json!(format!("${s}")));
+    }
+    if let Some(u) = &route.base_url {
+        provider.insert("baseUrl".into(), json!(u));
+    }
+    provider.insert("modelOverrides".into(), json!({ route.model.clone(): { "maxTokens": route.max_tokens } }));
+    let models = json!({ "providers": { route.provider.clone(): provider } });
     let mut servers = serde_json::Map::new();
     servers.insert(
         "botler".into(),
@@ -441,7 +469,11 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
             tracing::trace!("no live viewers");
         }
         match &ev.kind {
-            PiEventKind::AgentStart => agent.busy.store(true, Ordering::SeqCst),
+            PiEventKind::AgentStart => {
+                agent.busy.store(true, Ordering::SeqCst);
+                // pi is up and working: the instance is healthy again.
+                hub.agents.crashes.lock().await.remove(&agent.instance);
+            }
             PiEventKind::AgentSettled => {
                 agent.busy.store(false, Ordering::SeqCst);
                 agent.touch();
@@ -453,6 +485,9 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
             PiEventKind::MessageEnd { usage: Some(u), error, .. } => {
                 if let Some(err) = error {
                     tracing::warn!(instance = %agent.instance, %err, "model call failed");
+                    if let Err(e) = on_provider_error(&hub, &agent, err).await {
+                        tracing::error!(instance = %agent.instance, error = %e, "could not record provider error");
+                    }
                 }
                 if let Err(e) = meter(&hub, &agent, u).await {
                     tracing::error!(instance = %agent.instance, error = %e, "usage metering failed");
@@ -461,6 +496,30 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
             _ => {}
         }
     }
+}
+
+/// Auth and billing errors from the model provider will not fix themselves by retrying: pause the
+/// agent and open an incident for the user. No triage is dispatched (it would use the same key).
+async fn on_provider_error(hub: &Hub, agent: &LiveAgent, err: &str) -> Result<()> {
+    let code = err.trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
+    let kind = match code {
+        "401" | "403" => "provider auth",
+        "402" => "provider billing",
+        _ => return Ok(()),
+    };
+    let reason = format!("{kind} error: {}", err.chars().take(300).collect::<String>());
+    if hub.store.trip_breaker(&format!("instance:{}", agent.instance), "provider", &reason).await? {
+        let (incident, _) = hub.store.record_failure(&format!("agent:{}", agent.instance), "provider", None).await?;
+        tracing::error!(instance = %agent.instance, incident = %incident.id, %reason, "agent paused: provider rejected requests");
+        if hub
+            .live
+            .send(Live::Instance { instance: agent.instance.clone(), state: format!("paused: {reason}") })
+            .is_err()
+        {
+            tracing::trace!("no live viewers");
+        }
+    }
+    Ok(())
 }
 
 /// Record usage and stop the agent when it exceeds its budget (stop and report, never truncate).
@@ -507,7 +566,13 @@ async fn meter(hub: &Hub, agent: &LiveAgent, u: &botler_runtime::Usage) -> Resul
     Ok(())
 }
 
-async fn watch_exit(hub: Arc<Hub>, agent: Arc<LiveAgent>, persistent: bool, exited: oneshot::Receiver<Option<i32>>) {
+async fn watch_exit(
+    hub: Arc<Hub>,
+    agent: Arc<LiveAgent>,
+    persistent: bool,
+    exited: oneshot::Receiver<Option<i32>>,
+    stderr: botler_runtime::StderrTail,
+) {
     let code = match exited.await {
         Ok(c) => c,
         Err(_) => {
@@ -522,16 +587,59 @@ async fn watch_exit(hub: Arc<Hub>, agent: Arc<LiveAgent>, persistent: bool, exit
             live.remove(&agent.instance);
         }
     }
+    {
+        // Revoke this session's token.
+        let mut wakes = hub.agents.wakes.lock().await;
+        if wakes.get(&agent.instance).is_some_and(|w| *w == agent.wake) {
+            wakes.remove(&agent.instance);
+        }
+    }
     let state = if deliberate && !persistent { InstanceState::Ended } else { InstanceState::Dormant };
     if let Err(e) = hub.store.set_instance_state(&agent.instance, state, None).await {
         tracing::error!(instance = %agent.instance, error = %e, "could not record agent exit");
     }
     broadcast_state(&hub, &agent.instance, state.as_str());
     if !deliberate {
-        tracing::warn!(instance = %agent.instance, ?code, "agent container exited unexpectedly");
+        let tail = stderr.text();
+        tracing::warn!(instance = %agent.instance, ?code, stderr = %tail, "agent container exited unexpectedly");
+        if let Err(e) = record_crash(&hub, &agent.instance, code, tail).await {
+            tracing::error!(instance = %agent.instance, error = %e, "could not record agent crash");
+        }
     }
     // Anything still queued wakes it again (subject to the wake limit).
     hub.dispatch_notify.notify_one();
+}
+
+/// Consecutive crashes before an incident is opened.
+const CRASH_INCIDENT_AFTER: u32 = 3;
+const MAX_BACKOFF_SECS: u64 = 300;
+
+/// Back off exponentially after an unexpected exit; open an incident if it keeps happening.
+async fn record_crash(hub: &Hub, instance: &str, code: Option<i32>, stderr: String) -> Result<()> {
+    let count = {
+        let mut crashes = hub.agents.crashes.lock().await;
+        let entry = crashes.entry(instance.to_string()).or_insert((0, Utc::now()));
+        entry.0 += 1;
+        let secs = 2u64.saturating_pow(entry.0).min(MAX_BACKOFF_SECS);
+        entry.1 = Utc::now() + Duration::seconds(i64::try_from(secs).unwrap_or(300));
+        entry.0
+    };
+    if count == CRASH_INCIDENT_AFTER {
+        crate::failures::report(
+            hub,
+            crate::failures::Failure {
+                runnable: format!("agent:{instance}"),
+                kind: "start",
+                exit_code: code.map(i64::from),
+                run_id: None,
+                logs_tail: stderr,
+                commit: Some(hub.applied().await.commit.clone()),
+                event_id: None,
+            },
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// Stop idle agents: persistent ones go dormant, ephemeral ones end.
@@ -542,6 +650,9 @@ pub async fn reap_idle(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
             continue;
         }
         let instance = hub.store.instance(&agent.instance).await?;
+        if applied.defs.agents.get(&instance.definition).is_some_and(|d| d.spec.always_on) {
+            continue;
+        }
         let idle = applied
             .defs
             .agents
@@ -598,9 +709,48 @@ pub async fn alarm(hub: &Hub, text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Run forever: deliver when woken, reap idle agents periodically.
+/// Keep `always_on` agents running (started at boot, restarted after a crash).
+pub async fn keep_always_on(hub: &Arc<Hub>) -> Result<()> {
+    if hub.paused().await? {
+        return Ok(());
+    }
+    let applied = hub.applied().await;
+    for def in applied.defs.persistent_agents().filter(|d| d.spec.always_on) {
+        if hub.agents.get(&def.name).await.is_some() {
+            continue;
+        }
+        let instance = match hub.store.find_instance(&def.name).await? {
+            Some(i) => i,
+            None => {
+                hub.store
+                    .create_instance(&botler_store::NewInstance {
+                        name: def.name.clone(),
+                        definition: def.name.clone(),
+                        persistent: true,
+                        session_file: format!("{}.jsonl", def.name),
+                        branch: None,
+                        parent: None,
+                        task: None,
+                    })
+                    .await?
+            }
+        };
+        if hub.store.breaker(&format!("instance:{}", instance.name)).await?.is_some() {
+            continue;
+        }
+        if let Err(e) = ensure_awake(hub, &instance).await {
+            tracing::warn!(instance = %instance.name, error = %e, "always-on agent could not start");
+        }
+    }
+    Ok(())
+}
+
+/// Run forever: deliver when woken, keep always-on agents up, reap idle agents periodically.
 pub async fn run(hub: Arc<Hub>) {
     loop {
+        if let Err(e) = keep_always_on(&hub).await {
+            tracing::error!(error = %e, "always-on check failed");
+        }
         if let Err(e) = dispatch_pending(&hub).await {
             tracing::error!(error = %e, "dispatch failed");
         }

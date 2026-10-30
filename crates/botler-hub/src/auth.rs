@@ -16,8 +16,8 @@ type HmacSha256 = Hmac<Sha256>;
 pub enum Principal {
     /// The single human user (web app, CLI).
     User,
-    /// An agent instance.
-    Agent(String),
+    /// One wake of an agent instance: the token dies when that container stops.
+    Agent { instance: String, wake: String },
     /// One container run of a job or service.
     Run { run_id: String },
 }
@@ -26,7 +26,7 @@ impl Principal {
     fn encode(&self) -> (String, String) {
         match self {
             Self::User => ("user".into(), "-".into()),
-            Self::Agent(n) => ("agent".into(), n.clone()),
+            Self::Agent { instance, wake } => ("agent".into(), format!("{instance}/{wake}")),
             Self::Run { run_id } => ("run".into(), run_id.clone()),
         }
     }
@@ -34,7 +34,10 @@ impl Principal {
     fn decode(role: &str, subject: &str) -> Option<Self> {
         match role {
             "user" => Some(Self::User),
-            "agent" => Some(Self::Agent(subject.to_string())),
+            "agent" => {
+                let (instance, wake) = subject.split_once('/')?;
+                Some(Self::Agent { instance: instance.into(), wake: wake.into() })
+            }
             "run" => Some(Self::Run { run_id: subject.to_string() }),
             _ => None,
         }
@@ -110,8 +113,9 @@ mod tests {
     fn roundtrip_tamper_expiry() {
         let t = Tokens::new([1; 32]);
         let now = Utc::now();
-        let tok = t.issue(&Principal::Agent("main.x".into()), Duration::hours(1), now);
-        assert_eq!(t.verify(&tok, now), Ok(Principal::Agent("main.x".into())));
+        let who = Principal::Agent { instance: "main".into(), wake: "w1".into() };
+        let tok = t.issue(&who, Duration::hours(1), now);
+        assert_eq!(t.verify(&tok, now), Ok(who));
         assert_eq!(t.verify(&tok, now + Duration::hours(2)), Err(AuthError::Expired));
         let forged = tok.replacen("agent", "user", 1);
         assert_eq!(t.verify(&forged, now), Err(AuthError::BadSignature));
