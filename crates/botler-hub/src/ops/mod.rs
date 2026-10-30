@@ -3,12 +3,14 @@
 //! live in one place. Each op is one [`Op`] implementation in the module of its domain, listed
 //! once in [`OPS`].
 
+mod access;
 mod chats;
 mod incidents;
 mod messages;
 mod proposals;
 mod requests;
 mod state;
+mod subscriptions;
 mod timers;
 
 use std::future::Future;
@@ -25,12 +27,14 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use ts_rs::TS;
 
+pub use access::*;
 pub use chats::*;
 pub use incidents::*;
 pub use messages::*;
 pub use proposals::*;
 pub use requests::*;
 pub use state::*;
+pub use subscriptions::*;
 pub use timers::*;
 
 use crate::auth::Principal;
@@ -237,10 +241,16 @@ pub static OPS: &[OpSpec] = &[
     op::<GetProposal>(),
     op::<SubmitReview>(),
     op::<secret_requests::SecretRequest>(),
+    op::<RequestAccess>(),
+    op::<RevokeAccess>(),
+    op::<ListConnections>(),
     op::<ListRequests>(),
     op::<CancelRequest>(),
     op::<ArchiveReady>(),
     op::<ListEventTypes>(),
+    op::<Subscribe>(),
+    op::<Unsubscribe>(),
+    op::<ListSubscriptions>(),
     op::<ReadSession>(),
     op::<search::Search>(),
     op::<memory::MemoryWrite>(),

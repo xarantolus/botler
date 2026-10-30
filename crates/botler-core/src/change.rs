@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::defs::{
-    CapabilityPolicy, Definitions, EnvEscalation, Environment, Lifetime, ResolvedTrigger, SecretClass, Target,
-    TriggerKind,
+    CapabilityPolicy, Definitions, EnvEscalation, Environment, GrantMode, Lifetime, ResolvedTrigger, SecretClass,
+    Target, TriggerKind,
 };
 use crate::limits::default_limit;
 
@@ -72,6 +72,10 @@ pub enum Escalation {
         server: String,
         command: String,
     },
+    /// `policies/grants.toml` lets chats get a resource without asking the user.
+    GrantAuto {
+        resource: String,
+    },
     /// The protection policy itself could not be evaluated; treated as touching everything.
     InvalidPolicy {
         detail: String,
@@ -101,6 +105,7 @@ impl Escalation {
             Self::McpStdioAdded { agent, server, command } => {
                 format!("runs MCP server `{server}` (`{command}`) inside agent `{agent}`'s container")
             }
+            Self::GrantAuto { resource } => format!("lets any chat get `{resource}` without asking you"),
             Self::InvalidPolicy { detail } => {
                 format!("cannot evaluate protected paths ({detail}); treating all paths as protected")
             }
@@ -308,6 +313,12 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         }
     }
 
+    for (resource, mode) in &new.grant_policy.resources {
+        if *mode == GrantMode::Auto && old.grant_policy.resources.get(resource) != Some(&GrantMode::Auto) {
+            esc.insert(Escalation::GrantAuto { resource: resource.clone() });
+        }
+    }
+
     let old_hooks: BTreeSet<_> = webhooks(old).collect();
     for h in webhooks(new) {
         if !old_hooks.contains(&h) {
@@ -500,7 +511,7 @@ fn diff_items<T: PartialEq>(
     }
 }
 
-fn describe_target(t: &Target) -> String {
+pub fn describe_target(t: &Target) -> String {
     match t {
         Target::Resume(n) => format!("message the `{n}` agent"),
         Target::Spawn(n) => format!("start a new `{n}` agent"),
@@ -896,5 +907,21 @@ mod tests {
             "kind = \"persistent\"\n[limits.send_message]\nburst = 500\nper = \"1m\"\n",
         ));
         assert!(!preview(&old, &loose, &[], Utc::now()).escalations.is_empty());
+    }
+
+    #[test]
+    fn auto_grant_policy_escalates() {
+        let old = defs(&base());
+        let new = defs(
+            &base().with("policies/grants.toml", "[resources]\n\"secret:nas\" = \"auto\"\n\"secret:x\" = \"ask\"\n"),
+        );
+        let s = preview(&old, &new, &["policies/grants.toml".into()], Utc::now());
+        assert!(s.escalations.contains(&Escalation::GrantAuto { resource: "secret:nas".into() }), "{s:?}");
+        assert!(
+            !s.escalations.iter().any(|e| matches!(e, Escalation::GrantAuto { resource } if resource == "secret:x"))
+        );
+        let t = base().with("policies/grants.toml", "[resources]\n\"disk:x\" = \"auto\"\n");
+        let bad: Vec<String> = load(&t).errors().map(|d| d.message.clone()).collect();
+        assert!(bad.iter().any(|m| m.contains("unknown resource kind")), "{bad:?}");
     }
 }

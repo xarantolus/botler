@@ -4,6 +4,7 @@
 //! whole list of what to fix in one gate run.
 
 mod environment;
+mod grants;
 mod model;
 pub mod tree;
 
@@ -11,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub use environment::*;
+pub use grants::*;
 pub use model::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -66,6 +68,7 @@ pub struct Definitions {
     pub tools: BTreeMap<String, ToolDecl>,
     pub images: BTreeSet<String>,
     pub policy: CapabilityPolicy,
+    pub grant_policy: GrantPolicy,
 }
 
 impl Definitions {
@@ -285,6 +288,16 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
             }
         }
         defs.policy = p;
+    }
+
+    if let Some(p) = l.toml::<GrantPolicy>("policies/grants.toml") {
+        l.check_version("policies/grants.toml", p.version);
+        for r in p.resources.keys() {
+            if let Err(e) = r.parse::<Resource>() {
+                l.err("policies/grants.toml", e);
+            }
+        }
+        defs.grant_policy = p;
     }
 
     if let Some(s) = l.toml::<SecretsFile>("secrets.toml") {
@@ -668,6 +681,9 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
         if let Some(t) = &j.spec.on_failure {
             check_target(l, defs, &path, t);
         }
+        for e in j.spec.emits.iter().filter(|e| !defs.events.contains_key(*e)) {
+            l.err(&path, format!("emits {e:?}, which is not a declared event type (events/ or a pydantic model)"));
+        }
     }
     if defs.jobs.values().any(|j| j.spec.on_failure.is_none()) && !defs.agents.contains_key("triage") {
         l.warn("agents", "no `triage` agent: failures of jobs without on_failure will only alert the user");
@@ -776,6 +792,7 @@ fn is_builtin_event(kind: &str) -> bool {
         TIMER,
         ARCHIVE_REQUESTED,
         AGENT_IDLE,
+        ACCESS_CHANGED,
     ]
     .contains(&kind)
 }

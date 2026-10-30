@@ -138,6 +138,7 @@ pub mod kinds {
     pub const ARCHIVE_REQUESTED: &str = "archive.requested";
     pub const AGENT_IDLE: &str = "agent.idle";
     pub const SCHEDULE: &str = "schedule";
+    pub const ACCESS_CHANGED: &str = "access.changed";
 }
 
 #[cfg(test)]

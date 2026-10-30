@@ -60,13 +60,14 @@ def set_chat_title(*, slug: str, title: str) -> dict[str, Any]:
     return call("set_chat_title", {"slug": slug, "title": title})
 
 
-def spawn_agent(*, definition: str, task: str) -> dict[str, Any]:
-    """Start a new instance of an agent definition with a task. It reports back to you by message.
+def spawn_agent(*, definition: str, task: str, env: Any = None) -> dict[str, Any]:
+    """Start a new instance of an agent definition with a task. It reports back to you by message. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user.
 
     Args:
         definition: Agent definition under `agents/`, e.g. `dev`.
+        env: What the new chat gets beyond its definition.
     """
-    return call("spawn_agent", {"definition": definition, "task": task})
+    return call("spawn_agent", {"definition": definition, "task": task, "env": env})
 
 
 def list_chats() -> dict[str, Any]:
@@ -100,7 +101,7 @@ def submit_review(*, notes: str, proposal_id: str, verdict: Any) -> dict[str, An
 
 
 def request_secrets(*, group: str, reason: str, add: list[Any] | None = None, class_: Any = None, description: str | None = None, fill: list[str] | None = None, remove: list[str] | None = None) -> dict[str, Any]:
-    """Ask the user for secrets, asynchronously: create a group, add fields to one, re-enter values (`fill`) or remove fields. The user gets a form; you get a request id now and a `dialog.answered` event later saying what was provided (never the values). Do not continue work that needs the secrets until that event arrives. Using a group in a container still needs a grant (`secrets = ["<group>"]` in a definition, proposed as a change).
+    """Ask the user for secrets, asynchronously: create a group, add fields to one, re-enter values (`fill`) or remove fields. The user gets a form; you get a request id now and a `dialog.answered` event later saying what was provided (never the values). Do not continue work that needs the secrets until that event arrives. Using a group in a container still needs a grant: `request_access("secret:<group>")` for this chat, or `secrets = ["<group>"]` in a definition, proposed as a change.
 
     Args:
         group: The group (existing, or new: then `description` and `add` are required).
@@ -112,6 +113,35 @@ def request_secrets(*, group: str, reason: str, add: list[Any] | None = None, cl
         remove: Fields to remove from the group (their values are deleted).
     """
     return call("request_secrets", {"group": group, "reason": reason, "add": add, "class": class_, "description": description, "fill": fill, "remove": remove})
+
+
+def request_access(*, reason: str, resource: str, mode: Any = None) -> dict[str, Any]:
+    """Ask for a resource your definition does not give you, for this chat: `secret:<group>`, `service:<name>`, `mount:<name>` or `event:<type>`. Policy may grant it at once; otherwise the user decides (allow for this chat, always allow, or deny) and the answer wakes you as a `dialog.answered` event, with the grant applied to your container. Memory notes say which group fits which work.
+
+    Args:
+        reason: Why, for the user deciding.
+        resource: What you need, as `<kind>:<name>`: `secret:<group>` (a secret group's values in your container), `service:<name>` (a service's MCP server), `mount:<name>` (a network share) or `event:<type>` (subscribing to a restricted event type).
+        mode: Mounts: `rw` to write (default `ro`).
+    """
+    return call("request_access", {"reason": reason, "resource": resource, "mode": mode})
+
+
+def revoke_access(*, grant: str) -> dict[str, Any]:
+    """Give up one of your grants (the user can revoke any). It is gone from your next wake on.
+
+    Args:
+        grant: The grant id (from `list_connections`).
+    """
+    return call("revoke_access", {"grant": grant})
+
+
+def list_connections(*, chat: str | None = None) -> dict[str, Any]:
+    """What a chat (default: you) is connected to: its parent and children, secret groups and services from its definition, grants it holds (with ids, for `revoke_access`), event subscriptions and pending timers.
+
+    Args:
+        chat: The chat (name or slug); defaults to you.
+    """
+    return call("list_connections", {"chat": chat})
 
 
 def list_requests() -> dict[str, Any]:
@@ -140,9 +170,39 @@ def archive_ready(*, summary: str, handoff: Any = None, outstanding: list[str] |
     return call("archive_ready", {"summary": summary, "handoff": handoff, "outstanding": outstanding, "state": state})
 
 
-def list_event_types() -> dict[str, Any]:
-    """Declared event types with their payload schemas. emit_event validates payloads against these."""
-    return call("list_event_types", {})
+def list_event_types(*, query: str | None = None) -> dict[str, Any]:
+    """Event types (built-in and declared) with their description, payload schema, producers and current subscribers; `query` narrows by words or a glob. `emit_event` validates payloads against these; `subscribe` takes their names.
+
+    Args:
+        query: Words or a glob (`mail.*`) to narrow the list by type or description.
+    """
+    return call("list_event_types", {"query": query})
+
+
+def subscribe(*, type: str, filter: dict[str, Any] | None = None, note: str | None = None, wake: bool | None = None) -> dict[str, Any]:
+    """Get events of a type (or glob like `mail.*`) delivered to this chat, optionally only those whose payload fields equal `filter`. They wake you even while you sleep (`wake=false`: quiet notes instead). Lasts until `unsubscribe`; find types with `list_event_types` or `search(sources=["event_type"])`. Restricted types need `request_access("event:<type>")` first.
+
+    Args:
+        type: Event type (`mail.received`) or glob (`mail.*`); see `list_event_types`.
+        filter: Payload fields that must have these values, e.g. `{"folder": "INBOX"}`.
+        note: Why you subscribed; shown with every delivery.
+        wake: `false`: deliver as a quiet note that waits for whatever wakes you next (default `true`: each event wakes you).
+    """
+    return call("subscribe", {"type": type, "filter": filter, "note": note, "wake": wake})
+
+
+def unsubscribe(*, id: str) -> dict[str, Any]:
+    """Stop a subscription by id (from `subscribe` or `list_subscriptions`).
+
+    Args:
+        id: The subscription id.
+    """
+    return call("unsubscribe", {"id": id})
+
+
+def list_subscriptions() -> dict[str, Any]:
+    """Your event subscriptions with their ids."""
+    return call("list_subscriptions", {})
 
 
 def read_session(*, instance: str, around: str | None = None, last: int | None = None, n: int | None = None) -> dict[str, Any]:
@@ -157,14 +217,14 @@ def read_session(*, instance: str, around: str | None = None, last: int | None =
 
 
 def search(*, query: str, limit: int | None = None, raw: bool | None = None, scope: Any = None, sources: list[Any] | None = None) -> dict[str, Any]:
-    """Full-text search over sessions, memory notes, the event journal and the monorepo, best matches first. `scope="self"` searches only your own conversation (including what was compacted away) and your memory. Session results: read the context with `read_session(instance=owner, around=ref)`.
+    """Full-text search over sessions, memory notes, the event journal, the monorepo and event types (`event_type`: what can happen, who emits it), best matches first. `scope="self"` searches only your own conversation (including what was compacted away) and your memory. Session results: read the context with `read_session(instance=owner, around=ref)`.
 
     Args:
         query: Words to find; a result contains all of them (stemmed, so `deploy` finds `deployed`).
         limit: How many results (default 10, max 30).
         raw: Treat `query` as SQLite FTS5 syntax: `"exact phrase"`, `a OR b`, `a NOT b`, `prefix*`, `NEAR(a b)`.
         scope: `self` searches only your own conversation (also from before compaction) and your memory.
-        sources: Restrict to these sources (`session`, `memory`, `event`, `repo`); default all.
+        sources: Restrict to these sources (`session`, `memory`, `event`, `repo`, `event_type`); default all.
     """
     return call("search", {"query": query, "limit": limit, "raw": raw, "scope": scope, "sources": sources})
 

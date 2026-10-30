@@ -40,7 +40,8 @@ async fn route_one(hub: &Hub, ev: &Event) -> Result<()> {
         return Ok(());
     }
     let applied = hub.applied().await;
-    match route(&applied.defs, ev) {
+    let subs = hub.store.active_subscriptions().await?;
+    match route(&applied.defs, ev, &subs) {
         Routed::CycleBreaker { hops } => trip_cycle_breaker(hub, ev, hops).await,
         Routed::Dispatches(ds) => {
             for d in ds {
@@ -84,11 +85,11 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
             let (quiet, held) = match &ev.source {
                 Source::Agent(from) if *from != instance.name => {
                     match crate::loops::agent_delivery(hub, ev, from, &instance.name).await? {
-                        AgentDelivery::Deliver { quiet } => (quiet, None),
+                        AgentDelivery::Deliver { quiet } => (quiet || d.quiet, None),
                         AgentDelivery::Hold { subject } => (false, Some(subject)),
                     }
                 }
-                _ => (false, None),
+                _ => (d.quiet, None),
             };
             // Messaging an archived chat restores it: archiving hides, it never locks away. A
             // note or a held message does not.
@@ -173,20 +174,33 @@ pub async fn spawn(
     trigger: Option<&str>,
 ) -> Result<String> {
     let name = new_instance(hub, definition, parent, task).await?;
+    send_task(hub, &name, parent, task, event, trigger).await?;
+    Ok(name)
+}
+
+/// Queue a new instance's first delivery: `event`, or `task` as a message from `parent`.
+pub async fn send_task(
+    hub: &Hub,
+    name: &str,
+    parent: Option<&str>,
+    task: Option<&str>,
+    event: Option<&Event>,
+    trigger: Option<&str>,
+) -> Result<()> {
     let ev = match event {
         Some(e) => e.clone(),
         None => {
             let task = BuiltinPayload::Message(MessagePayload { text: task.unwrap_or("").into(), files: vec![] });
-            let e = builtin(task, parent.map_or(Source::Hub, |p| Source::Agent(p.into())))?.to(name.clone());
+            let e = builtin(task, parent.map_or(Source::Hub, |p| Source::Agent(p.into())))?.to(name);
             hub.store.append_event(&e).await?;
             hub.store.mark_routed(&e.id.to_string()).await?;
             e
         }
     };
     let prompt = if event.is_some() { task } else { None };
-    hub.store.enqueue_delivery(&ev.id.to_string(), &name, trigger, prompt).await?;
+    hub.store.enqueue_delivery(&ev.id.to_string(), name, trigger, prompt).await?;
     hub.dispatch_notify.notify_one();
-    Ok(name)
+    Ok(())
 }
 
 /// Fire a trigger's target directly (schedules and timers).
@@ -196,6 +210,7 @@ pub async fn fire(hub: &Hub, target: &Target, prompt: Option<&str>, trigger: Opt
         action: Action::from(target),
         prompt: prompt.map(String::from),
         shadow: false,
+        quiet: false,
     };
     dispatch(hub, ev, vec![d]).await
 }
@@ -209,7 +224,8 @@ pub async fn dispatch(hub: &Hub, ev: Event, extra: Vec<Dispatch>) -> Result<()> 
     }
     let applied = hub.applied().await;
     let mut all = extra;
-    match route(&applied.defs, &ev) {
+    let subs = hub.store.active_subscriptions().await?;
+    match route(&applied.defs, &ev, &subs) {
         Routed::Dispatches(ds) => {
             for d in ds {
                 if !all.iter().any(|x| x.action == d.action) {

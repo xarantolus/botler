@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use botler_core::defs::Undeclared;
 use botler_core::{Event, Provenance};
 use botler_store::EventQuery;
 use chrono::Utc;
@@ -132,47 +131,6 @@ impl Op for EmitEvent {
         }
         let ev = hub.emit(Event::new(self.kind, caller.source(), provenance, Utc::now()).payload(self.payload)).await?;
         Ok(EventEmitted { event_id: ev.id, warning })
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema, TS)]
-pub struct ListEventTypes {}
-
-#[derive(Debug, Serialize, TS)]
-pub struct EventTypes {
-    pub declared: Vec<DeclaredEvent>,
-    pub undeclared_policy: Undeclared,
-}
-
-#[derive(Debug, Serialize, TS)]
-pub struct DeclaredEvent {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub description: String,
-    /// JSON Schema of the payload.
-    pub schema: Option<Value>,
-}
-
-impl Op for ListEventTypes {
-    const NAME: &'static str = "list_event_types";
-    const DESCRIPTION: &'static str =
-        "Declared event types with their payload schemas. emit_event validates payloads against these.";
-    const WHO: Who = Who::Everyone;
-    type Output = EventTypes;
-
-    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<EventTypes, OpError> {
-        let applied = hub.applied().await;
-        let declared = applied
-            .defs
-            .events
-            .values()
-            .map(|e| DeclaredEvent {
-                kind: e.kind.clone(),
-                description: e.description.clone(),
-                schema: e.schema.clone(),
-            })
-            .collect();
-        Ok(EventTypes { declared, undeclared_policy: applied.defs.instance.events.undeclared })
     }
 }
 

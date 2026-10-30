@@ -311,11 +311,17 @@ async fn answer_dialog(
     Json(a): Json<Answer>,
 ) -> ApiResult<Json<DialogAnswer>> {
     user_only(&p)?;
-    if hub.store.dialog(&id).await?.kind == botler_store::DialogKind::Credentials {
-        return Err(ApiError(
-            StatusCode::BAD_REQUEST,
-            "credentials requests are answered with the secrets form".into(),
-        ));
+    match hub.store.dialog(&id).await?.kind {
+        botler_store::DialogKind::Credentials => {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "credentials requests are answered with the secrets form".into(),
+            ));
+        }
+        botler_store::DialogKind::Access => {
+            return Ok(Json(DialogAnswer { dialog: crate::grants::answer(&hub, &id, &a.answer).await? }));
+        }
+        _ => {}
     }
     let d = hub.store.answer_dialog(&id, &a.answer).await?;
     debug_assert_eq!(d.status, DialogStatus::Answered);
@@ -566,6 +572,12 @@ async fn secrets(
             grantees.entry(sec.group.as_str()).or_default().push(format!("model route {r}"));
         }
     }
+    let mut holders: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for g in hub.store.all_live_grants().await? {
+        if g.kind == botler_core::defs::ResourceKind::Secret {
+            holders.entry(g.resource).or_default().push(g.holder);
+        }
+    }
     let groups = applied
         .defs
         .secret_groups
@@ -587,6 +599,7 @@ async fn secrets(
                 })
                 .collect(),
             granted_to: grantees.get(g.name.as_str()).cloned().unwrap_or_default(),
+            held_by: holders.remove(&g.name).unwrap_or_default(),
         })
         .collect();
     Ok(Json(groups))

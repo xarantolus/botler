@@ -107,17 +107,35 @@ pub fn check(defs: &Definitions, kind: &str, payload: &Value) -> Check {
 
 /// Declared types sharing a dotted prefix or close in spelling.
 fn similar(defs: &Definitions, kind: &str) -> Vec<String> {
+    similar_among(defs.events.keys().map(String::as_str), kind)
+}
+
+/// Of `candidates`, those sharing a dotted prefix with `kind` or close in spelling, closest first.
+pub fn similar_among<'a>(candidates: impl Iterator<Item = &'a str>, kind: &str) -> Vec<String> {
     let prefix = kind.split('.').next().unwrap_or(kind);
-    let mut out: Vec<(usize, String)> = defs
-        .events
-        .keys()
+    let mut out: Vec<(usize, String)> = candidates
         .filter_map(|k| {
             let d = distance(k, kind);
-            (k.starts_with(&format!("{prefix}.")) || d <= 3).then(|| (d, k.clone()))
+            (k.starts_with(&format!("{prefix}.")) || d <= 3).then(|| (d, k.to_string()))
         })
         .collect();
     out.sort();
+    out.dedup();
     out.into_iter().take(5).map(|(_, k)| k).collect()
+}
+
+/// Every event type that exists: the hub's built-in ones and the declared ones.
+pub fn known_types(defs: &Definitions) -> impl Iterator<Item = &str> {
+    crate::catalog::BUILTIN.iter().map(|b| b.kind).chain(defs.events.keys().map(String::as_str))
+}
+
+/// The top-level payload fields of `kind`, if its schema says (`None`: unknown or no schema).
+pub fn payload_fields(defs: &Definitions, kind: &str) -> Option<Vec<String>> {
+    let schema = match defs.events.get(kind) {
+        Some(d) => d.schema.clone()?,
+        None => crate::payloads::builtin_schema(kind)?,
+    };
+    Some(schema.get("properties")?.as_object()?.keys().cloned().collect())
 }
 
 fn distance(a: &str, b: &str) -> usize {
@@ -188,6 +206,18 @@ type = "mail.sent"
         let c = check(&lenient, "brand.new", &json!({}));
         assert!(c.accepted());
         assert!(c.feedback("brand.new").unwrap().contains("not declared"));
+    }
+
+    #[test]
+    fn fields_and_known_types() {
+        let d = defs("");
+        let mut f = payload_fields(&d, "mail.received").unwrap();
+        f.sort();
+        assert_eq!(f, ["sender", "size", "subject"]);
+        assert!(payload_fields(&d, "mail.sent").is_none(), "no schema, no field list");
+        assert!(payload_fields(&d, "runnable.failed").unwrap().contains(&"runnable".to_string()));
+        assert!(known_types(&d).any(|k| k == "timer") && known_types(&d).any(|k| k == "home.arrival"));
+        assert_eq!(similar_among(known_types(&d), "runable.failed"), ["runnable.failed"]);
     }
 
     #[test]

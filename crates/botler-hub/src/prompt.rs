@@ -45,7 +45,7 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          - `ask_user(question, options, about)` asks the user and waits for an answer as an event. Use it \
            for decisions that are theirs; never guess at them.\n\
          - Your plain reply text is shown to the user when they are the one talking to you.\n\
-         - `ask_user`, `request_secrets` and `propose_change` are direct tools that end your turn when \
+         - `ask_user`, `request_secrets`, `request_access` and `propose_change` are direct tools that end your turn when \
            they succeed, so say anything else in the same reply, before the call. Do not poll or wait: \
            the result arrives as an event and wakes you, even if you were asleep.\n\n\
          ## Working\n\
@@ -54,6 +54,10 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          and the monorepo (`scope=\"self\"` finds what you said or read earlier, even after compaction).\n\n\
          ## Doing things later\n\
          - `set_timer(at or in, prompt)` wakes you (or another chat) once, later.\n\
+         - `subscribe(type, filter)` delivers events of a type to you (they wake you while asleep) until \
+           `unsubscribe(id)`; find types with `list_event_types(query)` or `search(sources=[\"event_type\"])`.\n\
+         - Missing a secret group, service or share your definition does not give you? \
+           `request_access(\"secret:<group>\", reason)`: the answer wakes you with it applied.\n\
          - Anything recurring is a trigger file in the monorepo, never a promise you try to remember. \
            Add `triggers/<topic>.toml` to a monorepo checkout:\n\
            ```toml\n\
