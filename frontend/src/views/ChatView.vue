@@ -10,6 +10,7 @@ import { redirectChat } from "../lib/events";
 import { currentStatus, phaseBadge } from "../lib/phase";
 import { buildTranscript } from "../lib/transcript";
 import { watch as watchLive } from "../live";
+import { shell } from "../shell";
 import { allDialogs, clearSession, frontDoorName, refreshSession, state, waitingByInstance } from "../store";
 
 const props = defineProps<{ instance?: string }>();
@@ -70,7 +71,7 @@ const transcript = computed(() =>
     ? buildTranscript({
         items: session.value.items,
         dialogs: allDialogs.value,
-        outbox: state.outbox[session.value.instance.name] ?? [],
+        queued: session.value.queued,
         streaming: state.streaming,
         busy: session.value.busy,
       })
@@ -132,8 +133,13 @@ watch(
     const t = transcript.value;
     if (!t) return;
     let selector: string | null = null;
+    const call = typeof entry === "string" ? t.toolOf[entry] : undefined;
     if (typeof delivery === "string") selector = `[data-delivery="${CSS.escape(delivery)}"]`;
-    else if (typeof entry === "string" && t.messageOf[entry]) selector = `[data-message="${CSS.escape(t.messageOf[entry])}"]`;
+    else if (call) {
+      // A hit in a tool call or its result: that call, opened.
+      shell.open[call] = true;
+      selector = `[data-tool-call="${CSS.escape(call)}"]`;
+    } else if (typeof entry === "string" && t.messageOf[entry]) selector = `[data-message="${CSS.escape(t.messageOf[entry])}"]`;
     if (selector && (await reveal(selector))) void router.replace({ query: {} });
   },
   { immediate: true },
@@ -211,14 +217,16 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
             :messages="transcript.messages"
             :status="transcript.status"
             :queued-note="queuedNote"
+            :instance="name"
             :start-at-end="!linked"
           />
         </template>
-        <div v-if="name" class="sticky bottom-0 z-10 mt-auto bg-default pb-4 pt-2 sm:pb-6">
+        <div v-if="name" id="chat-composer" class="sticky bottom-0 z-10 mt-auto bg-default pb-4 pt-2 sm:pb-6">
           <ChatComposer
             ref="composer"
             :instance="name"
             :archived="inst?.state === 'archived'"
+            :busy="!!session?.busy || badge?.busy === true"
             @sent="toBottom(true)"
           />
         </div>

@@ -20,6 +20,19 @@ pub struct MessagePayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<String>>")]
     pub files: Vec<String>,
+    /// For a message from the user while the agent works: wait for the turn to end (`queue`, held
+    /// by the hub, cancellable until then) or interrupt it (`steer`). Absent: `steer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mode: Option<SendMode>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SendMode {
+    #[default]
+    Queue,
+    Steer,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

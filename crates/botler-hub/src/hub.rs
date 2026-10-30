@@ -168,9 +168,10 @@ impl Hub {
                     "The monorepo's main ({commit}) does not load, so botler is still running {last}. Problems:\n{}",
                     diagnostics.iter().map(|d| format!("- {d}")).collect::<Vec<_>>().join("\n")
                 );
-                let ev = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![] }), Source::Hub)?
-                    .to(botler_core::FRONT_DOOR)
-                    .urgent(true);
+                let ev =
+                    builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None }), Source::Hub)?
+                        .to(botler_core::FRONT_DOOR)
+                        .urgent(true);
                 store.append_event(&ev).await?;
                 load_at(repo, &last).await
             }

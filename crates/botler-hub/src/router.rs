@@ -190,7 +190,8 @@ pub async fn send_task(
     let ev = match event {
         Some(e) => e.clone(),
         None => {
-            let task = BuiltinPayload::Message(MessagePayload { text: task.unwrap_or("").into(), files: vec![] });
+            let task =
+                BuiltinPayload::Message(MessagePayload { text: task.unwrap_or("").into(), files: vec![], mode: None });
             let e = builtin(task, parent.map_or(Source::Hub, |p| Source::Agent(p.into())))?.to(name);
             hub.store.append_event(&e).await?;
             hub.store.mark_routed(&e.id.to_string()).await?;
@@ -302,7 +303,8 @@ async fn report_failure(hub: &Hub, ev: &Event, err: &HubError) -> Result<()> {
         _ => return Ok(()),
     };
     let text = format!("Could not route event {} ({}): {err}", ev.id, ev.kind);
-    let note = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![] }), Source::Hub)?.to(to);
+    let note =
+        builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None }), Source::Hub)?.to(to);
     hub.emit(note).await?;
     Ok(())
 }

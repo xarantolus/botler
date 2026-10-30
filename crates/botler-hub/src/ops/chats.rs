@@ -297,7 +297,9 @@ impl Op for ReadSession {
             .collect();
         let range = match &self.around {
             Some(entry) => {
-                let i = messages.iter().position(|m| m.id == *entry).ok_or_else(|| {
+                // A tool call's ref (`<entry>#<call>`) reads around its entry.
+                let entry = entry.split('#').next().unwrap_or(entry);
+                let i = messages.iter().position(|m| m.id == entry).ok_or_else(|| {
                     OpError::BadRequest(format!("no message {entry} in {}'s current session", inst.name))
                 })?;
                 let n = self.n.unwrap_or(5).min(50) as usize;

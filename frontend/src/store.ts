@@ -14,6 +14,7 @@ import type {
   Usage,
 } from "./generated";
 import { currentStatus } from "./lib/phase";
+import { noLive, persisted, type LiveMessage } from "./lib/transcript";
 import { notifyError } from "./notify";
 
 export type Connection = "connecting" | "live" | "polling";
@@ -30,14 +31,12 @@ export interface AppState {
   events: BotlerEvent[];
   /** Latest known status per chat: from the live stream, or the wake phase of a fetch. */
   liveStatus: Record<string, AgentStatus>;
-  /** Messages the user sent that are not in the transcript yet (queued for delivery). */
-  outbox: Record<string, { text: string; at: number }[]>;
   /** When we first saw a chat waking (for elapsed time). */
   wakeStarted: Record<string, number>;
   session: SessionView | null;
   sessionError: string | null;
-  /** Assistant text and thinking streaming in for the viewed chat. */
-  streaming: { text: string; thinking: string };
+  /** The assistant message streaming in for the viewed chat. */
+  streaming: LiveMessage;
   showArchived: boolean;
 }
 
@@ -54,11 +53,10 @@ export const state = plainReactive<AppState>({
   proposals: null,
   events: [],
   liveStatus: {},
-  outbox: {},
   wakeStarted: {},
   session: null,
   sessionError: null,
-  streaming: { text: "", thinking: "" },
+  streaming: noLive(),
   showArchived: false,
 });
 
@@ -152,13 +150,14 @@ export function refreshSession(name: string) {
       const s = await call("session", { params: { instance: name } });
       if (sessionFor !== name) return; // the user moved on
       state.session = s;
+      // The session has the streamed message now: show it from there.
+      if (persisted(s.items, state.streaming)) state.streaming = noLive();
       state.sessionError = null;
       // The fetch is newer than any earlier live status.
       const now = currentStatus(s.phase, null);
       if (now) state.liveStatus[s.instance.name] = now;
       else delete state.liveStatus[s.instance.name];
       trackWake(s.instance.name, s.phase?.phase === "waking" || s.instance.state === "starting");
-      settleOutbox(s);
     } catch (e) {
       if (sessionFor === name) state.sessionError = e instanceof Error ? e.message : String(e);
       throw e;
@@ -166,25 +165,11 @@ export function refreshSession(name: string) {
   });
 }
 
-/** Remember a sent message until the transcript shows it. */
-export function queueSent(instance: string, text: string) {
-  (state.outbox[instance] ??= []).push({ text, at: Date.now() });
-}
-
-function settleOutbox(s: SessionView) {
-  const queued = state.outbox[s.instance.name];
-  if (!queued?.length) return;
-  const texts = s.items.flatMap((it) => (it.kind === "user" ? [it.text] : []));
-  state.outbox[s.instance.name] = queued.filter(
-    (q) => !texts.some((t) => t.includes(q.text)) && !(s.pending === 0 && Date.now() - q.at > 15_000),
-  );
-}
-
 export function clearSession() {
   sessionFor = null;
   state.session = null;
   state.sessionError = null;
-  state.streaming = { text: "", thinking: "" };
+  state.streaming = noLive();
 }
 
 export function trackWake(instance: string, waking: boolean) {

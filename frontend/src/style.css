@@ -137,3 +137,69 @@
   animation: flash-ring 2.4s ease-out;
   border-radius: calc(var(--ui-radius) * 2);
 }
+
+/* Syntax highlighting (lib/highlight.ts): highlight.js classes in GitHub's light and dark colors,
+   following the kit's color mode. */
+:root {
+  --hl-comment: #6e7781;
+  --hl-keyword: #cf222e;
+  --hl-string: #0a3069;
+  --hl-number: #0550ae;
+  --hl-title: #8250df;
+  --hl-add: #116329;
+  --hl-add-bg: #dafbe1;
+  --hl-del: #82071e;
+  --hl-del-bg: #ffebe9;
+}
+.dark {
+  --hl-comment: #8b949e;
+  --hl-keyword: #ff7b72;
+  --hl-string: #a5d6ff;
+  --hl-number: #79c0ff;
+  --hl-title: #d2a8ff;
+  --hl-add: #aff5b4;
+  --hl-add-bg: #033a16;
+  --hl-del: #ffdcd7;
+  --hl-del-bg: #67060c;
+}
+.hljs-comment,
+.hljs-quote,
+.hljs-meta {
+  color: var(--hl-comment);
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-type,
+.hljs-doctag {
+  color: var(--hl-keyword);
+}
+.hljs-string,
+.hljs-regexp {
+  color: var(--hl-string);
+}
+.hljs-number,
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-built_in,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--hl-number);
+}
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--hl-title);
+}
+.hljs-addition {
+  color: var(--hl-add);
+  background: var(--hl-add-bg);
+}
+.hljs-deletion {
+  color: var(--hl-del);
+  background: var(--hl-del-bg);
+}

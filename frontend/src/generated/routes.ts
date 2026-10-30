@@ -6,6 +6,7 @@ import type { ArchiveOutcome } from "./ArchiveOutcome";
 import type { ArchiveRequest } from "./ArchiveRequest";
 import type { BotlerEvent } from "./BotlerEvent";
 import type { BreakerCleared } from "./BreakerCleared";
+import type { Cancelled } from "./Cancelled";
 import type { ChatCreated } from "./ChatCreated";
 import type { ChatRestored } from "./ChatRestored";
 import type { ClearBreaker } from "./ClearBreaker";
@@ -59,6 +60,7 @@ export interface Routes {
   status: { method: "GET"; path: "/api/v1/status"; params: Record<string, never>; query: never; body: never; response: HubStatus };
   usage: { method: "GET"; path: "/api/v1/usage"; params: Record<string, never>; query: never; body: never; response: Usage };
   send_message: { method: "POST"; path: "/api/v1/messages"; params: Record<string, never>; query: never; body: UserMessage; response: EventPosted };
+  cancel_message: { method: "DELETE"; path: "/api/v1/messages/{id}"; params: { id: string }; query: never; body: never; response: Cancelled };
   dialogs: { method: "GET"; path: "/api/v1/dialogs"; params: Record<string, never>; query: never; body: never; response: Dialogs };
   answer_dialog: { method: "POST"; path: "/api/v1/dialogs/{id}/answer"; params: { id: string }; query: never; body: Answer; response: DialogAnswer };
   submit_secrets: { method: "POST"; path: "/api/v1/dialogs/{id}/secrets"; params: { id: string }; query: never; body: Submission; response: SecretsOutcome };
@@ -97,6 +99,7 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   status: { method: "GET", path: "/api/v1/status" },
   usage: { method: "GET", path: "/api/v1/usage" },
   send_message: { method: "POST", path: "/api/v1/messages" },
+  cancel_message: { method: "DELETE", path: "/api/v1/messages/{id}" },
   dialogs: { method: "GET", path: "/api/v1/dialogs" },
   answer_dialog: { method: "POST", path: "/api/v1/dialogs/{id}/answer" },
   submit_secrets: { method: "POST", path: "/api/v1/dialogs/{id}/secrets" },

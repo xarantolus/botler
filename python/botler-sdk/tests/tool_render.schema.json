@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ToolRender",
+  "description": "A render hint for a tool's result, declared with `@tool(render=...)`. Field names are keys of\nthe result object; `items` names the key holding the list (the result itself when absent).",
+  "oneOf": [
+    {
+      "description": "Link cards: the title linking to the url, with a snippet.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "links"
+        },
+        "snippet": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "description": "A table of the list's objects with these columns (all keys when absent).",
+      "type": "object",
+      "properties": {
+        "columns": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "table"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "description": "Sanitized markdown: the result string, or its `field`.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "markdown"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "description": "The object's scalar fields as a key/value list.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "keyvalue"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "description": "An image: the result (a URL, path or data URI), or its `field`.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "image"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    {
+      "description": "Collapsible JSON.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "json"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    }
+  ]
+}

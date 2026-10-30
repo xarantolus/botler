@@ -34,26 +34,24 @@ pub struct Recipe {
 }
 
 impl Recipe {
-    /// An agent image (`images/<name>/`), also used for the gate.
+    /// An agent image (`images/<name>/`), also used for the gate: its directory plus the code
+    /// Python tools run from (baked into `/opt/botler/tools-venv`, so a call installs nothing).
     pub fn agent(image: &str) -> Self {
-        Self {
-            repository: format!("image-{image}"),
-            dockerfile: format!("images/{image}/Dockerfile"),
-            inputs: vec![format!("images/{image}")],
-        }
+        let mut inputs = vec![format!("images/{image}")];
+        inputs.extend(TOOL_INPUTS.map(String::from));
+        Self { repository: format!("image-{image}"), dockerfile: format!("images/{image}/Dockerfile"), inputs }
     }
 
     /// A job image: its own directory plus the uv workspace's shared code and lock.
     pub fn job(job: &str) -> Self {
-        Self {
-            repository: format!("job-{job}"),
-            dockerfile: format!("jobs/{job}/Dockerfile"),
-            inputs: [&format!("jobs/{job}"), "packages", "tools", "connectors", "pyproject.toml", "uv.lock"]
-                .map(String::from)
-                .to_vec(),
-        }
+        let mut inputs = vec![format!("jobs/{job}")];
+        inputs.extend(TOOL_INPUTS.map(String::from));
+        Self { repository: format!("job-{job}"), dockerfile: format!("jobs/{job}/Dockerfile"), inputs }
     }
 }
+
+/// The uv workspace's shared code and lock: what tools, connectors and packages are built from.
+const TOOL_INPUTS: [&str; 5] = ["pyproject.toml", "uv.lock", "packages", "tools", "connectors"];
 
 /// The tag of `recipe` at `commit`, and the inputs present there. Every botler image the
 /// Dockerfile builds `FROM` must exist.
@@ -291,6 +289,43 @@ pub async fn collect_garbage_loop(hub: Arc<Hub>) {
             Ok(()) => done = Some(commit),
             Err(e) => tracing::warn!(error = %e, "image and export garbage collection failed"),
         }
+    }
+}
+
+/// Build the images of each newly applied commit in the background, so a wake or a job start
+/// does not wait for a build. A failed build becomes an incident (kind `build`).
+pub async fn prebuild_loop(hub: Arc<Hub>) {
+    let mut done: Option<String> = None;
+    loop {
+        let applied = hub.applied().await;
+        let paused = match hub.paused().await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(error = %e, "could not read the pause flag; not building images");
+                true
+            }
+        };
+        if !paused && done.as_ref() != Some(&applied.commit) {
+            let recipes = applied.defs.images.iter().map(|i| Recipe::agent(i));
+            for recipe in recipes.chain(applied.defs.jobs.keys().map(|j| Recipe::job(j))) {
+                let Err(e) = ensure(&hub, &recipe, &applied.commit).await else { continue };
+                tracing::error!(dockerfile = recipe.dockerfile, error = %e, "image build failed");
+                let failure = crate::failures::Failure {
+                    runnable: recipe.dockerfile.clone(),
+                    kind: "build",
+                    exit_code: None,
+                    run_id: None,
+                    logs_tail: e.to_string(),
+                    commit: Some(applied.commit.clone()),
+                    event_id: None,
+                };
+                if let Err(e) = crate::failures::report(&hub, failure).await {
+                    tracing::error!(error = %e, "could not report the failed image build");
+                }
+            }
+            done = Some(applied.commit.clone());
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 

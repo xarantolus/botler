@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import botler
 import httpx
+from botler.tools import Links
 from pydantic import BaseModel, Field
 from selectolax.lexbor import LexborHTMLParser, LexborNode
 
@@ -174,7 +175,10 @@ def _run(backend: Backend, query: str, max_results: int, region: str | None) -> 
     )
 
 
-@botler.tool(effects=["network", "secret:OPENROUTER_API_KEY"])
+@botler.tool(
+    effects=["network", "secret:OPENROUTER_API_KEY"],
+    render=Links(items="results", title="title", url="url", snippet="snippet"),
+)
 def search(
     query: Annotated[str, Field(min_length=1)],
     max_results: Annotated[int, Field(ge=1, le=MAX_PAGES * 10)] = 10,

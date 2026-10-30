@@ -14,7 +14,12 @@ gap: string | null,
  * For a message the user typed: exactly their text (`text` is what the agent received,
  * with the catalog's guidance around it).
  */
-message_text: string | null, } | { "kind": "assistant", id: string, at: string | null, text: string, thinking: string, tool_calls: Array<ToolCall>, model: string | null, cost_usd: number | null, error: string | null, } | { "kind": "tool_result", id: string, at: string | null, tool: string, 
+message_text: string | null, } | { "kind": "assistant", id: string, at: string | null, text: string, thinking: string, tool_calls: Array<ToolCall>, model: string | null, cost_usd: number | null, error: string | null, 
+/**
+ * pi's timestamp of the message (ms): the live stream's `message_start` carries the same,
+ * so the web app hands its streaming copy over to this entry.
+ */
+message_ts: number | null, } | { "kind": "tool_result", id: string, at: string | null, tool: string, 
 /**
  * The tool call this answers.
  */
