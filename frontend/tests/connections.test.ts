@@ -25,6 +25,7 @@ const data: Connections = {
       created_at: "2026-10-30T10:00:00Z",
       revoked_at: null,
       suspended: false,
+      stale: null,
     },
   ],
   services: ["notes"],
@@ -37,6 +38,7 @@ const data: Connections = {
       wake: false,
       note: "triage",
       created_at: "2026-10-30T10:00:00Z",
+      stale: null,
     },
   ],
   timers: [],
@@ -66,5 +68,17 @@ describe("ConnectionsSlideover", () => {
     (document.querySelector('button[aria-label="Remove subscription"]') as HTMLButtonElement).click();
     await flushPromises();
     expect(calls).toContainEqual({ name: "unsubscribe", args: { body: { id: "s1" } } });
+  });
+
+  it("greys out a stale grant and removes it without asking", async () => {
+    data.grants = [{ ...data.grants[0]!, stale: "no secret group github-ssh in secrets.toml" }];
+    calls.length = 0;
+    await mountInApp(ConnectionsSlideover, { name: "dev-1", open: true });
+    await flushPromises();
+    expect(document.body.textContent).toContain("stale: no secret group github-ssh");
+    const remove = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Remove")!;
+    remove.click();
+    await flushPromises();
+    expect(calls).toContainEqual({ name: "revoke_access", args: { body: { grant: "g1" } } });
   });
 });

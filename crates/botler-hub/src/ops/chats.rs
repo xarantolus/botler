@@ -399,6 +399,7 @@ impl Op for ArchiveReady {
             }),
             handed_to: handed_to.clone(),
             at: Utc::now(),
+            freed_bytes: None,
         };
         hub.store.archive_instance(name, &report).await?;
         crate::agents::stop_after_reply(hub, name).await;

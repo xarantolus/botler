@@ -237,6 +237,13 @@ impl Containers for Fake {
         }
     }
 
+    async fn image_size(&self, tag: &str) -> Result<u64> {
+        match self.lock().images.contains_key(tag) {
+            true => Ok(1 << 20),
+            false => Err(ContainerError::NotFound(tag.into())),
+        }
+    }
+
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {
         Self::check_mounts(spec)?;
         let mut st = self.lock();

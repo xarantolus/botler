@@ -44,3 +44,38 @@ fn backup_archives_facts_not_derived_state() {
     assert!(list.iter().any(|e| e == "hub.db"));
     assert!(!list.iter().any(|e| e == "secrets.key"), "{list:?}");
 }
+
+#[test]
+fn backup_leaves_out_what_git_ignores_unless_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    botler(&data, &["init"]);
+    let repo = data.join("homes/chat-1/proj");
+    let write = |rel: &str, body: &str| {
+        let p = repo.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    };
+    write(".gitignore", "node_modules/\n*.log\n!keep.log\n");
+    for f in ["src/a.rs", "keep.log", "node_modules/x/i.js", "debug.log", "we ird [x].log"] {
+        write(f, f);
+    }
+    let out =
+        Command::new("git").args(["init", "-q"]).current_dir(&repo).env("GIT_CONFIG_GLOBAL", "/dev/null").output();
+    assert!(out.unwrap().status.success());
+
+    let archive = dir.path().join("b.tar");
+    botler(&data, &["backup", archive.to_str().unwrap()]);
+    let list = entries(&archive);
+    let has = |f: &str| list.iter().any(|e| e == &format!("homes/chat-1/proj/{f}"));
+    assert!(has("src/a.rs") && has("keep.log") && has(".gitignore"), "{list:?}");
+    for f in ["node_modules", "debug.log", "we ird [x].log"] {
+        assert!(!has(f), "{f} is ignored: {list:?}");
+    }
+
+    let archive = dir.path().join("full.tar");
+    botler(&data, &["backup", "--full", archive.to_str().unwrap()]);
+    let list = entries(&archive);
+    let has = |f: &str| list.iter().any(|e| e == &format!("homes/chat-1/proj/{f}"));
+    assert!(has("node_modules/x/i.js") && has("debug.log"), "{list:?}");
+}

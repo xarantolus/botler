@@ -27,6 +27,7 @@ pub mod ops;
 pub mod phase;
 
 pub mod prompt;
+pub mod restore;
 pub mod review;
 pub mod router;
 pub mod scheduler;
@@ -35,6 +36,7 @@ pub mod secret_requests;
 pub mod serve;
 pub mod services;
 pub mod sessions;
+pub mod storage;
 pub mod supervisor;
 pub mod template;
 pub mod transactions;

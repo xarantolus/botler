@@ -142,6 +142,7 @@ pub mod kinds {
     pub const REPLY_OVERDUE: &str = "reply.overdue";
     pub const SCHEDULE: &str = "schedule";
     pub const ACCESS_CHANGED: &str = "access.changed";
+    pub const CHAT_RESTORED: &str = "chat.restored";
     pub const ENVIRONMENT_UPDATED: &str = "environment.updated";
 }
 

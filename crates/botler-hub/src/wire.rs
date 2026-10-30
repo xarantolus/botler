@@ -16,10 +16,11 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::api::{
-    Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, ProposalVerdict, RevertRequest, SecretValue,
-    UserMessage,
+    Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, ProposalVerdict, RestoreRequest, RevertRequest,
+    SecretValue, UserMessage,
 };
 use crate::memory::{MemoryConflict, MemoryHistory, MemoryList, MemoryRead, MemoryWrite};
+use crate::ops::{ClearChatCaches, CollectGarbage, DeleteChat, StorageUsage};
 use crate::ops::{GetProposal, GetRunLogs, ListConnections, Op, RevokeAccess, Unsubscribe};
 use crate::phase::WakePhase;
 use crate::review::ProposalDiff;
@@ -201,6 +202,11 @@ pub struct ArchiveOutcome {
 #[derive(Debug, Serialize, TS)]
 pub struct ChatRestored {
     pub restored: String,
+    /// What changed while it was archived (the agent is told too).
+    pub changes: Vec<String>,
+    /// Set when it was NOT restored because its agent definition is gone: restore it again with
+    /// `as_generic`, or delete it.
+    pub definition_gone: Option<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -345,6 +351,10 @@ routes! {
         memory_read: MemoryRead;
         memory_write: MemoryWrite;
         memory_history: MemoryHistory;
+        storage_usage: StorageUsage;
+        clear_chat_caches: ClearChatCaches;
+        delete_chat: DeleteChat;
+        collect_garbage: CollectGarbage;
         connections: ListConnections;
         revoke_access: RevokeAccess;
         unsubscribe: Unsubscribe;
@@ -363,7 +373,7 @@ routes! {
     session: GET "/api/v1/sessions/{instance}" => SessionView;
     new_chat: POST "/api/v1/chats", body: NewChat => ChatCreated;
     archive_chat: POST "/api/v1/chats/{instance}/archive", body: ArchiveRequest => ArchiveOutcome;
-    restore_chat: POST "/api/v1/chats/{instance}/restore" => ChatRestored;
+    restore_chat: POST "/api/v1/chats/{instance}/restore", body: RestoreRequest => ChatRestored;
     runs: GET "/api/v1/runs" => Vec<Run>;
     incidents: GET "/api/v1/incidents" => Vec<Incident>;
     secrets: GET "/api/v1/secrets" => Vec<SecretGroupView>;

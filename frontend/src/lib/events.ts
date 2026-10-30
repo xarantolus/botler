@@ -18,6 +18,7 @@ const BUILTIN = {
   timer: true,
   schedule: true,
   "access.changed": true,
+  "chat.restored": true,
   "environment.updated": true,
 } as const satisfies Record<BuiltinPayload["type"], true>;
 
@@ -43,6 +44,7 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   timer: "i-lucide-alarm-clock",
   schedule: "i-lucide-calendar-clock",
   "access.changed": "i-lucide-shield-plus",
+  "chat.restored": "i-lucide-archive-restore",
   "environment.updated": "i-lucide-refresh-cw",
 };
 
@@ -98,6 +100,8 @@ export function eventSummary(ev: BotlerEvent): string {
       return `timer ${b.payload.timer_id}${b.payload.note ? `: ${b.payload.note}` : ""}`;
     case "schedule":
       return `schedule ${b.payload.trigger}${b.payload.skipped ? ` (${b.payload.skipped} missed)` : ""}`;
+    case "chat.restored":
+      return `restored; changed while archived: ${b.payload.changes.join("; ")}`;
     case "access.changed":
       return `${b.payload.resource} ${b.payload.change}`;
     case "environment.updated":

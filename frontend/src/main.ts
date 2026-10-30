@@ -12,6 +12,7 @@ import RequestsView from "./views/RequestsView.vue";
 import RunsView from "./views/RunsView.vue";
 import SearchView from "./views/SearchView.vue";
 import SecretsView from "./views/SecretsView.vue";
+import StorageView from "./views/StorageView.vue";
 import "./style.css";
 
 const router = createRouter({
@@ -28,6 +29,7 @@ const router = createRouter({
     { path: "/secrets", name: "secrets", component: SecretsView },
     { path: "/search", name: "search", component: SearchView },
     { path: "/memory", name: "memory", component: MemoryView },
+    { path: "/storage", name: "storage", component: StorageView },
     { path: "/:rest(.*)*", redirect: "/" },
   ],
 });
