@@ -541,12 +541,12 @@ async fn secrets(
     let set = hub.store.secret_names().await?;
     let mut grantees: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
     for a in applied.defs.agents.values() {
-        for g in &a.spec.secrets {
+        for g in &a.spec.env.secrets {
             grantees.entry(g.as_str()).or_default().push(format!("agent {}", a.name));
         }
     }
     for j in applied.defs.jobs.values() {
-        for g in &j.spec.secrets {
+        for g in &j.spec.env.secrets {
             grantees.entry(g.as_str()).or_default().push(format!("job {}", j.name));
         }
     }

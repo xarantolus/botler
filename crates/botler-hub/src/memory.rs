@@ -209,7 +209,7 @@ fn namespace_of(path: &str) -> String {
 /// An agent's namespaces as `(mount name, namespace)`: they are mounted at `/memory/<name>`.
 pub fn namespaces(def: &AgentDef) -> Vec<(&'static str, String)> {
     let mut ns = vec![("self", format!("agents/{}", def.name))];
-    if let Some(home) = &def.spec.home {
+    if let Some(home) = &def.spec.env.home {
         ns.push(("project", format!("projects/{home}")));
     }
     ns.push(("user", "user".into()));

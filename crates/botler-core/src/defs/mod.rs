@@ -3,12 +3,14 @@
 //! Loading never stops at the first problem: it collects every diagnostic so an agent gets the
 //! whole list of what to fix in one gate run.
 
+mod environment;
 mod model;
 pub mod tree;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+pub use environment::*;
 pub use model::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -100,10 +102,10 @@ impl Definitions {
         self.jobs.get(job).and_then(|j| j.spec.on_failure.clone()).unwrap_or_else(|| Target::Spawn("triage".into()))
     }
 
-    /// Tools granted to an agent by its `tools` globs. Globs are validated at load; if one is
+    /// Tools granted to an environment by its `tools` globs. Globs are validated at load; if one is
     /// somehow invalid, no tools are granted (fail closed).
-    pub fn tools_for(&self, agent: &Agent) -> Vec<&ToolDecl> {
-        let Ok(set) = glob_set(&agent.tools) else { return Vec::new() };
+    pub fn tools_for(&self, env: &Environment) -> Vec<&ToolDecl> {
+        let Ok(set) = glob_set(&env.tools) else { return Vec::new() };
         self.tools.values().filter(|t| set.is_match(&t.name)).collect()
     }
 }
@@ -567,8 +569,11 @@ fn check_route_secret(l: &mut Loader<'_>, defs: &Definitions, path: &str, name: 
 fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
     for a in defs.agents.values() {
         let path = format!("agents/{}/agent.toml", a.name);
-        if !defs.images.contains(&a.spec.image) {
-            l.err(&path, format!("image {:?} not found under images/", a.spec.image));
+        for key in a.spec.env.foreign_keys(true) {
+            l.err(&path, format!("`{key}` only applies to jobs and services, not agents"));
+        }
+        if !defs.images.contains(a.spec.env.image()) {
+            l.err(&path, format!("image {:?} not found under images/", a.spec.env.image()));
         }
         if let Some(m) = &a.spec.model
             && !defs.instance.models.routes.contains_key(m)
@@ -578,12 +583,12 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
         if defs.route_for(&a.spec).is_none() {
             l.err(&path, "no model route: set `model` or `models.default` in botler.toml");
         }
-        for g in &a.spec.secrets {
+        for g in &a.spec.env.secrets {
             check_container_group(l, defs, &path, g);
         }
-        for m in &a.spec.mcp {
+        for m in &a.spec.env.mcp {
             match defs.jobs.get(m) {
-                Some(j) if j.spec.lifetime == Lifetime::Service && j.spec.port.is_none() => {
+                Some(j) if j.spec.lifetime == Lifetime::Service && j.spec.env.port.is_none() => {
                     l.err(&path, format!("mcp {m:?}: the service declares no `port` to reach it on"))
                 }
                 Some(j) if j.spec.lifetime == Lifetime::Service => {}
@@ -591,30 +596,30 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
                 None => l.err(&path, format!("mcp {m:?} is not a job in jobs/")),
             }
         }
-        if !a.spec.mcp.is_empty() && a.spec.network == Network::None {
+        if !a.spec.env.mcp.is_empty() && a.spec.env.network() == Network::None {
             l.err(
                 &path,
                 "`mcp` services are reached over the network; an agent with network = \"none\" cannot use them",
             );
         }
-        for (name, s) in &a.spec.mcp_stdio {
+        for (name, s) in &a.spec.env.mcp_stdio {
             let ok = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
             if !ok {
                 l.err(&path, format!("mcp_stdio server name {name:?} may only use letters, digits, `_` and `-`"));
             }
-            if name == "botler" || a.spec.mcp.contains(name) {
+            if name == "botler" || a.spec.env.mcp.contains(name) {
                 l.err(&path, format!("mcp_stdio server name {name:?} is already taken"));
             }
             if s.command.first().is_none_or(|c| c.trim().is_empty()) {
                 l.err(&path, format!("mcp_stdio {name:?}: command must not be empty"));
             }
         }
-        if let Err(e) = glob_set(&a.spec.tools) {
+        if let Err(e) = glob_set(&a.spec.env.tools) {
             l.err(&path, format!("invalid tools glob: {e}"));
-        } else if !a.spec.tools.is_empty() && defs.tools_for(&a.spec).is_empty() {
+        } else if !a.spec.env.tools.is_empty() && defs.tools_for(&a.spec.env).is_empty() {
             l.warn(&path, "tools globs match no tool in tools.manifest.json");
         }
-        if let Some(home) = &a.spec.home {
+        if let Some(home) = &a.spec.env.home {
             l.check_name(&path, "home", home);
         }
         if a.spec.always_on && a.spec.kind != AgentKind::Persistent {
@@ -630,10 +635,13 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
     let mut host_ports: BTreeMap<u16, &str> = BTreeMap::new();
     for j in defs.jobs.values() {
         let path = format!("jobs/{}/job.toml", j.name);
-        if j.spec.lifetime == Lifetime::Oneshot && (j.spec.port.is_some() || !j.spec.publish.is_empty()) {
+        for key in j.spec.env.foreign_keys(false) {
+            l.err(&path, format!("`{key}` only applies to agents"));
+        }
+        if j.spec.lifetime == Lifetime::Oneshot && (j.spec.env.port.is_some() || !j.spec.env.publish.is_empty()) {
             l.err(&path, "`port` and `publish` only apply to services (lifetime = \"service\")");
         }
-        for p in &j.spec.publish {
+        for p in &j.spec.env.publish {
             if p.host_port < 1024 {
                 l.err(
                     &path,
@@ -654,7 +662,7 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
                 l.err(&path, format!("host port {} is already published by service `{other}`", p.host_port));
             }
         }
-        for g in &j.spec.secrets {
+        for g in &j.spec.env.secrets {
             check_container_group(l, defs, &path, g);
         }
         if let Some(t) = &j.spec.on_failure {

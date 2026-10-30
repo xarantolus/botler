@@ -5,21 +5,21 @@
 //! a `proposal.updated` event. Approval binds to the pinned, gated commit: if main moves before
 //! the merge, the pipeline starts over instead of merging something nobody reviewed.
 
-use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use botler_core::Source;
 use botler_core::change::{ChangeSummary, Decision, Verdict, decide, preview};
+use botler_core::defs::Environment;
 use botler_core::payloads::{BuiltinPayload, ProposalUpdatedPayload};
-use botler_runtime::{ContainerSpec, Mount, NetworkMode};
+use botler_runtime::Mount;
 use botler_store::{DialogKind, NewDialog, NewProposal, Priority, Proposal, ProposalKind, ProposalStatus};
 use chrono::Utc;
 use tokio::io::AsyncReadExt;
 
+use crate::environment::{self, Runnable};
 use crate::hub::{Hub, HubError, Result, load_at};
-use crate::{images, plumbing, router};
+use crate::{images, router};
 
 /// How often a proposal is re-run because main moved underneath it before giving up.
 const MAX_ATTEMPTS: i64 = 3;
@@ -147,31 +147,16 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
         tokio::fs::remove_dir_all(&dir).await?;
     }
     hub.repo.export(commit, &dir).await?;
-    let mut mounts = vec![
-        Mount::Bind { src: dir.clone(), dst: "/workspace".into(), read_only: false },
-        Mount::Bind { src: hub.paths.assets().join("sdk"), dst: plumbing::SDK_DIR.into(), read_only: true },
-        // Dependency downloads are cached across gate runs.
-        Mount::Volume { name: "botler-gate-uv-cache".into(), dst: "/home/agent/.cache/uv".into() },
-    ];
-    let mut env = BTreeMap::from([
-        ("PYTHONPATH".to_string(), plumbing::SDK_DIR.to_string()),
-        ("CI".into(), "1".into()),
-        // Explicit, so images built before the base image moved HOME still use the cache.
-        ("HOME".into(), crate::agents::HOME.into()),
-    ]);
-    crate::localtime::apply(applied.defs.timezone, Path::new(crate::localtime::ZONEINFO), &mut env, &mut mounts);
-    let spec = ContainerSpec {
-        name: format!("botler-{}-gate-{id}", hub.id),
-        image,
-        command: vec!["sh".into(), "-c".into(), "cd /workspace && sh gate/run 2>&1".into()],
-        env,
-        mounts,
-        labels: hub.labels("gate"),
-        network: NetworkMode::Default,
-        workdir: Some("/workspace".into()),
-        remove_on_exit: true,
-        ..Default::default()
-    };
+    let command = vec!["sh".into(), "-c".into(), "cd /workspace && sh gate/run 2>&1".into()];
+    let gate = Runnable::Gate { id };
+    let mut spec = environment::container_spec(hub, &Environment::default(), gate, image, command, &[]).await?;
+    spec.mounts.insert(0, Mount::Bind { src: dir.clone(), dst: "/workspace".into(), read_only: false });
+    // Dependency downloads are cached across gate runs.
+    spec.mounts.push(Mount::Volume { name: "botler-gate-uv-cache".into(), dst: "/home/agent/.cache/uv".into() });
+    spec.env.insert("CI".into(), "1".into());
+    // Explicit, so images built before the base image moved HOME still use the cache.
+    spec.env.insert("HOME".into(), crate::agents::HOME.into());
+    spec.workdir = Some("/workspace".into());
     let mut att = hub.containers.run_attached(&spec).await?;
     let mut out = String::new();
     let read = tokio::time::timeout(GATE_TIMEOUT, att.stdout.read_to_string(&mut out)).await;

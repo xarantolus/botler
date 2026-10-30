@@ -4,15 +4,15 @@
 use botler_core::defs::{Lifetime, Overlap};
 use botler_core::payloads::{BuiltinPayload, RunnableFinishedPayload};
 use botler_core::{Event, Source};
-use botler_runtime::{ContainerSpec, Mount, NetworkMode, PortMapping};
+use botler_runtime::Mount;
 use botler_store::{NewRun, Run, RunKind, RunStatus};
 use chrono::{Duration, Utc};
 use serde_json::json;
 
-use crate::auth::Principal;
+use crate::environment::{self, Runnable};
 use crate::failures::{self, Failure};
 use crate::hub::{Hub, HubError, Result};
-use crate::{images, plumbing, services};
+use crate::{images, services};
 
 pub const ROLE_LABEL: &str = "botler.role";
 pub const RUN_LABEL: &str = "botler.run";
@@ -94,72 +94,22 @@ pub async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<(
     } else {
         def.spec.timeout.unwrap_or(applied.defs.instance.defaults.job_timeout).as_chrono() + Duration::minutes(5)
     };
+    let what = Runnable::Run { run, ttl };
+    let mut spec = environment::container_spec(hub, &def.spec.env, what, image, def.spec.command.clone(), &[]).await?;
     let run_dir = hub.paths.root.join("runs").join(&run.id);
-    let p = plumbing::plumbing(
-        hub,
-        &Principal::Run { run_id: run.id.clone() },
-        ttl,
-        &def.spec.secrets,
-        &[],
-        run_dir.join("secrets"),
-    )
-    .await?;
-    let mut env = p.env;
-    env.insert("BOTLER_RUN_ID".into(), run.id.clone());
-    env.insert("BOTLER_RUNNABLE".into(), run.runnable.clone());
-    let mut mounts = p.mounts;
     tokio::fs::create_dir_all(&run_dir).await?;
     let event_file = run_dir.join("event.json");
     let event_json = serde_json::to_vec_pretty(&event.map_or(json!(null), |e| json!(e)))
         .map_err(|e| HubError::Io(std::io::Error::other(e)))?;
     tokio::fs::write(&event_file, event_json).await?;
-    mounts.push(Mount::Bind { src: event_file, dst: "/botler/event.json".into(), read_only: true });
-    env.insert("BOTLER_EVENT_FILE".into(), "/botler/event.json".into());
-    if def.spec.volume {
-        mounts.push(Mount::Volume { name: format!("botler-job-{}", run.runnable), dst: "/data".into() });
-    }
-    let name = run_container(hub, run);
-    let ports: Vec<PortMapping> = def
-        .spec
-        .publish
-        .iter()
-        .map(|p| PortMapping { bind: p.bind.clone(), host_port: p.host_port, port: p.port })
-        .collect();
-    if let Some(p) = ports.iter().find(|p| p.host_port == hub.config.listen.port()) {
-        return Err(HubError::Forbidden(format!("host port {} is the hub's own port; publish another", p.host_port)));
-    }
-    let spec = ContainerSpec {
-        name: name.clone(),
-        image,
-        command: def.spec.command.clone(),
-        env,
-        mounts,
-        labels: {
-            let mut l = hub.labels(if service { "service" } else { "job" });
-            l.insert(RUN_LABEL.into(), run.id.clone());
-            l.insert(RUNNABLE_LABEL.into(), run.runnable.clone());
-            l
-        },
-        network: match def.spec.network {
-            botler_core::defs::Network::None => NetworkMode::None,
-            botler_core::defs::Network::Default if service => NetworkMode::Named(hub.network()),
-            botler_core::defs::Network::Default => NetworkMode::Default,
-        },
-        // Agents reach a service by its plain name on the network.
-        network_aliases: if service { vec![run.runnable.clone()] } else { vec![] },
-        ports,
-        ..Default::default()
-    };
-    if service {
-        if let NetworkMode::Named(n) = &spec.network {
-            hub.containers.ensure_network(n).await?;
-        }
-        // The name is stable: clear the leftover of a run the hub could not finalize.
-        if let Some(c) = hub.containers.inspect(&name).await?
-            && !c.running
-        {
-            hub.containers.remove(&name).await?;
-        }
+    spec.mounts.push(Mount::Bind { src: event_file, dst: "/botler/event.json".into(), read_only: true });
+    spec.env.insert("BOTLER_EVENT_FILE".into(), "/botler/event.json".into());
+    // The name is stable: clear the leftover of a run the hub could not finalize.
+    if service
+        && let Some(c) = hub.containers.inspect(&spec.name).await?
+        && !c.running
+    {
+        hub.containers.remove(&spec.name).await?;
     }
     let cid = hub.containers.run_detached(&spec).await.map_err(|e| match &e {
         botler_runtime::ContainerError::Command { stderr, .. }
@@ -299,5 +249,5 @@ pub(crate) async fn finalize_container(hub: &Hub, run: &Run) {
     if let Err(e) = hub.containers.remove(&name).await {
         tracing::error!(container = %name, error = %e, "could not remove finished container");
     }
-    plumbing::cleanup_secrets(&hub.paths.root.join("runs").join(&run.id).join("secrets")).await;
+    environment::cleanup_secrets(&hub.paths.root.join("runs").join(&run.id).join("secrets")).await;
 }

@@ -68,7 +68,7 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
            with its next fire times; check them.\n\n\
          ## Changing the system\n",
     );
-    match def.spec.workspace {
+    match def.spec.env.workspace() {
         Workspace::Monorepo => s.push_str(&format!(
             "`~/monorepo` is your own clone of the monorepo{}. Change the system by editing it, running \
              `gate/run`, committing, `git push origin HEAD`, then `propose_change(branch, title)`. The \
@@ -88,13 +88,14 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          Your home `/home/agent` (`$HOME`, your working directory) persists across wakes and restarts; \
          `/tmp` and everything else outside your home and mounts is wiped whenever you sleep. Clone repos \
          and keep notes and tools in your home. {}\n\n",
-        match &def.spec.home {
+        match &def.spec.env.home {
             Some(name) => format!("It is the shared home `{name}`: other agents of this project use it too."),
             None => "It is yours alone.".to_string(),
         }
     ));
     let project = def
         .spec
+        .env
         .home
         .as_ref()
         .map(|h| format!(", `/memory/project` (`projects/{h}/`, this project)"))

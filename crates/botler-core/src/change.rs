@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::defs::{
-    CapabilityPolicy, Definitions, Lifetime, Network, ResolvedTrigger, SecretClass, Target, TriggerKind,
+    CapabilityPolicy, Definitions, EnvEscalation, Environment, Lifetime, ResolvedTrigger, SecretClass, Target,
+    TriggerKind,
 };
 use crate::limits::default_limit;
 
@@ -230,10 +231,10 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
             }
         };
         for a in d.agents.values() {
-            add(&a.spec.secrets, &[], format!("agent `{}`", a.name));
+            add(&a.spec.env.secrets, &[], format!("agent `{}`", a.name));
         }
         for j in d.jobs.values() {
-            add(&j.spec.secrets, &[], format!("job `{}`", j.name));
+            add(&j.spec.env.secrets, &[], format!("job `{}`", j.name));
         }
         for (r, route) in &d.instance.models.routes {
             if let Some(s) = &route.api_key_secret {
@@ -247,26 +248,23 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         esc.insert(Escalation::SecretGranted { secret: secret.clone(), group: group.clone(), to: to.clone() });
     }
 
+    // Secret grants are compared per secret above; tools and homes are no escalation (yet).
+    let none = Environment::default();
     for a in new.agents.values() {
         let prev = old.agents.get(&a.name);
-        if a.spec.network == Network::Default && prev.is_some_and(|p| p.spec.network == Network::None) {
-            esc.insert(Escalation::NetworkOpened { agent: a.name.clone() });
+        for e in prev.map_or(&none, |p| &p.spec.env).escalations(&a.spec.env) {
+            let agent = a.name.clone();
+            esc.insert(match e {
+                EnvEscalation::Network => Escalation::NetworkOpened { agent },
+                EnvEscalation::Service(service) => Escalation::McpAccessAdded { agent, service },
+                EnvEscalation::McpStdio { server, command } => Escalation::McpStdioAdded { agent, server, command },
+                _ => continue,
+            });
         }
         // Spawning is a base capability; listing it changes nothing.
         for c in a.spec.capabilities.iter().filter(|c| **c != crate::defs::Capability::Spawn) {
             if !prev.is_some_and(|p| p.spec.capabilities.contains(c)) {
                 esc.insert(Escalation::CapabilityAdded { agent: a.name.clone(), capability: c.as_str().into() });
-            }
-        }
-        for m in &a.spec.mcp {
-            if !prev.is_some_and(|p| p.spec.mcp.contains(m)) {
-                esc.insert(Escalation::McpAccessAdded { agent: a.name.clone(), service: m.clone() });
-            }
-        }
-        for (server, s) in &a.spec.mcp_stdio {
-            if prev.and_then(|p| p.spec.mcp_stdio.get(server)) != Some(s) {
-                let command = s.command.join(" ");
-                esc.insert(Escalation::McpStdioAdded { agent: a.name.clone(), server: server.clone(), command });
             }
         }
         for (op, lim) in &a.spec.limits {
@@ -282,9 +280,9 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
             esc.insert(Escalation::ServiceAdded { job: j.name.clone() });
         }
         if j.spec.lifetime == Lifetime::Service {
-            for p in &j.spec.publish {
-                let before = prev.filter(|o| o.spec.lifetime == Lifetime::Service).map_or(&[][..], |o| &o.spec.publish);
-                if !before.contains(p) {
+            let before = prev.filter(|o| o.spec.lifetime == Lifetime::Service).map_or(&none, |o| &o.spec.env);
+            for e in before.escalations(&j.spec.env) {
+                if let EnvEscalation::Port(p) = e {
                     esc.insert(Escalation::PortPublished { job: j.name.clone(), reach: p.reach() });
                 }
             }
@@ -350,10 +348,10 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         let mut m = BTreeMap::new();
         for j in d.services() {
             let mut what = format!("service `{}` runs continuously ({})", j.name, j.spec.description);
-            if let Some(p) = j.spec.port {
+            if let Some(p) = j.spec.env.port {
                 what.push_str(&format!(", on port {p} inside the services network"));
             }
-            for p in &j.spec.publish {
+            for p in &j.spec.env.publish {
                 what.push_str(&format!(", reachable from {} (container port {})", p.reach(), p.port));
             }
             m.insert(format!("service:{}", j.name), (what, format!("{:?}", j.spec)));
@@ -447,16 +445,16 @@ fn likely_mistakes(old: &Definitions, new: &Definitions, now: DateTime<Utc>) -> 
         }
     }
     for a in new.agents.values() {
-        let before = old.agents.get(&a.name).map(|p| p.spec.home.as_deref());
-        if before.is_none_or(|h| h == a.spec.home.as_deref()) {
+        let before = old.agents.get(&a.name).map(|p| p.spec.env.home.as_deref());
+        if before.is_none_or(|h| h == a.spec.env.home.as_deref()) {
             continue;
         }
-        match &a.spec.home {
+        match &a.spec.env.home {
             Some(home) => {
                 let others: Vec<&str> = new
                     .agents
                     .values()
-                    .filter(|o| o.name != a.name && o.spec.home.as_deref() == Some(home.as_str()))
+                    .filter(|o| o.name != a.name && o.spec.env.home.as_deref() == Some(home.as_str()))
                     .map(|o| o.name.as_str())
                     .collect();
                 out.push(format!(

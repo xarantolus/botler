@@ -86,7 +86,7 @@
 - the pinned SDK (`python/botler-sdk`, embedded in the hub binary) bind-mounted read-only at `/opt/botler/sdk`, with `PYTHONPATH` set. `import botler` is a stdlib-only client of `POST /api/v1/ops/{name}`, so it works in any image without being in the job's dependencies, and the hub version and SDK version always match. It is deliberately not a uv dependency of the monorepo (a path dependency would pin `uv.lock` to one checkout location): pyright finds it through `extraPaths = ["/opt/botler/sdk"]`, Python through `PYTHONPATH`, and packages that declare events or tools depend on `pydantic` themselves.
 
 The SDK surface:
-- `botler.ops.<op>(...)`: every hub operation, **generated** from the hub's `OPS` specs (`tests/sdk.rs` fails when `botler/_ops.py` is stale; `BOTLER_BLESS=1` rewrites it);
+- `botler.ops.<op>(...)`: every hub operation, **generated** from the hub's op registry `ops::OPS` (`tests/sdk.rs` fails when `botler/_ops.py` is stale; `BOTLER_BLESS=1` rewrites it);
 - `emit(type, payload)` or `emit(EventInstance)`, `send_message(to, body)`, `set_timer(prompt, at=|after=)`;
 - `state.get/set` (a small per-runnable KV in SQLite for poller cursors and dedup keys);
 - `log`;
@@ -195,7 +195,7 @@ An agent messaging itself is refused with a hint (files in its home, `set_timer`
   - adds system-prompt sections via `before_agent_start` (identity, inbox semantics, what needs approval, how to propose changes);
   - renders deliveries as `custom_message` entries with provenance labels;
   - records delivery ids for idempotency;
-  - registers the turn-ending hub ops (`ops::TURN_ENDING`: `ask_user`, `request_secrets`, `propose_change`, `submit_review`, `archive_ready`) as `model-only` tools that call `POST /api/v1/ops/{name}` and return `terminate: true`, so no model call follows (MCP results cannot end a turn). The hub renders their specs from `OPS` into `turn-tools.json` and hides the MCP duplicates via `toolExposure` in `mcp.json`. A failed call does not end the turn;
+  - registers the turn-ending hub ops (those with `Op::ENDS_TURN`: `ask_user`, `request_secrets`, `propose_change`, `submit_review`, `archive_ready`) as `model-only` tools that call `POST /api/v1/ops/{name}` and return `terminate: true`, so no model call follows (MCP results cannot end a turn). The hub renders their specs from `OPS` into `turn-tools.json` and hides the MCP duplicates via `toolExposure` in `mcp.json`. A failed call does not end the turn;
   - can block tool calls via `tool_call` (defence in depth only).
 - pi's own `AGENTS.md` loading carries each agent's prompt (`agents/<name>/AGENTS.md`). Agent-authored pi skills, prompts and extensions live in the monorepo `pi/` directory and are loaded per agent. This is the agent-editable layer.
 - The hub reads usage/cost from the RPC `message_end` events for budgets and sends `abort` when a budget is exceeded (stop and report, never truncate).
