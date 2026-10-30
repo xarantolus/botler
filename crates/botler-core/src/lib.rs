@@ -8,6 +8,7 @@ pub mod duration;
 pub mod event;
 pub mod event_check;
 pub mod limits;
+pub mod loops;
 pub mod routing;
 pub mod trigger;
 

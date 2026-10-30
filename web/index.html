@@ -318,8 +318,16 @@ async function renderEvents() {
 }
 
 async function renderQuestions() {
-  const d = await api("/api/v1/dialogs");
-  $("#qcount").textContent = d.open.length ? `(${d.open.length})` : "";
+  const [d, status] = await Promise.all([api("/api/v1/dialogs"), api("/api/v1/status")]);
+  const paused = status.breakers.map((b) => `
+    <div class="row" data-breaker="${esc(b.subject)}">
+      <div class="muted" style="font-size:12px">paused · ${esc(b.kind)} breaker · ${esc(ago(b.tripped_at))}</div>
+      <div><b>${esc(b.subject)}</b></div>
+      <div style="white-space:pre-wrap">${esc(b.reason)}</div>
+      <div class="ctas"><button class="primary" data-resume>Resume</button></div>
+    </div>`).join("");
+  const waiting = d.open.length + status.breakers.length;
+  $("#qcount").textContent = waiting ? `(${waiting})` : "";
   const open = d.open.map((q) => q.kind === "credentials" ? `
     <div class="row" data-credentials="${esc(q.id)}">
       <div class="muted" style="font-size:12px">${esc(q.instance)} · secrets · ${esc(ago(q.created_at))}</div>
@@ -342,7 +350,7 @@ async function renderQuestions() {
     </div>`).join("");
   const past = d.recent.filter((q) => q.status !== "open").slice(0, 15).map((q) => `
     <div class="row muted"><div style="font-size:12px">${esc(q.instance)} · ${esc(q.status)}${q.answer ? ": " + esc(q.answer) : ""}${q.abort_reason ? " (" + esc(q.abort_reason) + ")" : ""}</div><div>${esc(q.question)}</div></div>`).join("");
-  return (open || '<p class="muted">Nothing is waiting for you.</p>') + (past ? `<h4 class="muted">Earlier</h4>${past}` : "");
+  return paused + (open || (paused ? "" : '<p class="muted">Nothing is waiting for you.</p>')) + (past ? `<h4 class="muted">Earlier</h4>${past}` : "");
 }
 
 async function renderRuns() {
@@ -382,6 +390,15 @@ async function onPaneClick(e) {
     const t = await api("/api/v1/events/" + ev.dataset.event + "/trace");
     if (t.reached.length) openChat(t.reached[0].instance, t.reached[0].session_anchor.delivery_id);
     else alert("This event did not reach a chat directly" + (t.runs.length ? ` (it started ${t.runs.length} job run(s)).` : "."));
+    return;
+  }
+  const breaker = e.target.closest("[data-breaker]");
+  if (breaker && e.target.dataset.resume !== undefined) {
+    try {
+      await api("/api/v1/breakers/clear", { method: "POST", body: JSON.stringify({ subject: breaker.dataset.breaker }) });
+    } catch (err) { alert(err.message); }
+    refreshPane().catch(report);
+    refreshSide().catch(report);
     return;
   }
   const dialog = e.target.closest("[data-dialog]");

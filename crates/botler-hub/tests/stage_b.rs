@@ -65,7 +65,7 @@ async fn message_wakes_botler_and_is_delivered_once() {
         .into();
     let delivery = e.hub.store.delivery(&first_id).await.unwrap();
     let agent = e.hub.agents.get("botler").await.unwrap();
-    let again = agent.pi.prompt(&agents::envelope(&delivery, &ev), &[], None).await.unwrap();
+    let again = agent.pi.prompt(&agents::envelope(&delivery, &ev).unwrap(), &[], None).await.unwrap();
     assert_eq!(again, botler_runtime::Disposition::Handled);
     assert_eq!(e.fake.prompts(&name).len(), 1);
     settle().await;
@@ -563,8 +563,6 @@ async fn waiting_on_the_user_sleeps_after_a_grace_and_the_answer_wakes_it() {
 #[tokio::test]
 async fn deep_agent_trees_report_up_without_tripping_and_depth_is_bounded() {
     use botler_hub::HubError;
-    use botler_hub::auth::Principal;
-    use botler_hub::ops::{self, Caller};
     let e = env().await;
     with_key(&e).await;
     // Every agent may spawn: a 5-deep tree of dev agents under a chat.
@@ -577,27 +575,19 @@ async fn deep_agent_trees_report_up_without_tripping_and_depth_is_bounded() {
         assert_eq!(e.hub.store.instance(&child).await.unwrap().depth, level);
         chain.push(child);
     }
-    agents::dispatch_pending(&e.hub).await.unwrap();
-    settle().await;
-    // Each child reports up, deepest first, threading the reply.
-    let mut last: Option<String> = None;
-    for pair in chain.windows(2).rev() {
-        let (parent, child) = (&pair[0], &pair[1]);
-        let wake = e.hub.agents.get(child).await.unwrap().wake.clone();
-        let me = Caller::resolve(&e.hub, Principal::Agent { instance: child.clone(), wake }).await.unwrap();
-        let mut args = json!({"to": parent, "text": format!("{child} finished: built the parser and its tests")});
-        if let Some(id) = &last {
-            args["reply_to"] = json!(id);
-        }
-        let sent = ops::call(&e.hub, &me, "send_message", args).await.unwrap();
-        last = Some(sent["event_id"].as_str().unwrap().to_string());
-        e.route().await;
+    // Each level ends its turn with a report, which reaches its parent and wakes it; the parent's
+    // turn then ends with its own report to its parent, up to the root.
+    for (level, name) in chain.iter().enumerate() {
+        e.fake.set_last_reply(&agents::container_name(name), &format!("level {level}: built the parser and its tests"));
+    }
+    for _ in 0..8 {
         agents::dispatch_pending(&e.hub).await.unwrap();
         settle().await;
         e.route().await;
     }
+    let root_prompts = e.fake.prompts(&agents::container_name(&chain[0]));
+    assert!(root_prompts.iter().any(|p| p.contains("level 1: built the parser")), "{root_prompts:?}");
     assert!(e.hub.store.breakers().await.unwrap().is_empty(), "{:?}", e.hub.store.breakers().await.unwrap());
-    assert!(e.fake.prompts(&agents::container_name(&chain[0])).iter().any(|p| p.contains("finished")));
 
     // Depth is bounded by max_spawn_depth (8 by default).
     let mut parent = chain.last().unwrap().clone();

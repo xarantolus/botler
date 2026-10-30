@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use botler_core::catalog;
 use botler_core::defs::{AgentDef, Budget, Network, Workspace};
 use botler_core::event::kinds;
+use botler_core::event::payload::{AgentIdle, DeliveryEnvelope};
+use botler_core::loops::TurnLog;
 use botler_core::{Event, Provenance, Source};
 use botler_runtime::{ContainerSpec, Mount, NetworkMode, PiClient, PiError, PiEvent, PiEventKind, Streaming};
 use botler_store::{Delivery, Instance, InstanceState};
@@ -38,6 +40,8 @@ pub struct LiveAgent {
     last_active: std::sync::Mutex<DateTime<Utc>>,
     /// Set when the hub stops the agent on purpose (idle, kill switch), so the exit is not a crash.
     stopping: AtomicBool,
+    /// What it did this turn: decides whether its parent hears about the end of the turn.
+    turn: std::sync::Mutex<TurnLog>,
     kill: Mutex<Option<oneshot::Sender<()>>>,
 }
 
@@ -48,6 +52,15 @@ impl LiveAgent {
 
     fn touch(&self) {
         *self.last_active.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Utc::now();
+    }
+
+    /// The agent sent `to` a message through the hub during its current turn.
+    pub fn record_message(&self, to: &str) {
+        self.turn.lock().unwrap_or_else(std::sync::PoisonError::into_inner).messaged(to);
+    }
+
+    fn turn(&self) -> std::sync::MutexGuard<'_, TurnLog> {
+        self.turn.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn last_active(&self) -> DateTime<Utc> {
@@ -119,7 +132,11 @@ pub async fn dispatch_pending(hub: &Arc<Hub>) -> Result<()> {
     if hub.paused().await? {
         return Ok(());
     }
-    for name in hub.store.instances_with_pending().await? {
+    for (name, wakes) in hub.store.instances_with_pending().await? {
+        // Notes alone never wake an agent; they ride along with whatever wakes it next.
+        if !wakes && hub.agents.get(&name).await.is_none() {
+            continue;
+        }
         if let Err(e) = deliver_to(hub, &name).await {
             tracing::warn!(instance = %name, error = %e, "delivery deferred");
         }
@@ -145,27 +162,24 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
 
 /// The text pi receives for one delivery. The botler extension recognises the prefix, drops
 /// duplicate ids, and renders the header.
-pub fn envelope(d: &Delivery, ev: &Event) -> String {
-    let provenance = match ev.provenance {
-        Provenance::Trusted => "trusted",
-        Provenance::External => "external",
-        Provenance::Untrusted => "untrusted",
+pub fn envelope(d: &Delivery, ev: &Event) -> Result<String> {
+    let body = DeliveryEnvelope {
+        id: d.id.clone(),
+        event: ev.id.to_string(),
+        kind: ev.kind.clone(),
+        from: ev.source.key(),
+        provenance: ev.provenance,
+        correlation: ev.correlation.unwrap_or(ev.id).to_string(),
+        body: catalog::render(ev, d.prompt.as_deref()),
+        quiet: d.quiet,
     };
-    let body = json!({
-        "id": d.id,
-        "event": ev.id,
-        "kind": ev.kind,
-        "from": ev.source.key(),
-        "provenance": provenance,
-        "correlation": ev.correlation.unwrap_or(ev.id),
-        "body": catalog::render(ev, d.prompt.as_deref()),
-    });
-    format!("botler:delivery {body}")
+    let json = serde_json::to_string(&body).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+    Ok(format!("botler:delivery {json}"))
 }
 
 async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
     let ev = hub.store.event(&d.event_id).await?;
-    let text = envelope(d, &ev);
+    let text = envelope(d, &ev)?;
     let streaming = if agent.pi.is_busy().await? {
         // The user and urgent events interrupt at the next turn boundary; everything else waits.
         Some(if ev.urgent || ev.source == Source::User { Streaming::Steer } else { Streaming::FollowUp })
@@ -276,6 +290,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         busy: AtomicBool::new(false),
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
+        turn: std::sync::Mutex::default(),
         kill: Mutex::new(Some(attached.kill)),
     });
     hub.agents.live.lock().await.insert(instance.name.clone(), agent.clone());
@@ -535,6 +550,7 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
         match &ev.kind {
             PiEventKind::AgentStart => {
                 agent.busy.store(true, Ordering::SeqCst);
+                agent.turn().reset();
                 // pi is up and working: the instance is healthy again.
                 hub.agents.crashes.lock().await.remove(&agent.instance);
             }
@@ -560,6 +576,7 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                     tracing::error!(instance = %agent.instance, error = %e, "usage metering failed");
                 }
             }
+            PiEventKind::ToolStart { tool } => agent.turn().tool_started(tool),
             _ => {}
         }
     }
@@ -589,11 +606,18 @@ async fn on_provider_error(hub: &Hub, agent: &LiveAgent, err: &str) -> Result<()
     Ok(())
 }
 
-/// Tell the chat that spawned this one that it finished its turn, with its last reply. Chained
-/// to the delivery that started the turn so the cycle breaker bounds parent/child ping-pong.
+/// Tell the agent that spawned this one that it ended its turn, with its final answer, unless
+/// the last thing it did was messaging the parent (which already has the news). Routed like a
+/// message from the child: it counts for the pair breaker, and an acknowledgement ("Done,
+/// thanks.") arrives as a note that does not wake the parent. Chained to the delivery that
+/// started the turn so the hop limit still bounds runaway chains.
 async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
     let instance = hub.store.instance(&agent.instance).await?;
     let Some(parent) = instance.parent.clone() else { return Ok(()) };
+    if agent.turn().ended_by_messaging(&parent) {
+        tracing::debug!(instance = %agent.instance, %parent, "turn ended by messaging the parent; no notice");
+        return Ok(());
+    }
     let last_reply = match agent.pi.command(json!({ "type": "get_last_assistant_text" })).await {
         Ok(d) => d.get("text").and_then(|t| t.as_str()).unwrap_or("").chars().take(4000).collect::<String>(),
         Err(e) => {
@@ -603,7 +627,12 @@ async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
     };
     let mut ev = Event::new(kinds::AGENT_IDLE, Source::Agent(instance.name.clone()), Provenance::Trusted, Utc::now())
         .to(parent)
-        .payload(json!({ "instance": instance.name, "title": instance.title, "slug": instance.slug, "last_reply": last_reply }));
+        .payload(crate::loops::to_value(&AgentIdle {
+            instance: instance.name.clone(),
+            title: instance.title.clone(),
+            slug: instance.slug.clone(),
+            last_reply,
+        })?);
     if let Some(d) = hub.store.last_delivered(&instance.name).await? {
         let started = hub.store.event(&d.event_id).await?;
         ev = ev.in_reply_to(&started);

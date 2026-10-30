@@ -108,7 +108,14 @@ pub async fn retarget_cwd(path: &std::path::Path, cwd: &str) -> Result<bool> {
     let mut reader = tokio::io::BufReader::new(file);
     let mut first = String::new();
     reader.read_line(&mut first).await?;
-    let Ok(mut header) = serde_json::from_str::<Value>(first.trim_end()) else { return Ok(false) };
+    let mut header = match serde_json::from_str::<Value>(first.trim_end()) {
+        Ok(h) => h,
+        Err(e) => {
+            // Not a session pi wrote; pi reports it on start, with more context than we have.
+            tracing::warn!(path = %path.display(), error = %e, "session file does not start with a JSON header");
+            return Ok(false);
+        }
+    };
     if header.get("type").and_then(Value::as_str) != Some("session")
         || header.get("cwd").and_then(Value::as_str) == Some(cwd)
     {
@@ -217,6 +224,26 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
                         is_error: m.get("isError").and_then(Value::as_bool).unwrap_or(false),
                     }),
                     _ => {}
+                }
+            }
+            // Notes the botler extension added without a turn (acknowledgements between agents).
+            Some("custom_message") if e.get("customType").and_then(Value::as_str) == Some("botler.note") => {
+                let content = e.get("content").cloned().unwrap_or(Value::Null);
+                let text = match &content {
+                    Value::String(s) => s.clone(),
+                    c => texts(c, "text", "text"),
+                };
+                if let Some((from, prov, kind, delivery, event, rest)) = parse_header(&text) {
+                    out.push(Item::User {
+                        id,
+                        at,
+                        text: clip(rest),
+                        from: Some(from),
+                        provenance: Some(prov),
+                        event_kind: Some(kind),
+                        delivery: Some(delivery),
+                        event: Some(event),
+                    });
                 }
             }
             Some("compaction") => out.push(Item::Compaction {

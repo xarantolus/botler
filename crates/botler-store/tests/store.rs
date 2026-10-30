@@ -1,7 +1,7 @@
 use botler_core::defs::Target;
 use botler_core::{Event, Provenance, Source};
 use botler_store::*;
-use chrono::{Duration, Utc};
+use chrono::{Duration, SubsecRound, Utc};
 use serde_json::json;
 
 async fn store() -> Store {
@@ -79,7 +79,7 @@ async fn instance_and_delivery_flow() {
     s.append_event(&e).await.unwrap();
     let d1 = s.enqueue_delivery(&e.id.to_string(), "main", None, None).await.unwrap();
     let d2 = s.enqueue_delivery(&e.id.to_string(), "main", Some("t#x"), Some("hi")).await.unwrap();
-    assert_eq!(s.instances_with_pending().await.unwrap(), vec!["main".to_string()]);
+    assert_eq!(s.instances_with_pending().await.unwrap(), vec![("main".to_string(), true)]);
     let pending = s.pending_deliveries("main").await.unwrap();
     assert_eq!(pending.iter().map(|d| &d.id).collect::<Vec<_>>(), vec![&d1.id, &d2.id]);
 
@@ -370,4 +370,33 @@ async fn renaming_an_instance_moves_its_live_references() {
     assert!(!s.rename_instance("main", "botler").await.unwrap());
     s.create_instance(&new("main", None)).await.unwrap();
     assert!(!s.rename_instance("main", "botler").await.unwrap());
+}
+
+#[tokio::test]
+async fn quiet_and_held_deliveries_and_pair_queries() {
+    let s = store().await;
+    let at = |secs: i64| Utc::now() - Duration::seconds(secs);
+    let msg = |from: &str, to: &str, secs: i64| {
+        Event { at: at(secs), ..Event::new("message", Source::Agent(from.into()), Provenance::Trusted, Utc::now()) }
+            .to(to)
+            .payload(json!({"text": format!("{from} to {to}")}))
+    };
+    let (ab, ba, ac) = (msg("a", "b", 30), msg("b", "a", 20), msg("a", "c", 10));
+    for e in [&ab, &ba, &ac] {
+        s.append_event(e).await.unwrap();
+    }
+    let user = Event { at: at(25), ..Event::new("message", Source::User, Provenance::Trusted, Utc::now()) }.to("a");
+    s.append_event(&user).await.unwrap();
+    let pair = s.agent_exchanges("b", "a", at(60)).await.unwrap();
+    assert_eq!(pair.iter().map(|e| e.id).collect::<Vec<_>>(), vec![ab.id, ba.id]);
+    assert_eq!(s.last_outside_event_to(&["a", "b"]).await.unwrap(), Some(user.at.trunc_subsecs(3)));
+    assert_eq!(s.last_outside_event_to(&["c"]).await.unwrap(), None);
+    assert_eq!(s.last_message("b", "a").await.unwrap().unwrap().id, ba.id);
+
+    s.enqueue_delivery_with(&ab.id.to_string(), "b", None, None, true, None).await.unwrap();
+    assert_eq!(s.instances_with_pending().await.unwrap(), vec![("b".to_string(), false)], "only a note");
+    s.enqueue_delivery_with(&ba.id.to_string(), "a", None, None, false, Some("pair:a|b")).await.unwrap();
+    assert!(s.pending_deliveries("a").await.unwrap().is_empty(), "held");
+    assert_eq!(s.release_held("pair:a|b").await.unwrap(), 1);
+    assert_eq!(s.pending_deliveries("a").await.unwrap().len(), 1);
 }

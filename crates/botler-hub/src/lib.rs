@@ -11,6 +11,7 @@ pub mod failures;
 pub mod hub;
 pub mod images;
 pub mod jobs;
+pub mod loops;
 pub mod mcp;
 pub mod migrate;
 pub mod notify;

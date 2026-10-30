@@ -64,6 +64,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/revert", post(revert))
         .route("/api/v1/pause", post(pause))
         .route("/api/v1/resume", post(resume))
+        .route("/api/v1/breakers/clear", post(clear_breaker))
         .route("/git/monorepo.git/{*rest}", any(git))
         .layer(middleware::from_fn_with_state(hub.clone(), authenticate));
     Router::new()
@@ -545,6 +546,22 @@ async fn resume(State(hub): State<AppState>, Extension(p): Extension<Principal>)
     user_only(&p)?;
     crate::control::resume(&hub).await?;
     Ok(Json(json!({ "paused": false })))
+}
+
+#[derive(Deserialize)]
+struct ClearBreaker {
+    subject: String,
+}
+
+/// Resume what a breaker paused (a pair's held messages are delivered).
+async fn clear_breaker(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Json(c): Json<ClearBreaker>,
+) -> ApiResult {
+    user_only(&p)?;
+    let (cleared, released) = crate::loops::clear_breaker(&hub, &c.subject).await?;
+    Ok(Json(json!({ "cleared": cleared, "released": released })))
 }
 
 /// git smart-HTTP through `git http-backend`. Agents authenticate with their token; the

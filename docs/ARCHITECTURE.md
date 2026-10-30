@@ -119,7 +119,14 @@ Agents reach the same hub endpoints via MCP. Scripts the agent writes inside its
 
 **Rate limits & breakers (core, everywhere).**
 - Token buckets on every MCP tool and SDK endpoint, per instance/runnable and global. Defaults are in core; agents can tighten them in definitions but only raise them through a transaction that needs your approval.
-- Breakers for agent↔agent ping-pong (message-cycle detection on correlation chains), event storms (per-source rate cap) and wake churn (per-instance wakes/hour). A tripped breaker pauses that source and raises an alarm event to you.
+- Breakers for agent↔agent ping-pong (see **Loop defences**), event storms (per-source rate cap) and wake churn (per-instance wakes/hour). A tripped breaker pauses that source and raises an alarm event to you; you resume it in the web app (`POST /api/v1/breakers/clear`).
+
+**Loop defences between agents.** Agents talking to agents must not keep each other busy. Pure rules in `botler_core::loops`, layered cheapest first:
+1. **End-of-turn notice, at most once.** When a spawned agent ends a turn, its parent gets `agent.idle` with the child's final answer (`get_last_assistant_text`), routed like a message from the child, *unless the last thing the child did was `send_message` to its parent* (a `TurnLog` per live agent: tool starts reported by pi and messages sent through the hub, in order; the start of the sending tool itself does not count). A message earlier in the turn followed by more work still produces the notice. The notice keeps the `agent.idle` kind (typed `AgentIdle` payload) so the catalog can tell the parent not to thank the child.
+2. **Acknowledgements are notes.** An agent-to-agent message (or end-of-turn notice) that is only an acknowledgement or closing ("thanks, no reply needed", "got it 👍", "will do") is classified deterministically (short, no `?`, every word in an acknowledgement vocabulary, at least one acknowledging word or phrase) and delivered *quiet*: it never wakes a sleeping agent, it waits in the queue and rides along with the next real delivery, and for an awake agent the pi extension adds it with `pi.sendMessage(..., { triggerTurn: false })` (after the current turn if one is running), so no turn starts. Exception: if the recipient's last message to the sender asked a question, even "ok" is the answer and wakes it.
+3. **Per-pair breaker.** More than 8 agent-to-agent exchanges between one unordered pair within 10 minutes, with no user message or external (non-trusted) event to either in between, trips breaker `pair:<a>|<b>`. Counts come from the event journal (crash-safe, nothing in memory). Further messages between the pair are *held* (delivery status `held`, nothing lost), `breaker.tripped` (typed `BreakerTripped`: the pair and their last messages) goes to `botler` urgently, and the web app lists it under Questions with a Resume button. Resuming delivers what was held and restarts the count from that moment.
+4. The correlation-chain hop limit (`MAX_CHAIN_HOPS = 64`) stays as a coarse backstop; it is high enough for deep agent trees reporting up.
+An agent messaging itself is refused with a hint (files in its home, `set_timer`).
 - A **kill switch** (web button + `botler pause`) freezes scheduling and dispatch, aborts running pi runs and stops services. Resume is explicit.
 
 **Rollback = git.** Reverting is just a revert commit on main through the same transaction path; the reconciler re-applies the state. If definitions@main fail to load at boot, the hub refuses to apply and stays on the last applied commit (recorded in SQLite), then alarms.
@@ -257,7 +264,7 @@ tokio, axum, sqlx (SQLite, WAL), bollard against the rootless Podman socket (`po
   - a crash-looping service goes `failed`, and `triage` is woken once with logs;
   - reboot the host and the services are back via hub reconcile;
   - a schedule missed during downtime follows its `missed` policy.
-- Breaker tests: two agents set to reply to each other trip the cycle breaker. A flooding job trips its rate cap. The kill switch stops everything, and resume restores it.
+- Breaker tests: two agents set to reply to each other trip the pair breaker; acknowledgements do not wake; a turn ending with a report to the parent sends no second notice. A flooding job trips its rate cap. The kill switch stops everything, and resume restores it.
 - Rollback test: merge a change, then revert it; the reconciler returns to the previous schedule set. A broken main at boot leaves the last applied commit running and raises an alarm.
 - Upload test: an image attached in the web app is readable by the agent at `/inbox/files/` and described correctly.
 - Crash tests: kill the hub mid-delivery and assert exactly one visible delivery in the pi session (idempotency).

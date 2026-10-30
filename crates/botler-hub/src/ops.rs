@@ -667,6 +667,13 @@ async fn send_message(hub: &Hub, caller: &Caller, a: SendMessage) -> OpResult {
         None if hub.applied().await.defs.agents.contains_key(&a.to) => a.to.clone(),
         None => return Err(OpError::BadRequest(format!("no agent instance or chat named {}", a.to))),
     };
+    if caller.instance() == Some(to.as_str()) {
+        return Err(OpError::BadRequest(
+            "that is you: a message to yourself would only wake you again. To remember something, write it to a \
+             file in your home; to come back to it later, use set_timer."
+                .into(),
+        ));
+    }
     // Messages between agents are trusted as messages; content an agent relays from outside is
     // marked by the event it came from (replies inherit the lower provenance of their parent).
     let mut ev = Event::new(kinds::MESSAGE, caller.source(), Provenance::Trusted, Utc::now())
@@ -678,6 +685,11 @@ async fn send_message(hub: &Hub, caller: &Caller, a: SendMessage) -> OpResult {
         ev = ev.in_reply_to(&parent);
     }
     let ev = hub.emit(ev).await?;
+    if let Some(me) = caller.instance()
+        && let Some(live) = hub.agents.get(me).await
+    {
+        live.record_message(&to);
+    }
     Ok(json!({ "event_id": ev.id, "to": to }))
 }
 

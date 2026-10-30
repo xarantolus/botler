@@ -6,13 +6,19 @@
 // it" re-sends the same delivery id. Seen ids are stored in the session itself (custom entries),
 // so dedup survives restarts and follows the session's branch.
 //
+// A `quiet` delivery (e.g. "thanks, no reply needed" from another agent) is a note: it is added
+// to the session as a custom message without starting a turn (appended after the current turn
+// if one is running), so the agent reads it with whatever wakes it next.
+//
 // Tools are not defined here: they come from the hub's MCP server (see mcp.json).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const PREFIX = "botler:delivery ";
 const SEEN = "botler.delivered";
+const NOTE = "botler.note";
 
+// Mirrors botler_core::event::payload::DeliveryEnvelope.
 interface Envelope {
   id: string;
   event: string;
@@ -21,6 +27,7 @@ interface Envelope {
   provenance: "trusted" | "external" | "untrusted";
   correlation: string;
   body: string;
+  quiet?: boolean;
 }
 
 function parse(text: string): Envelope | undefined {
@@ -62,6 +69,13 @@ export default function botler(pi: ExtensionAPI) {
     if (seen.has(env.id)) return { action: "handled" };
     seen.add(env.id);
     pi.appendEntry(SEEN, { id: env.id, event: env.event, from: env.from });
+    if (env.quiet) {
+      pi.sendMessage(
+        { customType: NOTE, content: `${header(env)}\n(note: delivered without waking you; no reply needed)\n${env.body}`, display: true },
+        { triggerTurn: false },
+      );
+      return { action: "handled" };
+    }
     return { action: "transform", text: `${header(env)}\n${env.body}`, images: event.images };
   });
 }

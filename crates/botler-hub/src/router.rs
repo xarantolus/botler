@@ -6,6 +6,7 @@
 use botler_core::catalog::touches;
 use botler_core::defs::{AgentKind, Target};
 use botler_core::event::kinds;
+use botler_core::event::payload::{BreakerKind, BreakerTripped};
 use botler_core::routing::{Action, Dispatch, Routed, route};
 use botler_core::{Event, Provenance, Source};
 use botler_store::{DialogStatus, InstanceState, NewInstance};
@@ -13,6 +14,7 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::hub::{Hub, HubError, Result};
+use crate::loops::AgentDelivery;
 
 /// Route every unrouted event. Returns how many were processed.
 pub async fn route_pending(hub: &Hub) -> Result<usize> {
@@ -62,12 +64,6 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
     match &d.action {
         Action::Deliver(name) => {
             let instance = match hub.store.resolve_instance(name).await? {
-                // Messaging an archived chat restores it: archiving hides, it never locks away.
-                Some(i) if i.state == InstanceState::Archived => {
-                    tracing::info!(instance = %i.name, "restoring archived chat for a new message");
-                    hub.store.restore_instance(&i.name).await?;
-                    i
-                }
                 Some(i) => i,
                 None => match applied.defs.agents.get(name) {
                     Some(def) if def.spec.kind == AgentKind::Persistent => {
@@ -87,8 +83,34 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
                     _ => return Err(HubError::Undefined { kind: "instance", name: name.clone() }),
                 },
             };
+            // Between agents, the loop defences decide: a note, a held message, or a normal one.
+            let (quiet, held) = match &ev.source {
+                Source::Agent(from) if *from != instance.name => {
+                    match crate::loops::agent_delivery(hub, ev, from, &instance.name).await? {
+                        AgentDelivery::Deliver { quiet } => (quiet, None),
+                        AgentDelivery::Hold { subject } => (false, Some(subject)),
+                    }
+                }
+                _ => (false, None),
+            };
+            // Messaging an archived chat restores it: archiving hides, it never locks away. A
+            // note or a held message does not.
+            if instance.state == InstanceState::Archived && !quiet && held.is_none() {
+                tracing::info!(instance = %instance.name, "restoring archived chat for a new message");
+                hub.store.restore_instance(&instance.name).await?;
+            }
+            if let Some(subject) = &held {
+                tracing::info!(event = %ev.id, %subject, "holding a message on a paused pair");
+            }
             hub.store
-                .enqueue_delivery(&ev.id.to_string(), &instance.name, d.trigger.as_deref(), d.prompt.as_deref())
+                .enqueue_delivery_with(
+                    &ev.id.to_string(),
+                    &instance.name,
+                    d.trigger.as_deref(),
+                    d.prompt.as_deref(),
+                    quiet,
+                    held.as_deref(),
+                )
                 .await?;
             hub.dispatch_notify.notify_one();
         }
@@ -246,12 +268,18 @@ async fn trip_cycle_breaker(hub: &Hub, ev: &Event, hops: u32) -> Result<()> {
     let reason = format!("conversation chain reached {hops} hops (last: {} from {})", ev.kind, ev.source.key());
     if hub.store.trip_breaker(&subject, "cycle", &reason).await? {
         tracing::warn!(%subject, %reason, "cycle breaker tripped");
+        let payload = BreakerTripped {
+            subject: subject.clone(),
+            breaker: BreakerKind::Cycle,
+            reason,
+            correlation: Some(chain.to_string()),
+            pair: None,
+            recent: Vec::new(),
+        };
         let alarm = Event::new(kinds::BREAKER_TRIPPED, Source::Hub, Provenance::Trusted, Utc::now())
             .to(botler_core::FRONT_DOOR)
             .urgent(true)
-            .payload(
-                json!({ "subject": subject, "breaker": "cycle", "reason": reason, "correlation": chain.to_string() }),
-            );
+            .payload(crate::loops::to_value(&payload)?);
         hub.emit(alarm).await?;
     }
     Ok(())

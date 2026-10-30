@@ -136,6 +136,82 @@ pub mod kinds {
     pub const AGENT_IDLE: &str = "agent.idle";
 }
 
+/// Typed payloads of hub events (and the delivery envelope the pi extension reads). The hub
+/// builds these structs, never ad-hoc JSON, so clients can generate types from them.
+pub mod payload {
+    use chrono::{DateTime, Utc};
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+
+    /// `agent.idle`: a spawned agent ended its turn without its last action being a message to
+    /// its parent. Delivered to the parent like a message from the child.
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct AgentIdle {
+        pub instance: String,
+        pub title: Option<String>,
+        pub slug: Option<String>,
+        /// The child's final answer of the turn (its last assistant text), clipped.
+        pub last_reply: String,
+    }
+
+    /// Which breaker tripped.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum BreakerKind {
+        /// A correlation chain grew too long.
+        Cycle,
+        /// Two agents kept messaging each other without the user or the outside world in between.
+        Pair,
+    }
+
+    /// One recent message of a paused conversation, for the user deciding whether to resume.
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct MessageExcerpt {
+        pub from: String,
+        pub to: String,
+        pub at: DateTime<Utc>,
+        /// The start of the message text.
+        pub text: String,
+    }
+
+    /// `breaker.tripped`: something was paused until the user clears it.
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct BreakerTripped {
+        /// The breaker's subject; clearing it resumes (`chain:<id>`, `pair:<a>|<b>`).
+        pub subject: String,
+        pub breaker: BreakerKind,
+        pub reason: String,
+        /// The correlation chain, for cycle breakers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub correlation: Option<String>,
+        /// The two agents, for pair breakers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub pair: Option<[String; 2]>,
+        /// The last messages between them, oldest first (pair breakers).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub recent: Vec<MessageExcerpt>,
+    }
+
+    /// What the hub sends pi for one delivery (`botler:delivery <json>`); the botler pi extension
+    /// parses it.
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct DeliveryEnvelope {
+        /// Delivery id: the extension drops ids it has already seen.
+        pub id: String,
+        pub event: String,
+        pub kind: String,
+        pub from: String,
+        pub provenance: crate::Provenance,
+        pub correlation: String,
+        /// The rendered text the agent reads.
+        pub body: String,
+        /// A note (e.g. an acknowledgement from another agent): added to the session without
+        /// starting a turn. The agent reads it with whatever wakes it next.
+        #[serde(default)]
+        pub quiet: bool,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
