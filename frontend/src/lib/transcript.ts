@@ -12,7 +12,11 @@
 //   call); a provider error a `data-error` part;
 // - notes and compactions     → `system` messages with `data-note` / `data-compaction`;
 // - queued messages           → `user` messages with `metadata.queued` (and their delivery id);
-// - streaming text / thinking → appended to the running turn (or a new trailing message).
+// - streaming text / thinking → appended to the running turn (or a new trailing message), until
+//   the session has the entry it becomes (matched by pi's message timestamp, not by time).
+//
+// Message ids are entry ids (search hits and deliveries link to them); `metadata.key` is stable
+// across the switch from the streamed to the persisted copy of a turn, so nothing re-mounts.
 
 import type { ChatStatus, UIMessage } from "ai";
 import type { Dialog, QueuedMessage, SessionItem } from "../generated";
@@ -36,6 +40,25 @@ export interface MessageMeta {
   queued?: boolean;
   /** Still being written (the live tail). */
   live?: boolean;
+  /** Stable render key: an agent turn is keyed by the message before it. */
+  key?: string;
+}
+
+/** The assistant message streaming in: its text and thinking so far, and pi's timestamp of it. */
+export interface LiveMessage {
+  text: string;
+  thinking: string;
+  /** `message.timestamp` of pi's `message_start`; the persisted entry carries the same. */
+  ts: number | null;
+  /** `message_end` arrived: complete, waiting for the session to have it. */
+  ended: boolean;
+}
+
+export const noLive = (): LiveMessage => ({ text: "", thinking: "", ts: null, ended: false });
+
+/** Whether the session already has the live message (so it is shown from there). */
+export function persisted(items: SessionItem[], live: LiveMessage): boolean {
+  return live.ts !== null && items.some((it) => it.kind === "assistant" && it.message_ts === live.ts);
 }
 
 export interface NoteData {
@@ -65,8 +88,8 @@ export interface TranscriptInput {
   dialogs: Dialog[];
   /** The user's messages the hub holds until the agent's turn ends. */
   queued: QueuedMessage[];
-  /** Assistant text and thinking streaming in. */
-  streaming: { text: string; thinking: string };
+  /** The assistant message streaming in. */
+  streaming: LiveMessage;
   /** The agent is working on a turn. */
   busy: boolean;
 }
@@ -78,6 +101,8 @@ export interface Transcript {
   unresolvedLinks: number;
   /** The message showing each session entry (a search hit links an entry id). */
   messageOf: Record<string, string>;
+  /** The tool call (`toolCallId`) a search ref leads to: `<entry>#<call>`, or a result's entry. */
+  toolOf: Record<string, string>;
 }
 
 type ToolResult = Extract<SessionItem, { kind: "tool_result" }>;
@@ -117,6 +142,7 @@ export function buildTranscript(input: TranscriptInput): Transcript {
   const messages: TranscriptMessage[] = [];
   let unresolvedLinks = 0;
   const messageOf: Record<string, string> = {};
+  const toolOf: Record<string, string> = {};
   /** The agent turn being collected (consecutive assistant items and their results). */
   let turn: TranscriptMessage | null = null;
 
@@ -125,7 +151,8 @@ export function buildTranscript(input: TranscriptInput): Transcript {
   };
   const currentTurn = (it: SessionItem): TranscriptMessage => {
     if (!turn) {
-      turn = { id: it.id, role: "assistant", parts: [], metadata: { at: it.at, model: null, costUsd: null } };
+      const key = `reply:${messages.at(-1)?.id ?? ""}`;
+      turn = { id: it.id, role: "assistant", parts: [], metadata: { at: it.at, model: null, costUsd: null, key } };
       messages.push(turn);
     }
     return turn;
@@ -177,8 +204,13 @@ export function buildTranscript(input: TranscriptInput): Transcript {
         if (it.text.trim()) m.parts.push({ type: "text", text: it.text, state: "done" });
         it.tool_calls.forEach((c, i) => {
           const r = c.id ? (results.get(c.id) ?? null) : null;
-          if (r) messageOf[r.id] = m.id;
-          m.parts.push(...resultParts(c, r, `${it.id}:${i}`));
+          // Search refs of the call (`<entry>#<call>`) and of its result lead to this call.
+          const call = c.id ?? `${it.id}:${i}`;
+          for (const ref of [`${it.id}#${c.id ?? i}`, ...(r ? [r.id] : [])]) {
+            messageOf[ref] = m.id;
+            toolOf[ref] = call;
+          }
+          m.parts.push(...resultParts(c, r, call));
         });
         if (it.error) m.parts.push({ type: "data-error", data: { text: it.error } });
         break;
@@ -224,21 +256,22 @@ export function buildTranscript(input: TranscriptInput): Transcript {
     if (!paired.has(it.id)) messageOf[it.id] = messages.at(-1)!.id;
   }
 
-  // The live tail: continue the running turn, or start one.
-  const { text, thinking } = input.streaming;
-  const streaming = text !== "" || thinking !== "";
+  // The live tail, until the session has it: continue the running turn, or start one.
+  const live = input.streaming;
+  const streaming = (live.text !== "" || live.thinking !== "") && !persisted(items, live);
   if (streaming) {
     const last = messages.at(-1);
     let m: TranscriptMessage;
-    if (input.busy && last?.role === "assistant") {
+    if (last?.role === "assistant") {
       m = last;
     } else {
-      m = { id: "live", role: "assistant", parts: [], metadata: { at: null } };
+      m = { id: "live", role: "assistant", parts: [], metadata: { at: null, key: `reply:${last?.id ?? ""}` } };
       messages.push(m);
     }
-    m.metadata = { ...m.metadata!, live: true };
-    if (thinking) m.parts.push({ type: "reasoning", text: thinking, state: text ? "done" : "streaming" });
-    if (text) m.parts.push({ type: "text", text, state: "streaming" });
+    m.metadata = { ...m.metadata!, live: !live.ended };
+    const done = live.ended || live.text !== "";
+    if (live.thinking) m.parts.push({ type: "reasoning", text: live.thinking, state: done ? "done" : "streaming" });
+    if (live.text) m.parts.push({ type: "text", text: live.text, state: live.ended ? "done" : "streaming" });
   }
 
   for (const q of input.queued) {
@@ -250,8 +283,8 @@ export function buildTranscript(input: TranscriptInput): Transcript {
     });
   }
 
-  const status: ChatStatus = streaming ? "streaming" : input.busy ? "submitted" : "ready";
-  return { messages, status, unresolvedLinks, messageOf };
+  const status: ChatStatus = streaming && !live.ended ? "streaming" : input.busy ? "submitted" : "ready";
+  return { messages, status, unresolvedLinks, messageOf, toolOf };
 }
 
 /** Whether a tool call is still running (no result yet, while the agent works). */

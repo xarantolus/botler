@@ -8,7 +8,7 @@ import DialogCard from "../src/components/common/DialogCard.vue";
 import EnvelopeCard from "../src/components/common/EnvelopeCard.vue";
 import MessageParts from "../src/components/chat/MessageParts.vue";
 import type { Dialog, DialogView } from "../src/generated";
-import { buildTranscript } from "../src/lib/transcript";
+import { buildTranscript, noLive } from "../src/lib/transcript";
 import { mountInApp } from "./mount";
 
 const calls = vi.hoisted(() => [] as { name: string; args: unknown }[]);
@@ -197,6 +197,7 @@ describe("MessageParts", () => {
           model: null,
           cost_usd: null,
           error: null,
+          message_ts: null,
         },
         {
           kind: "tool_result",
@@ -212,7 +213,7 @@ describe("MessageParts", () => {
       ],
       dialogs: [d],
       queued: [],
-      streaming: { text: "", thinking: "" },
+      streaming: noLive(),
       busy: true,
     });
     const w = await mountInApp(MessageParts, { message: t.messages[0], busy: true });

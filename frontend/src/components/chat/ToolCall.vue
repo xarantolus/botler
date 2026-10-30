@@ -6,6 +6,7 @@ import { computed, ref } from "vue";
 import { argsSummary, argsText, resultText, toolIcon } from "../../lib/tools";
 import { resultView } from "../../lib/toolResult";
 import type { ToolPart } from "../../lib/transcript";
+import { shell } from "../../shell";
 import { state } from "../../store";
 import CodeBlock from "../common/CodeBlock.vue";
 import MarkdownText from "../common/MarkdownText.vue";
@@ -43,6 +44,9 @@ const suffix = computed(() => {
     :icon="failed ? 'i-lucide-circle-x' : toolIcon(part.toolName)"
     :loading="running"
     :streaming="running"
+    :open="shell.open[part.toolCallId] ?? false"
+    :data-tool-call="part.toolCallId"
+    @update:open="(v: boolean) => (shell.open[part.toolCallId] = v)"
     :ui="{
       root: 'my-0.5',
       leadingIcon: failed ? 'text-error' : undefined,

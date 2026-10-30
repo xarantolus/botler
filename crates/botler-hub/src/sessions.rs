@@ -38,6 +38,9 @@ pub enum Item {
         model: Option<String>,
         cost_usd: Option<f64>,
         error: Option<String>,
+        /// pi's timestamp of the message (ms): the live stream's `message_start` carries the same,
+        /// so the web app hands its streaming copy over to this entry.
+        message_ts: Option<i64>,
     },
     ToolResult {
         id: String,
@@ -284,6 +287,7 @@ pub fn parse_entry(e: &Value) -> Option<Item> {
                         model: m.get("model").and_then(Value::as_str).map(String::from),
                         cost_usd: m.pointer("/usage/cost/total").and_then(Value::as_f64),
                         error: m.get("errorMessage").and_then(Value::as_str).map(String::from),
+                        message_ts: m.get("timestamp").and_then(Value::as_i64),
                     })
                 }
                 Some("toolResult") => {

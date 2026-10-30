@@ -168,8 +168,8 @@ impl SearchQuery {
 #[derive(Debug, Serialize, TS)]
 pub struct SearchHit {
     pub source: SearchSource,
-    /// Session: the entry id (`read_session(instance=owner, around=ref)`); memory and repo: the
-    /// path; event: the event id.
+    /// Session: the entry id, or `<entry id>#<tool call id>` for a tool call
+    /// (`read_session(instance=owner, around=ref)`); memory and repo: the path; event: the event id.
     #[serde(rename = "ref")]
     pub reference: String,
     /// Session: the instance; memory: the namespace; event: the sender; repo: empty.
@@ -417,25 +417,31 @@ async fn index_events(hub: &Hub, pool: &SqlitePool) -> Result<usize> {
     }
 }
 
-/// The searchable title and text of a session entry.
-fn entry_text(item: &Item) -> Option<(String, String, Option<&str>, &str)> {
-    let (title, body, at, id) = match item {
+/// The searchable documents of a session entry: (title, text, time, ref). The ref is the entry id;
+/// each tool call of an assistant entry is its own document, `<entry id>#<tool call id>`, so a hit
+/// leads to that call (a tool result is its own entry, which names its call).
+fn entry_docs(item: &Item) -> Vec<(String, String, Option<&str>, String)> {
+    let mut docs = match item {
         Item::User { id, at, text, from, .. } => {
-            (format!("from {}", from.as_deref().unwrap_or("user")), text.clone(), at, id)
+            vec![(format!("from {}", from.as_deref().unwrap_or("user")), text.clone(), at, id.clone())]
         }
-        Item::Note { id, at, text, from, .. } => (format!("note from {from}"), text.clone(), at, id),
+        Item::Note { id, at, text, from, .. } => vec![(format!("note from {from}"), text.clone(), at, id.clone())],
         Item::Assistant { id, at, text, tool_calls, .. } => {
-            let mut body = text.clone();
-            for c in tool_calls {
-                let args = c.arguments.to_string();
-                body.push_str(&format!("\n{} {}", c.name, clip(&args, 2000)));
+            let mut docs = vec![("assistant".to_string(), text.clone(), at, id.clone())];
+            for (i, c) in tool_calls.iter().enumerate() {
+                let call = c.id.clone().unwrap_or_else(|| format!("{i}"));
+                let body = format!("{} {}", c.name, clip(&c.arguments.to_string(), 2000));
+                docs.push((format!("{} call", c.name), body, at, format!("{id}#{call}")));
             }
-            ("assistant".to_string(), body, at, id)
+            docs
         }
-        Item::ToolResult { id, at, tool, text, .. } => (format!("{tool} result"), text.clone(), at, id),
-        Item::Compaction { id, at, summary } => ("compaction summary".to_string(), summary.clone(), at, id),
+        Item::ToolResult { id, at, tool, text, .. } => vec![(format!("{tool} result"), text.clone(), at, id.clone())],
+        Item::Compaction { id, at, summary } => {
+            vec![("compaction summary".to_string(), summary.clone(), at, id.clone())]
+        }
     };
-    (!body.trim().is_empty() && !id.is_empty()).then_some((title, body, at.as_deref(), id.as_str()))
+    docs.retain(|(_, body, _, id)| !body.trim().is_empty() && !id.is_empty() && !id.starts_with('#'));
+    docs.into_iter().map(|(t, b, at, id)| (t, b, at.as_deref(), id)).collect()
 }
 
 /// Index the entries appended to every session file since the last pass.
@@ -510,10 +516,12 @@ async fn index_session_file(instance: &str, path: &Path, pool: &SqlitePool) -> R
     for line in buf[..end].split(|&b| b == b'\n') {
         let Ok(entry) = serde_json::from_slice::<Value>(line) else { continue };
         let Some(item) = crate::sessions::parse_entry(&entry) else { continue };
-        let Some((title, body, at, id)) = entry_text(&item) else { continue };
-        let doc = Doc { source: SearchSource::Session, reference: id, owner: instance, at, title: &title, body: &body };
-        put(&mut tx, &doc).await?;
-        n += 1;
+        for (title, body, at, id) in entry_docs(&item) {
+            let doc =
+                Doc { source: SearchSource::Session, reference: &id, owner: instance, at, title: &title, body: &body };
+            put(&mut tx, &doc).await?;
+            n += 1;
+        }
     }
     set_cursor(&mut tx, &key, &format!("{fingerprint}:{}", offset + end as u64)).await?;
     tx.commit().await?;
@@ -758,6 +766,20 @@ fn snippet(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_tool_call_is_its_own_document() {
+        let entry = serde_json::json!({"type": "message", "id": "a1", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "Let me look."},
+            {"type": "toolCall", "id": "c1", "name": "web_search", "arguments": {"query": "rust"}},
+            {"type": "toolCall", "id": "c2", "name": "bash", "arguments": {"command": "ls"}},
+        ]}});
+        let item = crate::sessions::parse_entry(&entry).unwrap();
+        let docs = entry_docs(&item);
+        let refs: Vec<(&str, &str)> = docs.iter().map(|(t, _, _, r)| (t.as_str(), r.as_str())).collect();
+        assert_eq!(refs, [("assistant", "a1"), ("web_search call", "a1#c1"), ("bash call", "a1#c2")]);
+        assert!(docs[1].1.contains("rust"));
+    }
 
     #[test]
     fn plain_queries_are_quoted() {

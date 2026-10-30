@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Dialog, SessionItem } from "../generated";
-import { buildTranscript, toolRunning, type TranscriptInput } from "./transcript";
+import { noLive, buildTranscript, toolRunning, type TranscriptInput } from "./transcript";
 
 type Item<K extends SessionItem["kind"]> = Extract<SessionItem, { kind: K }>;
 
@@ -30,6 +30,7 @@ const assistant = (id: string, extra: Partial<Item<"assistant">> = {}): Item<"as
   model: null,
   cost_usd: null,
   error: null,
+  message_ts: null,
   ...extra,
 });
 
@@ -70,7 +71,7 @@ const input = (items: SessionItem[], over: Partial<TranscriptInput> = {}): Trans
   items,
   dialogs: [],
   queued: [],
-  streaming: { text: "", thinking: "" },
+  streaming: noLive(),
   busy: false,
   ...over,
 });
@@ -162,7 +163,16 @@ describe("buildTranscript", () => {
     expect(turn.parts[3]).toMatchObject({ state: "output-error", errorText: "no such file", toolName: "read" });
     expect(turn.parts[4]).toMatchObject({ state: "input-available", toolCallId: "c3" });
     // Every entry (results shown with their calls included) is found in the message showing it.
-    expect(t.messageOf).toEqual({ u1: "u1", a1: "a1", r1: "a1", r2: "a1", a2: "a1" });
+    expect(t.messageOf).toEqual({
+      u1: "u1",
+      a1: "a1",
+      r1: "a1",
+      r2: "a1",
+      a2: "a1",
+      "a1#c1": "a1",
+      "a1#c2": "a1",
+      "a1#c3": "a1",
+    });
   });
 
   it("shows a result without its call on its own", () => {
@@ -261,7 +271,7 @@ describe("buildTranscript", () => {
     const t = buildTranscript(
       input([user("u1", "go"), assistant("a1", { text: "step one" })], {
         busy: true,
-        streaming: { text: "step tw", thinking: "hmm" },
+        streaming: { ...noLive(), text: "step tw", thinking: "hmm", ts: 7 },
       }),
     );
     expect(t.status).toBe("streaming");
@@ -274,12 +284,12 @@ describe("buildTranscript", () => {
   });
 
   it("starts a new message when nothing is running yet, and reasons before writing", () => {
-    const t = buildTranscript(input([user("u1", "go")], { busy: true, streaming: { text: "", thinking: "hmm" } }));
+    const t = buildTranscript(input([user("u1", "go")], { busy: true, streaming: { ...noLive(), thinking: "hmm" } }));
     expect(t.messages[1]).toEqual({
       id: "live",
       role: "assistant",
       parts: [{ type: "reasoning", text: "hmm", state: "streaming" }],
-      metadata: { at: null, live: true },
+      metadata: { at: null, live: true, key: "reply:u1" },
     });
   });
 
@@ -295,5 +305,58 @@ describe("toolRunning", () => {
     if (part.type !== "dynamic-tool") throw new Error("not a tool");
     expect(toolRunning(part, true)).toBe(true);
     expect(toolRunning(part, false)).toBe(false);
+  });
+});
+
+describe("streamed to persisted", () => {
+  // One turn: thinking, then a tool call (step 1, persisted), then thinking and the answer (step 2).
+  const step1 = assistant("a1", { thinking: "plan", tool_calls: [{ id: "c1", name: "bash", arguments: {} }], message_ts: 100 });
+  const done1 = result("r1", "c1", "ok");
+  const live = { ...noLive(), thinking: "so", text: "The answer", ts: 200 };
+  const view = (items: SessionItem[], streaming = live, busy = true) => buildTranscript(input(items, { streaming, busy }));
+  const shape = (t: ReturnType<typeof view>) =>
+    t.messages.map((m) => [m.metadata?.key ?? m.id, m.parts.map((p) => `${p.type}:${"text" in p ? p.text : ""}`)]);
+
+  it("keeps the streamed answer until the session has its entry, then shows that in the same place", () => {
+    const streaming = view([user("u1", "go"), step1, done1]);
+    // The turn ended (message_end, agent settled), the session is not refreshed yet: still shown.
+    const ended = view([user("u1", "go"), step1, done1], { ...live, ended: true }, false);
+    const persistedView = view(
+      [user("u1", "go"), step1, done1, assistant("a2", { thinking: "so", text: "The answer", message_ts: 200 })],
+      { ...live, ended: true },
+      false,
+    );
+    const expected = [
+      ["u1", ["text:go"]],
+      ["reply:u1", ["reasoning:plan", "dynamic-tool:", "reasoning:so", "text:The answer"]],
+    ];
+    expect(shape(streaming)).toEqual(expected);
+    expect(shape(ended)).toEqual(expected);
+    expect(shape(persistedView)).toEqual(expected);
+    expect([streaming.status, ended.status, persistedView.status]).toEqual(["streaming", "ready", "ready"]);
+    // Not shown twice once persisted.
+    expect(persistedView.messages[1]!.metadata?.live).toBeUndefined();
+  });
+
+  it("keys a turn that starts streaming like the persisted turn", () => {
+    const first = view([user("u1", "go")], { ...noLive(), thinking: "hm", ts: 300 });
+    const later = view([user("u1", "go"), assistant("a9", { thinking: "hm", message_ts: 300 })], { ...noLive(), thinking: "hm", ts: 300 });
+    expect(first.messages[1]!.metadata?.key).toBe("reply:u1");
+    expect(later.messages[1]!.metadata?.key).toBe("reply:u1");
+    expect(first.messages[1]!.parts[0]).toMatchObject({ type: "reasoning", state: "streaming" });
+  });
+});
+
+describe("search refs", () => {
+  it("lead to the tool call: `<entry>#<call>` for the call, the result's entry for its result", () => {
+    const t = buildTranscript(
+      input([
+        user("u1", "go"),
+        assistant("a1", { text: "looking", tool_calls: [{ id: "c1", name: "web_search", arguments: {} }, { id: null, name: "bash", arguments: {} }] }),
+        result("r1", "c1", "found"),
+      ]),
+    );
+    expect(t.toolOf).toEqual({ "a1#c1": "c1", r1: "c1", "a1#1": "a1:1" });
+    expect([t.messageOf["a1#c1"], t.messageOf.r1, t.messageOf.a1]).toEqual(["a1", "a1", "a1"]);
   });
 });

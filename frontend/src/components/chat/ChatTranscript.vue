@@ -67,7 +67,7 @@ function sideProps(m: TranscriptMessage) {
     <template #default="{ registerMessageRef }">
       <UChatMessage
         v-for="m in props.messages"
-        :key="m.id"
+        :key="m.metadata?.key ?? m.id"
         :ref="(el) => registerMessageRef(m.id, el as never)"
         v-bind="{ ...m, ...sideProps(m) }"
         :data-delivery="m.metadata?.delivery ?? undefined"

@@ -14,6 +14,7 @@ import type {
   Usage,
 } from "./generated";
 import { currentStatus } from "./lib/phase";
+import { noLive, persisted, type LiveMessage } from "./lib/transcript";
 import { notifyError } from "./notify";
 
 export type Connection = "connecting" | "live" | "polling";
@@ -34,8 +35,8 @@ export interface AppState {
   wakeStarted: Record<string, number>;
   session: SessionView | null;
   sessionError: string | null;
-  /** Assistant text and thinking streaming in for the viewed chat. */
-  streaming: { text: string; thinking: string };
+  /** The assistant message streaming in for the viewed chat. */
+  streaming: LiveMessage;
   showArchived: boolean;
 }
 
@@ -55,7 +56,7 @@ export const state = plainReactive<AppState>({
   wakeStarted: {},
   session: null,
   sessionError: null,
-  streaming: { text: "", thinking: "" },
+  streaming: noLive(),
   showArchived: false,
 });
 
@@ -149,6 +150,8 @@ export function refreshSession(name: string) {
       const s = await call("session", { params: { instance: name } });
       if (sessionFor !== name) return; // the user moved on
       state.session = s;
+      // The session has the streamed message now: show it from there.
+      if (persisted(s.items, state.streaming)) state.streaming = noLive();
       state.sessionError = null;
       // The fetch is newer than any earlier live status.
       const now = currentStatus(s.phase, null);
@@ -166,7 +169,7 @@ export function clearSession() {
   sessionFor = null;
   state.session = null;
   state.sessionError = null;
-  state.streaming = { text: "", thinking: "" };
+  state.streaming = noLive();
 }
 
 export function trackWake(instance: string, waking: boolean) {
