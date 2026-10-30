@@ -1,0 +1,23 @@
+[
+  {
+    "approval": false,
+    "description": "Count the words in a text.",
+    "effects": [],
+    "function": "word_count",
+    "module": "example",
+    "name": "example.word_count",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    }
+  }
+]

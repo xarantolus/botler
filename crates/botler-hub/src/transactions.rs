@@ -113,11 +113,12 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
         return fail(hub, id, &format!("the gate failed; fix and propose again:\n```\n{report}\n```")).await;
     }
 
-    hub.store.set_proposal_status(id, ProposalStatus::Reviewing).await?;
+    // The reviewer is spawned while the proposal is still `gating`; it cannot submit before the
+    // update below, since it first has to start and read the task.
     let reviewer = start_review(hub, id, &base, &head, &md, &report).await?;
     match reviewer {
         Some(name) => {
-            hub.store.set_proposal_reviewer(id, &name).await?;
+            hub.store.set_proposal_reviewing(id, &name).await?;
             update(hub, id, "reviewing", &format!("Gate passed. Reviewer `{name}` is looking at it.")).await
         }
         // No reviewer agent defined: the user decides.

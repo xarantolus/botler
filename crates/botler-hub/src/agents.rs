@@ -439,8 +439,11 @@ async fn container_spec(
             }),
         );
     }
+    // Python tools this agent is granted (`tools` globs); the extension registers them.
+    let tools = applied.defs.tools_for(&def.spec);
     let files: Vec<(&str, String)> = vec![
         ("models.json", to_json(&models)?),
+        ("tools.json", to_json(&json!(tools))?),
         ("mcp.json", to_json(&json!({ "mcpServers": servers }))?),
         ("botler.md", prompt::render(instance, def, branch)),
         ("AGENTS.md", def.prompt.clone().unwrap_or_default()),
@@ -468,6 +471,13 @@ async fn container_spec(
             1,
             Mount::Bind { src: hub.paths.workspace(&instance.name), dst: MONOREPO.into(), read_only: false },
         );
+    }
+
+    if !tools.is_empty() {
+        // Tool code runs from the applied main commit (not the agent's own checkout), like
+        // agent-authored pi resources below.
+        let export = images::export(hub, &applied.commit).await?;
+        mounts.push(Mount::Bind { src: export, dst: "/botler/applied".into(), read_only: true });
     }
 
     let mut command = vec![
