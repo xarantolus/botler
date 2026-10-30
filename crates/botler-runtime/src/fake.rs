@@ -32,6 +32,8 @@ struct State {
     events: Vec<mpsc::Sender<ContainerEvent>>,
     fail_builds: bool,
     crash_on_start: bool,
+    /// Attached containers that are not pi (e.g. the gate) print this and exit with this code.
+    script: (String, i32),
 }
 
 #[derive(Clone)]
@@ -48,8 +50,9 @@ impl Default for Fake {
 
 impl Fake {
     pub fn new() -> Self {
+        let state = State { script: ("gate: ok\n".into(), 0), ..State::default() };
         Self {
-            state: Arc::default(),
+            state: Arc::new(Mutex::new(state)),
             info: Arc::new(RuntimeInfo { binary: "fake".into(), version: "0".into(), rootless: true }),
         }
     }
@@ -74,6 +77,11 @@ impl Fake {
 
     pub fn set_fail_builds(&self, fail: bool) {
         self.lock().fail_builds = fail;
+    }
+
+    /// What attached non-pi containers (the gate) print and their exit code.
+    pub fn set_script_result(&self, output: &str, code: i32) {
+        self.lock().script = (output.to_string(), code);
     }
 
     /// Make attached containers exit immediately with code 125, like a failed `podman run`.
@@ -149,6 +157,30 @@ impl Containers for Fake {
 
     async fn run_attached(&self, spec: &ContainerSpec) -> Result<Attached> {
         Self::check_mounts(spec)?;
+        if spec.command.first().is_some_and(|c| c != "pi") {
+            let (output, code) = self.lock().script.clone();
+            let (hub_w, _pi_r) = tokio::io::duplex(64);
+            let (mut pi_w, hub_r) = tokio::io::duplex(1 << 16);
+            let (exit_tx, exited) = oneshot::channel();
+            let (kill, _kill_rx) = oneshot::channel::<()>();
+            tokio::spawn(async move {
+                if pi_w.write_all(output.as_bytes()).await.is_err() {
+                    tracing::debug!("fake script output unread");
+                }
+                drop(pi_w);
+                if exit_tx.send(Some(code)).is_err() {
+                    tracing::debug!("fake script exit unobserved");
+                }
+            });
+            return Ok(Attached {
+                name: spec.name.clone(),
+                stderr: crate::container::StderrTail::default(),
+                stdin: Box::new(hub_w),
+                stdout: Box::new(hub_r),
+                exited,
+                kill,
+            });
+        }
         if self.lock().crash_on_start {
             let (hub_w, _pi_r) = tokio::io::duplex(64);
             let (_pi_w, hub_r) = tokio::io::duplex(64);

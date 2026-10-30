@@ -23,5 +23,6 @@ pub mod serve;
 pub mod sessions;
 pub mod supervisor;
 pub mod template;
+pub mod transactions;
 
 pub use hub::{Hub, HubError};

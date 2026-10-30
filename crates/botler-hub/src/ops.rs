@@ -106,7 +106,7 @@ impl Caller {
         }
     }
 
-    fn may(&self, cap: Capability) -> bool {
+    pub fn may(&self, cap: Capability) -> bool {
         self.require(cap).is_ok()
     }
 }
@@ -139,6 +139,9 @@ fn session_readers(c: &Caller) -> bool {
 }
 fn incident_handlers(c: &Caller) -> bool {
     c.may(Capability::Incidents)
+}
+fn reviewers(c: &Caller) -> bool {
+    c.capabilities.contains(&Capability::Review)
 }
 fn runs(c: &Caller) -> bool {
     matches!(c.principal, Principal::Run { .. })
@@ -192,6 +195,30 @@ pub const OPS: &[OpSpec] = &[
         description: "Every chat (agent instance), running or asleep, with its title, slug and what it was doing, plus the agent definitions you can spawn. Messaging a sleeping chat wakes it with its conversation and workspace intact.",
         schema: schema::<Empty>,
         visible: agents,
+    },
+    OpSpec {
+        name: "propose_change",
+        description: "Propose your pushed branch (agents/<you>/...) for merging into main. Runs asynchronously: rebase, validation, a plain-language deployment summary (what will run when, what needs the user's approval), the gate (gate/run), a reviewer, maybe the user. Progress arrives as proposal.updated events; nothing takes effect until it is merged.",
+        schema: schema::<ProposeChange>,
+        visible: agents,
+    },
+    OpSpec {
+        name: "preview_change",
+        description: "The deployment summary of your pushed branch against main without proposing it: validation problems, triggers in plain words with next fire times, new capabilities, and whether the user must approve.",
+        schema: schema::<PreviewChange>,
+        visible: agents,
+    },
+    OpSpec {
+        name: "get_proposal",
+        description: "A proposal's status, deployment summary, gate report and review notes.",
+        schema: schema::<IdArg>,
+        visible: agents,
+    },
+    OpSpec {
+        name: "submit_review",
+        description: "Your verdict on the proposal you were asked to review: approve, escalate (fine, but the user should look) or reject, with notes for a busy reader.",
+        schema: schema::<SubmitReview>,
+        visible: reviewers,
     },
     OpSpec {
         name: "request_secrets",
@@ -328,6 +355,26 @@ pub struct SetChatTitle {
     pub title: String,
     /// Lowercase words joined by dashes, 3 to 60 characters.
     pub slug: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ProposeChange {
+    /// Your pushed branch, e.g. `agents/main/work`.
+    pub branch: String,
+    /// One line saying what the change does.
+    pub title: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PreviewChange {
+    pub branch: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SubmitReview {
+    pub proposal_id: String,
+    pub verdict: botler_core::change::Verdict,
+    pub notes: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -474,7 +521,7 @@ async fn limit(hub: &Hub, caller: &Caller, op: &str) -> Result<(), OpError> {
 }
 
 /// Run operation `name` for `caller`.
-pub async fn call(hub: &Hub, caller: &Caller, name: &str, input: Value) -> OpResult {
+pub async fn call(hub: &std::sync::Arc<Hub>, caller: &Caller, name: &str, input: Value) -> OpResult {
     let spec = OPS.iter().find(|o| o.name == name).ok_or_else(|| OpError::Unknown(name.into()))?;
     if !(spec.visible)(caller) {
         return Err(OpError::Forbidden(format!("{name} is not available to you")));
@@ -491,6 +538,56 @@ pub async fn call(hub: &Hub, caller: &Caller, name: &str, input: Value) -> OpRes
         "list_chats" => list_chats(hub).await,
         "list_event_types" => list_event_types(hub).await,
         "archive_ready" => archive_ready(hub, caller, args(input)?).await,
+        "propose_change" => {
+            let Some(instance) = caller.instance() else {
+                return Err(OpError::Forbidden("only agents propose".into()));
+            };
+            let a: ProposeChange = args(input)?;
+            if a.title.trim().is_empty() {
+                return Err(OpError::BadRequest("give the change a title".into()));
+            }
+            let p = crate::transactions::propose(hub, instance, &a.branch, a.title.trim()).await?;
+            Ok(
+                json!({ "proposal_id": p.id, "status": "gating", "note": "Progress arrives as proposal.updated events. Wait for them before relying on the change." }),
+            )
+        }
+        "preview_change" => {
+            let Some(instance) = caller.instance() else {
+                return Err(OpError::Forbidden("only agents preview".into()));
+            };
+            let a: PreviewChange = args(input)?;
+            Ok(crate::transactions::preview_branch(hub, instance, &a.branch).await?)
+        }
+        "get_proposal" => {
+            let a: IdArg = args(input)?;
+            let p = hub.store.proposal(&a.id).await?;
+            if let Some(me) = caller.instance()
+                && p.instance != me
+                && !caller.may(Capability::Review)
+            {
+                return Err(OpError::Forbidden("that proposal is not yours".into()));
+            }
+            let tz = hub.applied().await.defs.timezone;
+            let summary = p
+                .summary
+                .clone()
+                .and_then(|s| serde_json::from_value::<botler_core::change::ChangeSummary>(s).ok())
+                .map(|s| s.to_markdown(tz));
+            Ok(json!({
+                "id": p.id, "title": p.title, "status": p.status, "branch": p.branch,
+                "summary": summary, "gate_report": p.gate_report, "verdict": p.verdict,
+                "notes": p.review_notes, "merged_commit": p.merged_commit,
+            }))
+        }
+        "submit_review" => {
+            let Some(instance) = caller.instance() else {
+                return Err(OpError::Forbidden("only reviewers review".into()));
+            };
+            let a: SubmitReview = args(input)?;
+            crate::transactions::submit_review(hub, instance, &a.proposal_id, a.verdict, &a.notes).await?;
+            crate::agents::stop_after_reply(hub, instance).await;
+            Ok(json!({ "recorded": a.verdict, "note": "Thank you. Your work is done; stop now." }))
+        }
         "request_secrets" => {
             let Some(instance) = caller.instance() else {
                 return Err(OpError::Forbidden("only agents request secrets".into()));

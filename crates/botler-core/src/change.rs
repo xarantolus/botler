@@ -12,7 +12,7 @@ use crate::defs::{
 use crate::limits::default_limit;
 
 /// Why a change needs the user's approval (never auto-merged).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Escalation {
     ProtectedPath {
@@ -91,7 +91,7 @@ impl Escalation {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Added,
@@ -100,7 +100,7 @@ pub enum Status {
     Unchanged,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 pub struct TriggerPreview {
     pub id: String,
     pub status: Status,
@@ -111,19 +111,40 @@ pub struct TriggerPreview {
     /// Next fire times for schedules (UTC).
     pub upcoming: Vec<DateTime<Utc>>,
     pub shadow: bool,
+    /// For changed triggers: what it was before.
+    #[serde(default)]
+    pub before: Option<Before>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+pub struct Before {
+    pub when: String,
+    pub then: String,
+}
+
+/// Something that runs continuously (a service, an always-on agent) starting or stopping.
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+pub struct Activity {
+    pub status: Status,
+    pub what: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 pub struct ItemChange {
-    pub kind: &'static str,
+    pub kind: String,
     pub name: String,
     pub status: Status,
 }
 
 /// The full preview of applying `new` on top of `old`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 pub struct ChangeSummary {
     pub items: Vec<ItemChange>,
+    #[serde(default)]
+    pub activities: Vec<Activity>,
+    /// Plain-language warnings about likely mistakes.
+    #[serde(default)]
+    pub checks: Vec<String>,
     pub triggers: Vec<TriggerPreview>,
     pub escalations: Vec<Escalation>,
 }
@@ -274,12 +295,17 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
 
     let mut triggers = Vec::new();
     for t in new.triggers.values() {
-        let status = match old.triggers.get(&t.id) {
-            None => Status::Added,
-            Some(o) if o != t => Status::Changed,
-            Some(_) => Status::Unchanged,
+        let (status, before) = match old.triggers.get(&t.id) {
+            None => (Status::Added, None),
+            Some(o) if o != t => {
+                let was = describe_trigger(o, Status::Removed, now);
+                (Status::Changed, Some(Before { when: was.when, then: was.then }))
+            }
+            Some(_) => (Status::Unchanged, None),
         };
-        triggers.push(describe_trigger(t, status, now));
+        let mut preview = describe_trigger(t, status, now);
+        preview.before = before;
+        triggers.push(preview);
     }
     for t in old.triggers.values() {
         if !new.triggers.contains_key(&t.id) {
@@ -287,7 +313,98 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         }
     }
 
-    ChangeSummary { items, triggers, escalations: esc.into_iter().collect() }
+    let mut activities = Vec::new();
+    let running = |d: &Definitions| -> BTreeMap<String, String> {
+        let mut m = BTreeMap::new();
+        for j in d.services() {
+            m.insert(
+                format!("service:{}", j.name),
+                format!("service `{}` runs continuously ({})", j.name, j.spec.description),
+            );
+        }
+        for a in d.persistent_agents().filter(|a| a.spec.always_on) {
+            m.insert(format!("agent:{}", a.name), format!("agent `{}` stays awake at all times", a.name));
+        }
+        m
+    };
+    let (was, will) = (running(old), running(new));
+    for (k, what) in &will {
+        if !was.contains_key(k) {
+            activities.push(Activity { status: Status::Added, what: what.clone() });
+        }
+    }
+    for (k, what) in &was {
+        if !will.contains_key(k) {
+            activities.push(Activity { status: Status::Removed, what: what.clone() });
+        }
+    }
+
+    let checks = likely_mistakes(old, new, now);
+    ChangeSummary { items, activities, checks, triggers, escalations: esc.into_iter().collect() }
+}
+
+/// Things that are valid but probably not what the author meant.
+fn likely_mistakes(old: &Definitions, new: &Definitions, now: DateTime<Utc>) -> Vec<String> {
+    let mut out = Vec::new();
+    let day = now + chrono::Duration::days(1);
+    for t in new.triggers.values() {
+        let TriggerKind::Schedule(spec) = &t.kind else { continue };
+        let unchanged = old.triggers.get(&t.id) == Some(t);
+        if unchanged {
+            continue;
+        }
+        // Bounded: a per-second cron would otherwise enumerate 86400 times.
+        const CAP: usize = 3000;
+        let fires = spec.upcoming(now, CAP).into_iter().take_while(|f| *f <= day).count();
+        if fires > 24 {
+            let every = 24 * 60 / fires.max(1);
+            out.push(format!(
+                "`{}` fires {}{} times in the next 24 hours (about every {} min); is that intended?",
+                t.id,
+                if fires >= CAP { "at least " } else { "" },
+                fires,
+                every.max(1)
+            ));
+        }
+        if spec.upcoming(now, 1).first().is_none_or(|f| *f > now + chrono::Duration::days(30)) {
+            out.push(format!("`{}` does not fire in the next 30 days.", t.id));
+        }
+    }
+    for kind in old.events.keys() {
+        if new.events.contains_key(kind) {
+            continue;
+        }
+        let listeners: Vec<&str> = new
+            .triggers
+            .values()
+            .filter(|t| matches!(&t.kind, TriggerKind::On { pattern } if crate::routing::matches_type(pattern, kind)))
+            .map(|t| t.id.as_str())
+            .collect();
+        if !listeners.is_empty() {
+            out.push(format!(
+                "event type `{kind}` is removed but still listened to by {}; emitting it will now be rejected.",
+                listeners.join(", ")
+            ));
+        }
+    }
+    for t in new.triggers.values() {
+        if let TriggerKind::On { pattern } = &t.kind
+            && !new.events.keys().any(|k| crate::routing::matches_type(pattern, k))
+            && !crate::catalog::BUILTIN.iter().any(|b| crate::routing::matches_type(pattern, b.kind))
+            && old.triggers.get(&t.id) != Some(t)
+        {
+            out.push(format!("`{}` listens for `{pattern}`, which matches no declared event type.", t.id));
+        }
+    }
+    for j in new.jobs.values().filter(|j| j.spec.lifetime == crate::defs::Lifetime::Oneshot) {
+        let ran_before = old.triggers.values().any(|t| t.target == crate::defs::Target::Run(j.name.clone()));
+        let runs_now = new.triggers.values().any(|t| t.target == crate::defs::Target::Run(j.name.clone()))
+            || new.jobs.values().any(|o| o.spec.on_failure == Some(crate::defs::Target::Run(j.name.clone())));
+        if ran_before && !runs_now {
+            out.push(format!("job `{}` is no longer run by any trigger (it still exists).", j.name));
+        }
+    }
+    out
 }
 
 fn webhooks(d: &Definitions) -> impl Iterator<Item = String> + '_ {
@@ -309,11 +426,11 @@ fn diff_items<T: PartialEq>(
             Some(o) if o != v => Status::Changed,
             Some(_) => continue,
         };
-        out.push(ItemChange { kind, name: name.clone(), status });
+        out.push(ItemChange { kind: kind.to_string(), name: name.clone(), status });
     }
     for name in old.keys() {
         if !new.contains_key(name) {
-            out.push(ItemChange { kind, name: name.clone(), status: Status::Removed });
+            out.push(ItemChange { kind: kind.to_string(), name: name.clone(), status: Status::Removed });
         }
     }
 }
@@ -346,13 +463,45 @@ pub fn describe_trigger(t: &ResolvedTrigger, status: Status, now: DateTime<Utc>)
         let short: String = p.chars().take(80).collect();
         then.push_str(&format!(" with \"{short}{}\"", if p.chars().count() > 80 { "…" } else { "" }));
     }
-    TriggerPreview { id: t.id.clone(), status, when, then, upcoming, shadow: t.spec.mode == crate::defs::Mode::Shadow }
+    TriggerPreview {
+        id: t.id.clone(),
+        status,
+        when,
+        then,
+        upcoming,
+        shadow: t.spec.mode == crate::defs::Mode::Shadow,
+        before: None,
+    }
 }
 
 impl ChangeSummary {
     /// Markdown rendering for agents (tool results) and the approval dialog.
     pub fn to_markdown(&self, tz: chrono_tz::Tz) -> String {
+        let fmt_times = |ts: &[DateTime<Utc>]| -> String {
+            ts.iter()
+                .map(|u| u.with_timezone(&tz).format("%a %Y-%m-%d %H:%M %Z").to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let trigger_line = |t: &TriggerPreview| -> String {
+            let mut l = format!("- {}: {} *(`{}`)*", t.when, t.then, t.id);
+            if t.shadow {
+                l.push_str(" *(shadow mode: recorded, not executed)*");
+            }
+            l.push('\n');
+            if !t.upcoming.is_empty() {
+                l.push_str(&format!("  - next: {}\n", fmt_times(&t.upcoming)));
+            }
+            l
+        };
         let mut s = String::new();
+        if !self.checks.is_empty() {
+            s.push_str("**Check this (likely mistakes):**\n");
+            for c in &self.checks {
+                s.push_str(&format!("- {c}\n"));
+            }
+            s.push('\n');
+        }
         if self.escalations.is_empty() {
             s.push_str("**Approval:** no capability changes; the reviewer can approve this alone.\n\n");
         } else {
@@ -362,30 +511,61 @@ impl ChangeSummary {
             }
             s.push('\n');
         }
-        let changed: Vec<_> = self.items.iter().collect();
+
+        let starts: Vec<String> = self
+            .triggers
+            .iter()
+            .filter(|t| t.status == Status::Added)
+            .map(trigger_line)
+            .chain(self.activities.iter().filter(|a| a.status == Status::Added).map(|a| format!("- {}\n", a.what)))
+            .collect();
+        if !starts.is_empty() {
+            s.push_str("**Will start happening:**\n");
+            s.extend(starts);
+            s.push('\n');
+        }
+        let stops: Vec<String> = self
+            .triggers
+            .iter()
+            .filter(|t| t.status == Status::Removed)
+            .map(|t| format!("- {}: {} *(`{}`)*\n", t.when, t.then, t.id))
+            .chain(self.activities.iter().filter(|a| a.status == Status::Removed).map(|a| format!("- {}\n", a.what)))
+            .collect();
+        if !stops.is_empty() {
+            s.push_str("**Will stop happening:**\n");
+            s.extend(stops);
+            s.push('\n');
+        }
+        let changed: Vec<&TriggerPreview> = self.triggers.iter().filter(|t| t.status == Status::Changed).collect();
         if !changed.is_empty() {
-            s.push_str("**Changes:**\n");
-            for i in changed {
-                s.push_str(&format!("- {:?} {} `{}`\n", i.status, i.kind, i.name));
+            s.push_str("**Will change:**\n");
+            for t in changed {
+                match &t.before {
+                    Some(b) => s.push_str(&format!(
+                        "- `{}`: was \"{}: {}\", becomes \"{}: {}\"\n",
+                        t.id, b.when, b.then, t.when, t.then
+                    )),
+                    None => s.push_str(&format!("- `{}`: {}: {}\n", t.id, t.when, t.then)),
+                }
+                if !t.upcoming.is_empty() {
+                    s.push_str(&format!("  - next: {}\n", fmt_times(&t.upcoming)));
+                }
             }
             s.push('\n');
         }
-        let shown: Vec<_> = self.triggers.iter().filter(|t| t.status != Status::Unchanged).collect();
-        if !shown.is_empty() {
-            s.push_str("**Triggers:**\n");
-            for t in shown {
-                s.push_str(&format!("- {:?} `{}`: {}, {}", t.status, t.id, t.when, t.then));
-                if t.shadow {
-                    s.push_str(" *(shadow mode: recorded, not executed)*");
-                }
-                s.push('\n');
-                if !t.upcoming.is_empty() {
-                    let times: Vec<String> = t
-                        .upcoming
-                        .iter()
-                        .map(|u| u.with_timezone(&tz).format("%a %Y-%m-%d %H:%M %Z").to_string())
-                        .collect();
-                    s.push_str(&format!("  - next: {}\n", times.join(", ")));
+        if !self.items.is_empty() {
+            s.push_str("**Definitions:**\n");
+            for (status, label) in
+                [(Status::Added, "added"), (Status::Removed, "removed"), (Status::Changed, "changed")]
+            {
+                let names: Vec<String> = self
+                    .items
+                    .iter()
+                    .filter(|i| i.status == status)
+                    .map(|i| format!("{} `{}`", i.kind, i.name))
+                    .collect();
+                if !names.is_empty() {
+                    s.push_str(&format!("- {label}: {}\n", names.join(", ")));
                 }
             }
         }
@@ -456,7 +636,7 @@ mod tests {
         assert_eq!(t.status, Status::Added);
         assert_eq!(t.upcoming.len(), UPCOMING);
         let md = s.to_markdown(chrono_tz::Europe::Berlin);
-        assert!(md.contains("message the `main` agent"), "{md}");
+        assert!(md.contains("**Will start happening:**") && md.contains("message the `main` agent"), "{md}");
         assert!(md.contains("next:"), "{md}");
     }
 
@@ -492,6 +672,43 @@ mod tests {
             "{:?}",
             s.escalations
         );
+    }
+
+    #[test]
+    fn changed_and_removed_schedules_are_described() {
+        let with = |cron: &str| {
+            base().with(
+                "triggers/d.toml",
+                format!("[[trigger]]\nname = \"d\"\ncron = \"{cron}\"\ntarget = {{ resume = \"main\" }}\n[[trigger]]\nname = \"gone\"\nevery = \"1h\"\ntarget = {{ resume = \"main\" }}\n"),
+            )
+        };
+        let old = defs(&with("0 7 * * 1-5"));
+        let new = defs(&base().with(
+            "triggers/d.toml",
+            "[[trigger]]\nname = \"d\"\ncron = \"30 6 * * *\"\ntarget = { resume = \"main\" }\n",
+        ));
+        let md = preview(&old, &new, &[], Utc::now()).to_markdown(chrono_tz::UTC);
+        assert!(
+            md.contains("**Will change:**") && md.contains("was \"At 07:00") && md.contains("becomes \"At 06:30"),
+            "{md}"
+        );
+        assert!(md.contains("**Will stop happening:**") && md.contains("Every 1h"), "{md}");
+    }
+
+    #[test]
+    fn likely_mistakes_are_called_out() {
+        let old = defs(&base().with("events/e.toml", "[[event]]\ntype = \"mail.received\"\n").with(
+            "triggers/t.toml",
+            "[[trigger]]\nname = \"m\"\non = \"mail.received\"\ntarget = { resume = \"main\" }\n",
+        ));
+        let new = defs(
+            &base()
+                .with("triggers/t.toml", "[[trigger]]\nname = \"m\"\non = \"mail.received\"\ntarget = { resume = \"main\" }\n[[trigger]]\nname = \"spam\"\ncron = \"* * * * *\"\ntarget = { resume = \"main\" }\n[[trigger]]\nname = \"typo\"\non = \"mial.*\"\ntarget = { resume = \"main\" }\n"),
+        );
+        let md = preview(&old, &new, &[], Utc::now()).to_markdown(chrono_tz::UTC);
+        assert!(md.contains("Check this") && md.contains("fires 1440 times"), "{md}");
+        assert!(md.contains("event type `mail.received` is removed but still listened to"), "{md}");
+        assert!(md.contains("listens for `mial.*`, which matches no declared event type"), "{md}");
     }
 
     #[test]

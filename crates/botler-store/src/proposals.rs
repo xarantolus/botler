@@ -46,6 +46,8 @@ pub struct Proposal {
     pub review_notes: Option<String>,
     pub status: ProposalStatus,
     pub merged_commit: Option<String>,
+    pub reviewer: Option<String>,
+    pub attempts: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -86,6 +88,8 @@ fn row(r: &SqliteRow) -> Result<Proposal> {
         review_notes: r.get("review_notes"),
         status: ProposalStatus::parse(T, r.get("status"))?,
         merged_commit: r.get("merged_commit"),
+        reviewer: r.get("reviewer"),
+        attempts: r.get("attempts"),
         created_at: parse_ts(T, r.get("created_at"))?,
         updated_at: parse_ts(T, r.get("updated_at"))?,
     })
@@ -175,6 +179,48 @@ impl Store {
         sqlx::query("UPDATE proposals SET verdict = ?, review_notes = ?, updated_at = ? WHERE id = ?")
             .bind(verdict)
             .bind(notes)
+            .bind(ts(Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_proposal_base(&self, id: &str, base: &str) -> Result<()> {
+        sqlx::query("UPDATE proposals SET base_commit = ?, updated_at = ? WHERE id = ?")
+            .bind(base)
+            .bind(ts(Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_proposal_reviewer(&self, id: &str, reviewer: &str) -> Result<()> {
+        sqlx::query("UPDATE proposals SET reviewer = ?, updated_at = ? WHERE id = ?")
+            .bind(reviewer)
+            .bind(ts(Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Count a pipeline (re-)run; returns the new count.
+    pub async fn bump_proposal_attempts(&self, id: &str) -> Result<i64> {
+        sqlx::query("UPDATE proposals SET attempts = attempts + 1, updated_at = ? WHERE id = ?")
+            .bind(ts(Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(self.proposal(id).await?.attempts)
+    }
+
+    /// Record why a proposal failed or was rejected.
+    pub async fn set_proposal_outcome(&self, id: &str, status: ProposalStatus, detail: &str) -> Result<()> {
+        sqlx::query("UPDATE proposals SET status = ?, review_notes = COALESCE(review_notes || char(10), '') || ?, updated_at = ? WHERE id = ?")
+            .bind(status.as_str())
+            .bind(detail)
             .bind(ts(Utc::now()))
             .bind(id)
             .execute(&self.pool)

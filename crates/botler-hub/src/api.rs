@@ -60,6 +60,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/incidents", get(incidents))
         .route("/api/v1/secrets", get(secrets))
         .route("/api/v1/secrets/{name}", put(set_secret))
+        .route("/api/v1/proposals", get(proposals))
+        .route("/api/v1/revert", post(revert))
         .route("/api/v1/pause", post(pause))
         .route("/api/v1/resume", post(resume))
         .route("/git/monorepo.git/{*rest}", any(git))
@@ -256,6 +258,12 @@ async fn answer_dialog(
     }
     let d = hub.store.answer_dialog(&id, &a.answer).await?;
     debug_assert_eq!(d.status, DialogStatus::Answered);
+    if d.kind == botler_store::DialogKind::Approval
+        && let Some(pid) = &d.proposal_id
+    {
+        crate::transactions::on_approval(&hub, pid, a.answer == "approve").await?;
+        return Ok(Json(json!({ "dialog": d })));
+    }
     let ev = Event::new(kinds::DIALOG_ANSWERED, Source::User, Provenance::Trusted, Utc::now())
         .to(d.instance.clone())
         .payload(json!({ "dialog_id": d.id, "question": d.question, "answer": a.answer }));
@@ -504,6 +512,27 @@ async fn set_secret(
     // Deliveries waiting on a missing secret can proceed now.
     hub.dispatch_notify.notify_one();
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn proposals(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
+    user_only(&p)?;
+    Ok(Json(json!(hub.store.recent_proposals(50).await?)))
+}
+
+#[derive(Deserialize)]
+struct RevertRequest {
+    commit: String,
+}
+
+/// Revert a merged commit. The user is the authority, so this applies directly.
+async fn revert(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Json(r): Json<RevertRequest>,
+) -> ApiResult {
+    user_only(&p)?;
+    let head = crate::transactions::revert(&hub, &r.commit).await?;
+    Ok(Json(json!({ "reverted": r.commit, "commit": head })))
 }
 
 async fn pause(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {

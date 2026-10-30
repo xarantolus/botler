@@ -23,6 +23,7 @@ async fn route_loop(hub: Arc<Hub>) {
 pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()> + Send + 'static) -> Result<()> {
     crate::assets::unpack(&hub.paths)?;
     agents::reconcile_on_boot(&hub).await?;
+    crate::transactions::resume_on_boot(&hub).await?;
     {
         // Building the base image can take minutes on a fresh host; agents wait for it on wake.
         let hub = hub.clone();
