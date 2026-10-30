@@ -113,7 +113,7 @@ mod tests {
     fn roundtrip_tamper_expiry() {
         let t = Tokens::new([1; 32]);
         let now = Utc::now();
-        let who = Principal::Agent { instance: "main".into(), wake: "w1".into() };
+        let who = Principal::Agent { instance: "botler".into(), wake: "w1".into() };
         let tok = t.issue(&who, Duration::hours(1), now);
         assert_eq!(t.verify(&tok, now), Ok(who));
         assert_eq!(t.verify(&tok, now + Duration::hours(2)), Err(AuthError::Expired));

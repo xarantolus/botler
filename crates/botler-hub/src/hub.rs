@@ -36,6 +36,8 @@ pub enum HubError {
     Paused,
     #[error("secret {0} has no value; enter it in the web app")]
     MissingSecret(String),
+    #[error("migrating the data directory: {0}")]
+    Migration(String),
     #[error("{instance} keeps crashing; next start allowed at {until}")]
     Backoff { instance: String, until: chrono::DateTime<chrono::Utc> },
 }
@@ -99,6 +101,7 @@ impl Hub {
         if stale_worktrees {
             repo.prune_worktrees().await?;
         }
+        crate::migrate::front_door(&paths, &store, &repo).await?;
         let applied = Self::load_bootable(&store, &repo).await?;
         let (live, _) = broadcast::channel(1024);
         Ok(Arc::new(Self {
@@ -132,7 +135,7 @@ impl Hub {
                 };
                 tracing::error!(%commit, fallback = %last, problems = diagnostics.len(), "main does not load; staying on last applied commit");
                 let ev = Event::new(botler_core::event::kinds::MESSAGE, Source::Hub, Provenance::Trusted, Utc::now())
-                    .to("main")
+                    .to(botler_core::FRONT_DOOR)
                     .urgent(true)
                     .payload(serde_json::json!({
                         "text": format!(

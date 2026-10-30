@@ -14,7 +14,7 @@
   - `hub`: never enters a container. Only used by approval-gated hub actions (anything that reaches other people).
 
   This supersedes most of DECISIONS 13/24.8.
-- **Main chat = `main` + topic threads.** `main` is one long-lived, compacting session that acts as router. Bigger topics get their own persistent instances (threads/workspaces), which you can open directly and `main` can hand off to.
+- **Front door = `botler` + topic threads.** `botler` (shown as "Botler", pinned first in the web app; `botler_core::FRONT_DOOR`) is one long-lived, compacting session that acts as router. Bigger topics get their own persistent instances (threads), which you can open directly and `botler` can hand off to. It was called `main` until agents kept confusing it with the main branch: `main` now only ever means the monorepo branch. At boot the hub migrates an old data dir: a hub commit moves `agents/main/` to `agents/botler/` (retargeting `resume = "main"` triggers, only if that adds no validation errors), and instance `main` is renamed with its session, home and clone directories and every live SQLite reference (deliveries, timers, dialogs, proposals, usage, state, breakers, incidents, schedule state, unrouted events). Routed events keep the old name as history.
 - **Delivery to a busy agent**: normal messages are queued as pi `followUp`. Urgent messages and your own chat messages are delivered as `steer`. `send_message` never blocks; replies come back as correlated events.
 - **Host**: one Linux server, **rootless Podman as primary target** (Docker API-compatible socket via bollard). Known gaps to handle: catatonit/`--init` for reaping, the `kernel.keys` quota under many containers, and the browser sandbox later.
 - **The first full build includes**: hub-enforced outbound approval, the reviewer agent and the deterministic gate. The web app comes first; Flutter comes later.
@@ -53,7 +53,7 @@
   sessions volume    hub-held secrets only for approved actions
 ```
 
-**Agent lifecycle.** An *agent definition* (repo) has *instances* (SQLite rows). `main` is a persistent instance. Subagents are ephemeral instances spawned via MCP `spawn_agent(def, task)`. An instance is either dormant (session file + home only) or running (container + `pi --mode rpc --session <file>`). The dispatcher wakes a dormant instance for each pending delivery: it starts the container on the **current** image and definition, resumes the session, and prompts with the coalesced deliveries. It uses `steer`/`follow_up` when the agent is busy. Idle timeout makes the instance dormant again. A reboot loses nothing: alarms live in the hub.
+**Agent lifecycle.** An *agent definition* (repo) has *instances* (SQLite rows). `botler` is a persistent instance. Subagents are ephemeral instances spawned via MCP `spawn_agent(def, task)`. An instance is either dormant (session file + home only) or running (container + `pi --mode rpc --session <file>`). The dispatcher wakes a dormant instance for each pending delivery: it starts the container on the **current** image and definition, resumes the session, and prompts with the coalesced deliveries. It uses `steer`/`follow_up` when the agent is busy. Idle timeout makes the instance dormant again. A reboot loses nothing: alarms live in the hub.
 
 **Agent filesystem: one home.** Agent containers are removed when the agent sleeps, so only mounts persist. Every instance gets one persistent host directory, its **home**, mounted read-write at `/home/agent`. It is `$HOME` and the working directory, so git config, `~/.cache`, uv/pip/npm caches, cloned repos and notes all land there and survive sleeping, restarts and archiving. `/tmp` and everything else in the container is wiped on every sleep, and the core prompt says so.
 - **Key:** by default the home is the instance's own (`<data>/homes/<instance>`). A definition can name a shared home (`home = "groundstation"`, `<data>/shared-homes/<name>`): every instance of every definition naming it uses the same directory. Shared homes live in their own directory so a name can never collide with an instance id.
@@ -69,7 +69,7 @@
   - `on` (an event subscription with a filter);
   - `webhook` (later, but designed in now: `POST /hooks/<name>`, verified by a per-hook HMAC or token secret, payload becomes an event with `provenance=external`).
 - **Targets** (what a trigger does):
-  1. `resume`: deliver a message into an existing chat/instance (e.g. `main`, or a named workspace).
+  1. `resume`: deliver a message into an existing chat/instance (e.g. `botler`, or a named thread).
   2. `spawn`: start a fresh agent instance from an agent definition and environment (image, mounts, secrets) with a task prompt. It reports back via events and goes dormant or ends.
   3. `run`: run a deterministic Python job in a container. No LLM. It decides itself whether to emit events, which can then trigger 1 or 2.
 - **Runnables have a lifetime**:
@@ -111,11 +111,11 @@ Agents reach the same hub endpoints via MCP. Scripts the agent writes inside its
 
   It then decides to fix (proposal), retry, silence or ask you. Incident resolution is recorded, and a recurrence reopens the incident with history.
 - **Hub self-failures** (the image build failed, the definition for a commit is invalid, the Podman socket is gone) go through the same incident path. Things like the daily digest, the email channel and voice are *not* built in. The core gives agents enough primitives to build them as monorepo content:
-- **See other agents**: `list_agents`, `get_events(filter)`, and `read_session(instance, since)` (a capability that `main` holds by default). Plus `send_message` with correlated replies, so "ask each agent what it did today" works.
-- **Self-scheduling**: `set_timer(at, target)` and proposing a trigger file (cron → `resume main` with a prompt). For example, the "daily digest" is an agent-written trigger and prompt.
+- **See other agents**: `list_agents`, `get_events(filter)`, and `read_session(instance, since)` (a capability that `botler` holds by default). Plus `send_message` with correlated replies, so "ask each agent what it did today" works.
+- **Self-scheduling**: `set_timer(at, target)` and proposing a trigger file (cron → `resume botler` with a prompt). For example, the "daily digest" is an agent-written trigger and prompt.
 - **Resident anything**: services can have a persistent volume, any image (including a browser image with a logged-in profile), a hub-class or container secret, and the SDK. "A 24/7 container with my mail provider's web app open, emitting `mail.received` events" is a valid thing an agent builds.
 
-**Uploads & share.** Files and images you attach in the web app land in the upload area (`data/uploads/<id>`). The delivery tells the agent the path, mounted read-only at `/inbox/files/` in its container, and the LLM decides whether to read or view it (pi handles images). A **share-to-botler** endpoint (`/share`: a PWA Web Share Target plus a bookmarklet URL) turns shared text, URLs and files into an event to `main`. No built-in voice.
+**Uploads & share.** Files and images you attach in the web app land in the upload area (`data/uploads/<id>`). The delivery tells the agent the path, mounted read-only at `/inbox/files/` in its container, and the LLM decides whether to read or view it (pi handles images). A **share-to-botler** endpoint (`/share`: a PWA Web Share Target plus a bookmarklet URL) turns shared text, URLs and files into an event to `botler`. No built-in voice.
 
 **Rate limits & breakers (core, everywhere).**
 - Token buckets on every MCP tool and SDK endpoint, per instance/runnable and global. Defaults are in core; agents can tighten them in definitions but only raise them through a transaction that needs your approval.
@@ -200,14 +200,14 @@ template/                  the monorepo template (below)
 docs/ARCHITECTURE.md, docs/DECISIONS.md (consolidated), docs/legacy/ (current 4 files)
 ```
 
-**Template monorepo (instantiated by `botler init`, then personalised by `main` via transactions)**
+**Template monorepo (instantiated by `botler init`, then personalised by `botler` via transactions)**
 ```
 botler.toml                models routing, defaults, mirror, push, budgets
-agents/{main,reviewer,triage,dev}/agent.toml + AGENTS.md   (image, secrets, mounts, network, mcp,
+agents/{botler,chat,reviewer,triage,dev}/agent.toml + AGENTS.md   (image, secrets, mounts, network, mcp,
                            subscriptions [[on]], schedules [[schedule]], idle, budget)
 jobs/<name>/job.toml Dockerfile pyproject.toml src/ tests/   (lifetime = oneshot|service;
                            [[schedule]] / [[on]] / [[webhook]] triggers with target = run)
-triggers/*.toml            standalone trigger→target bindings (e.g. cron → resume main,
+triggers/*.toml            standalone trigger→target bindings (e.g. cron → resume botler,
                            cron → spawn agent "researcher" with task)
 connectors/<name>/         python package: client, @action fns (secret class, approval tag), health
 packages/shared/           uv workspace member (reuse-first clients)
@@ -239,17 +239,17 @@ tokio, axum, sqlx (SQLite, WAL), bollard against the rootless Podman socket (`po
 5. **Transactions.** `propose_change`, gate job, capability diff, reviewer agent, decision table, approval dialogs, ff-merge, reload, mirror, revert-as-transaction, last-applied-commit fallback, plus the debugging tools `replay_event`, `simulate_triggers`, `get_run_logs` and `validate`.
 6. **Jobs, actions, services, secrets.** Trigger→target table (resume/spawn/run), oneshot and service runnables, the injected SDK (+ per-runnable state KV), scheduled job containers, event emission, a webhook endpoint (can ship last within this milestone), `@action` with hub-held secrets + approval, service supervision (Podman event stream, backoff, crash-loop → failed), schedule missed/overlap/timeout policies, incidents + `runnable.failed` routing to the `triage` agent, multi-instance MCP services attached to agents, a secret entry form in the shell, container secrets as env/files.
 7. **Push, search, memory.** ntfy push for dialogs. One search across sessions, events, the monorepo and notes: a SQLite FTS index derived from those sources (rebuildable), exposed in the web app and as MCP `search`. Hub-mediated memory (see **Memory**).
-8. **First real use (old Phase 0 go/no-go).** You *ask* `main` for a daily digest and an inbound mail channel, and it builds both with only the primitives: triggers, messaging other agents, a resident service. If either needs a core change, that's a finding about the primitives. Later, in the same machinery: apps behind the proxy, browser instances, host workspaces (ground station), Flutter.
+8. **First real use (old Phase 0 go/no-go).** You *ask* `botler` for a daily digest and an inbound mail channel, and it builds both with only the primitives: triggers, messaging other agents, a resident service. If either needs a core change, that's a finding about the primitives. Later, in the same machinery: apps behind the proxy, browser instances, host workspaces (ground station), Flutter.
 
 ## Verification
 
 - `cargo test` covers the core (schedule math, routing, capability diff, decision table, dialog abort) using fake store/runtime/pi adapters. Store tests run against temp SQLite. Repo tests run against temp bare repos.
 - `pi-extension` tests run pi in-process via the SDK against a fake hub MCP.
 - An end-to-end script (`just e2e`) on a Docker host:
-  1. `botler init`, start the hub, chat with `main` through the API.
-  2. `main` sets a timer. Kill and restart the hub; the timer still fires and wakes `main` from dormant.
-  3. `main` sends a message to a spawned subagent, and the reply routes back.
-  4. `main` proposes a change adding a cron job; the gate passes, the reviewer approves, it merges, and the job runs on schedule and emits an event.
+  1. `botler init`, start the hub, chat with `botler` through the API.
+  2. `botler` sets a timer. Kill and restart the hub; the timer still fires and wakes `botler` from dormant.
+  3. `botler` sends a message to a spawned subagent, and the reply routes back.
+  4. `botler` proposes a change adding a cron job; the gate passes, the reviewer approves, it merges, and the job runs on schedule and emits an event.
   5. An approval-tagged action blocks until it is approved in the web app.
   6. A gate failure returns as feedback.
 - Supervision tests:

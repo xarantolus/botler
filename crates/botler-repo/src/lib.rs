@@ -312,8 +312,26 @@ impl Repo {
     /// A commit on top of `base` that writes (`Some`) or deletes (`None`) files. Used by the hub
     /// for changes the user approved directly (e.g. declaring secrets from a filled form).
     pub async fn commit_files(&self, base: &str, files: &[(&str, Option<&str>)], message: &str) -> Result<String> {
+        self.commit_changes(base, &[], files, message).await
+    }
+
+    /// A commit on top of `base` that first renames paths (files or directories, `git mv`, so
+    /// history follows them), then writes or deletes files as [`Repo::commit_files`] does.
+    pub async fn commit_changes(
+        &self,
+        base: &str,
+        moves: &[(&str, &str)],
+        files: &[(&str, Option<&str>)],
+        message: &str,
+    ) -> Result<String> {
         let wt = self.temp_worktree(base).await?;
         let result = async {
+            for (from, to) in moves {
+                if let Some(dir) = wt.join(to).parent() {
+                    tokio::fs::create_dir_all(dir).await?;
+                }
+                self.git_in(&wt, &["mv", "--", from, to]).await?;
+            }
             for (rel, body) in files {
                 let path = wt.join(rel);
                 match body {

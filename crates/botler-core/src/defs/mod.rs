@@ -19,7 +19,7 @@ use crate::trigger::ScheduleSpec;
 /// A trigger with its owner and target resolved.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ResolvedTrigger {
-    /// Stable id: `<file path>#<name>`, e.g. `agents/main/agent.toml#morning`.
+    /// Stable id: `<file path>#<name>`, e.g. `agents/botler/agent.toml#morning`.
     pub id: String,
     pub spec: Trigger,
     pub kind: TriggerKind,

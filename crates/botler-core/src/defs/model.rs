@@ -197,7 +197,7 @@ pub struct Agent {
     pub home: Option<String>,
     #[serde(default)]
     pub idle_timeout: Option<HumanDuration>,
-    /// Keep this agent's pi session running at all times (persistent agents only), e.g. `main`.
+    /// Keep this agent's pi session running at all times (persistent agents only), e.g. `botler`.
     #[serde(default)]
     pub always_on: bool,
     /// Secret groups (from `secrets.toml`) delivered into this agent's container.

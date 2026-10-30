@@ -197,7 +197,7 @@ struct UserMessage {
 }
 
 fn main_instance() -> String {
-    "main".into()
+    botler_core::FRONT_DOOR.into()
 }
 
 async fn user_message(

@@ -38,7 +38,7 @@ pub enum Source {
 }
 
 impl Source {
-    /// Stable string form used for rate limiting and storage, e.g. `agent:main`.
+    /// Stable string form used for rate limiting and storage, e.g. `agent:botler`.
     pub fn key(&self) -> String {
         match self {
             Self::User => "user".into(),

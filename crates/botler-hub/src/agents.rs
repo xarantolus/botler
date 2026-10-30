@@ -819,10 +819,10 @@ fn broadcast_state(hub: &Hub, instance: &str, state: &str) {
     }
 }
 
-/// An urgent note to `main` from the hub.
+/// An urgent note to the front door (`botler`) from the hub.
 pub async fn alarm(hub: &Hub, text: &str) -> Result<()> {
     let ev = Event::new(kinds::MESSAGE, Source::Hub, Provenance::Trusted, Utc::now())
-        .to("main")
+        .to(botler_core::FRONT_DOOR)
         .urgent(true)
         .payload(json!({ "text": text }));
     hub.emit(ev).await?;

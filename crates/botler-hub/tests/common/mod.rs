@@ -16,7 +16,7 @@ pub struct Env {
     pub fake: Fake,
 }
 
-fn copy_dir(src: &Path, dst: &Path) {
+pub fn copy_dir(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for e in std::fs::read_dir(src).unwrap() {
         let e = e.unwrap();

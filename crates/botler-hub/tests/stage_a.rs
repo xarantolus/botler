@@ -14,26 +14,26 @@ fn refs(v: &[(String, String)]) -> Vec<(&str, &str)> {
 }
 
 #[tokio::test]
-async fn timer_wakes_main_with_a_delivery() {
+async fn timer_wakes_botler_with_a_delivery() {
     let e = env().await;
     e.hub
         .store
         .create_timer(&NewTimer {
             fire_at: Utc::now() - Duration::seconds(1),
-            target: botler_core::defs::Target::Resume("main".into()),
+            target: botler_core::defs::Target::Resume("botler".into()),
             prompt: Some("Check the vacuum.".into()),
             payload: json!({"note": "vacuum"}),
-            created_by: "agent:main".into(),
+            created_by: "agent:botler".into(),
         })
         .await
         .unwrap();
     scheduler::tick(&e.hub, Utc::now()).await.unwrap();
-    let pending = e.hub.store.pending_deliveries("main").await.unwrap();
+    let pending = e.hub.store.pending_deliveries("botler").await.unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].prompt.as_deref(), Some("Check the vacuum."));
     // fired exactly once
     scheduler::tick(&e.hub, Utc::now()).await.unwrap();
-    assert_eq!(e.hub.store.pending_deliveries("main").await.unwrap().len(), 1);
+    assert_eq!(e.hub.store.pending_deliveries("botler").await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -104,11 +104,11 @@ async fn failures_open_one_incident_and_spawn_triage_once() {
 #[tokio::test]
 async fn missing_job_reports_to_sender() {
     let e = env().await;
-    let ev = Event::new("schedule", Source::Agent("main".into()), Provenance::Trusted, Utc::now());
+    let ev = Event::new("schedule", Source::Agent("botler".into()), Provenance::Trusted, Utc::now());
     let r = router::fire(&e.hub, &botler_core::defs::Target::Run("nope".into()), None, None, ev).await;
     assert!(r.is_err());
     e.route().await;
-    let pending = e.hub.store.pending_deliveries("main").await.unwrap();
+    let pending = e.hub.store.pending_deliveries("botler").await.unwrap();
     assert_eq!(pending.len(), 1, "the sender is told routing failed");
 }
 
@@ -128,7 +128,7 @@ async fn timeouts_are_swept() {
 async fn events_abort_dialogs_about_them() {
     let e = env().await;
     let new = |about: &str| NewDialog {
-        instance: "main".into(),
+        instance: "botler".into(),
         kind: DialogKind::Approval,
         question: "merge?".into(),
         detail: None,
@@ -151,18 +151,18 @@ async fn events_abort_dialogs_about_them() {
     e.route().await;
     assert_eq!(e.hub.store.dialog(&hit.id).await.unwrap().status, DialogStatus::Aborted);
     assert_eq!(e.hub.store.dialog(&miss.id).await.unwrap().status, DialogStatus::Open);
-    let aborted = e.hub.store.pending_deliveries("main").await.unwrap();
+    let aborted = e.hub.store.pending_deliveries("botler").await.unwrap();
     assert_eq!(aborted.len(), 1, "the asking agent is told");
 }
 
 #[tokio::test]
 async fn ping_pong_trips_the_cycle_breaker() {
     let e = env().await;
-    let root = Event::new(kinds::MESSAGE, Source::Agent("a".into()), Provenance::Trusted, Utc::now()).to("main");
+    let root = Event::new(kinds::MESSAGE, Source::Agent("a".into()), Provenance::Trusted, Utc::now()).to("botler");
     let mut last = root.clone();
     for _ in 0..20 {
         last = Event::new(kinds::MESSAGE, Source::Agent("b".into()), Provenance::Trusted, Utc::now())
-            .to("main")
+            .to("botler")
             .in_reply_to(&last);
     }
     e.hub.emit(last.clone()).await.unwrap();
@@ -170,12 +170,12 @@ async fn ping_pong_trips_the_cycle_breaker() {
     assert!(e.hub.store.breaker(&format!("chain:{}", root.id)).await.unwrap().is_some());
     // later events on the chain are dropped
     let next = Event::new(kinds::MESSAGE, Source::Agent("b".into()), Provenance::Trusted, Utc::now())
-        .to("main")
+        .to("botler")
         .in_reply_to(&root);
-    let before = e.hub.store.pending_deliveries("main").await.unwrap().len();
+    let before = e.hub.store.pending_deliveries("botler").await.unwrap().len();
     e.hub.emit(next).await.unwrap();
     e.route().await;
-    assert_eq!(e.hub.store.pending_deliveries("main").await.unwrap().len(), before);
+    assert_eq!(e.hub.store.pending_deliveries("botler").await.unwrap().len(), before);
 }
 
 #[tokio::test]
@@ -186,7 +186,7 @@ async fn paused_hub_fires_nothing() {
         .store
         .create_timer(&NewTimer {
             fire_at: Utc::now() - Duration::seconds(1),
-            target: botler_core::defs::Target::Resume("main".into()),
+            target: botler_core::defs::Target::Resume("botler".into()),
             prompt: None,
             payload: json!({}),
             created_by: "user".into(),
@@ -194,8 +194,8 @@ async fn paused_hub_fires_nothing() {
         .await
         .unwrap();
     scheduler::tick(&e.hub, Utc::now()).await.unwrap();
-    assert!(e.hub.store.pending_deliveries("main").await.unwrap().is_empty());
+    assert!(e.hub.store.pending_deliveries("botler").await.unwrap().is_empty());
     e.hub.store.set_paused(false).await.unwrap();
     scheduler::tick(&e.hub, Utc::now()).await.unwrap();
-    assert_eq!(e.hub.store.pending_deliveries("main").await.unwrap().len(), 1);
+    assert_eq!(e.hub.store.pending_deliveries("botler").await.unwrap().len(), 1);
 }

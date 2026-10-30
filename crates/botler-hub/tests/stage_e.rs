@@ -51,14 +51,14 @@ async fn wait_for(e: &common::Env, id: &str, want: &[ProposalStatus]) -> botler_
     panic!("proposal stuck in {:?}", e.hub.store.proposal(id).await.unwrap().status);
 }
 
-const TRIGGER: &str = "version = 1\n[[trigger]]\nname = \"digest\"\ncron = \"0 7 * * 1-5\"\ntarget = { resume = \"main\" }\nprompt = \"Write my digest\"\n";
+const TRIGGER: &str = "version = 1\n[[trigger]]\nname = \"digest\"\ncron = \"0 7 * * 1-5\"\ntarget = { resume = \"botler\" }\nprompt = \"Write my digest\"\n";
 
 #[tokio::test]
 async fn reviewed_change_without_escalations_merges_and_applies() {
     let e = env().await;
     with_key(&e).await;
-    push_branch(&e, "agents/main/digest", &[("triggers/digest.toml", TRIGGER)]);
-    let p = transactions::propose(&e.hub, "main", "agents/main/digest", "Morning digest").await.unwrap();
+    push_branch(&e, "agents/botler/digest", &[("triggers/digest.toml", TRIGGER)]);
+    let p = transactions::propose(&e.hub, "botler", "agents/botler/digest", "Morning digest").await.unwrap();
     let p = wait_for(&e, &p.id, &[ProposalStatus::Reviewing, ProposalStatus::Failed]).await;
     assert_eq!(p.status, ProposalStatus::Reviewing, "{:?}", p.review_notes);
     let reviewer = p.reviewer.clone().unwrap();
@@ -82,7 +82,7 @@ async fn reviewed_change_without_escalations_merges_and_applies() {
         .events(&botler_store::EventQuery { kind: Some("proposal.updated".into()), limit: 10, ..Default::default() })
         .await
         .unwrap();
-    assert!(updates.iter().any(|u| u.payload["status"] == "merged" && u.to.as_deref() == Some("main")));
+    assert!(updates.iter().any(|u| u.payload["status"] == "merged" && u.to.as_deref() == Some("botler")));
     assert!(
         updates.iter().any(|u| u.payload["detail"].as_str().unwrap_or("").contains("next:")),
         "the summary reached the agent"
@@ -95,13 +95,15 @@ async fn capability_changes_go_to_the_user() {
     with_key(&e).await;
     push_branch(
         &e,
-        "agents/main/grant",
+        "agents/botler/grant",
         &[(
-            "agents/main/agent.toml",
+            "agents/botler/agent.toml",
             "version = 1\nkind = \"persistent\"\nalways_on = true\nimage = \"agent\"\nsecrets = [\"openrouter\"]\n",
         )],
     );
-    let p = transactions::propose(&e.hub, "main", "agents/main/grant", "Give main the openrouter group").await.unwrap();
+    let p = transactions::propose(&e.hub, "botler", "agents/botler/grant", "Give botler the openrouter group")
+        .await
+        .unwrap();
     let p = wait_for(&e, &p.id, &[ProposalStatus::Reviewing]).await;
     transactions::submit_review(&e.hub, &p.reviewer.unwrap(), &p.id, Verdict::Approve, "fine").await.unwrap();
     let p = wait_for(&e, &p.id, &[ProposalStatus::AwaitingUser]).await;
@@ -124,18 +126,18 @@ async fn gate_failures_and_invalid_definitions_go_back_to_the_agent() {
     let e = env().await;
     with_key(&e).await;
     e.fake.set_script_result("ruff: E501 line too long\ngate: FAILED\n", 1);
-    push_branch(&e, "agents/main/bad-gate", &[("triggers/digest.toml", TRIGGER)]);
-    let p = transactions::propose(&e.hub, "main", "agents/main/bad-gate", "x").await.unwrap();
+    push_branch(&e, "agents/botler/bad-gate", &[("triggers/digest.toml", TRIGGER)]);
+    let p = transactions::propose(&e.hub, "botler", "agents/botler/bad-gate", "x").await.unwrap();
     let p = wait_for(&e, &p.id, &[ProposalStatus::Failed]).await;
     assert!(p.gate_report.unwrap().contains("E501"));
 
     e.fake.set_script_result("gate: ok\n", 0);
     push_branch(
         &e,
-        "agents/main/bad-defs",
-        &[("triggers/x.toml", "[[trigger]]\nname = \"x\"\ncron = \"not a cron\"\ntarget = { resume = \"main\" }\n")],
+        "agents/botler/bad-defs",
+        &[("triggers/x.toml", "[[trigger]]\nname = \"x\"\ncron = \"not a cron\"\ntarget = { resume = \"botler\" }\n")],
     );
-    let p = transactions::propose(&e.hub, "main", "agents/main/bad-defs", "x").await.unwrap();
+    let p = transactions::propose(&e.hub, "botler", "agents/botler/bad-defs", "x").await.unwrap();
     let p = wait_for(&e, &p.id, &[ProposalStatus::Failed]).await;
     assert!(p.review_notes.unwrap().contains("invalid cron expression"));
 }
@@ -145,14 +147,14 @@ async fn foreign_branches_are_refused_and_preview_explains() {
     let e = env().await;
     with_key(&e).await;
     push_branch(&e, "agents/other/x", &[("triggers/digest.toml", TRIGGER)]);
-    assert!(transactions::propose(&e.hub, "main", "agents/other/x", "x").await.is_err());
-    push_branch(&e, "agents/main/p", &[("triggers/digest.toml", TRIGGER)]);
-    let v = transactions::preview_branch(&e.hub, "main", "agents/main/p").await.unwrap();
+    assert!(transactions::propose(&e.hub, "botler", "agents/other/x", "x").await.is_err());
+    push_branch(&e, "agents/botler/p", &[("triggers/digest.toml", TRIGGER)]);
+    let v = transactions::preview_branch(&e.hub, "botler", "agents/botler/p").await.unwrap();
     assert_eq!(v["valid"], true);
     assert!(v["summary"].as_str().unwrap().contains("next:"));
     assert_eq!(v["needs_user_approval"], false);
     // The reviewer agent needs no running pi here; make sure nothing woke unexpectedly.
-    assert!(agents::container_name("main").starts_with("botler-agent-"));
+    assert!(agents::container_name("botler").starts_with("botler-agent-"));
 }
 
 #[tokio::test]

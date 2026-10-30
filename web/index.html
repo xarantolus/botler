@@ -100,7 +100,7 @@
   </aside>
 
   <section id="main">
-    <div id="chathead"><h2 id="title">main</h2><span id="sub" class="muted"></span>
+    <div id="chathead"><h2 id="title">Botler</h2><span id="sub" class="muted"></span>
       <span style="margin-left:auto;display:flex;gap:6px">
         <button id="archive" title="Ask the agent to hand over, then archive">Archive</button>
         <button id="forcearchive" title="Archive without the agent's handover">Force archive</button>
@@ -144,8 +144,10 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch { /* ignore */ } },
 };
 
+// The always-on front-door chat (botler_core::FRONT_DOOR): pinned first, never archived.
+const FRONT_DOOR = "botler";
 let token = store.get("botler.token");
-let current = store.get("botler.chat") || "main";
+let current = store.get("botler.chat") || FRONT_DOOR;
 let tab = "events";
 let lastSessionKey = "";
 let flashDelivery = null;
@@ -183,6 +185,8 @@ async function login() {
   }
 }
 
+const chatTitle = (i) => i.title || i.slug || (i.name === FRONT_DOOR ? "Botler" : i.name);
+
 // ---------- sidebar ----------
 async function refreshSide() {
   const [status, instances] = await Promise.all([api("/api/v1/status"), api("/api/v1/instances")]);
@@ -195,10 +199,10 @@ async function refreshSide() {
   $("#pause").dataset.paused = paused ? "1" : "";
   const list = instances
     .filter((i) => i.state !== "archived" || i.name === current || $("#showarchived").checked)
-    .sort((a, b) => (a.name === "main" ? -1 : b.name === "main" ? 1 : b.last_active.localeCompare(a.last_active)));
+    .sort((a, b) => (a.name === FRONT_DOOR ? -1 : b.name === FRONT_DOOR ? 1 : b.last_active.localeCompare(a.last_active)));
   $("#chats").innerHTML = list.map((i) => `
     <button class="chat ${i.name === current ? "sel" : ""}" data-chat="${esc(i.name)}">
-      <div><span class="dot ${esc(i.state)}"></span>${esc(i.title || i.slug || i.name)}</div>
+      <div><span class="dot ${esc(i.state)}"></span>${esc(chatTitle(i))}</div>
       <div class="sub">${esc(i.slug || i.definition)} · ${esc(i.state)} · ${esc(ago(i.last_active))}</div>
     </button>`).join("") || '<p class="muted">No chats yet.</p>';
 }
@@ -235,12 +239,12 @@ function renderItem(it) {
 async function refreshChat() {
   const s = await api("/api/v1/sessions/" + encodeURIComponent(current));
   const i = s.instance;
-  $("#title").textContent = i.title || i.slug || i.name;
+  $("#title").textContent = chatTitle(i);
   $("#sub").innerHTML = `${esc(i.name)} · ${esc(i.definition)} · ${esc(i.state)}` +
     (s.busy ? ' · <span class="ok">working…</span>' : "") + (s.pending ? ` · ${s.pending} queued` : "") +
     (s.phase ? ` · <span class="${s.phase.startsWith("could not") ? "bad" : "warn"}">${esc(s.phase)}</span>` : "");
   const archived = i.state === "archived";
-  $("#archive").style.display = archived || i.name === "main" ? "none" : "";
+  $("#archive").style.display = archived || i.name === FRONT_DOOR ? "none" : "";
   $("#forcearchive").style.display = i.archive_requested_at && !archived ? "" : "none";
   $("#restore").style.display = archived ? "" : "none";
   const rep = i.archive_report;

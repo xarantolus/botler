@@ -150,7 +150,7 @@ fn runs(c: &Caller) -> bool {
 pub const OPS: &[OpSpec] = &[
     OpSpec {
         name: "send_message",
-        description: "Send a message to an agent instance (e.g. `main`). Replies come back to you as messages. Set `reply_to` to the event you are answering to keep the thread.",
+        description: "Send a message to an agent instance (e.g. `botler`). Replies come back to you as messages. Set `reply_to` to the event you are answering to keep the thread.",
         schema: schema::<SendMessage>,
         visible: everyone,
     },
@@ -359,7 +359,7 @@ pub struct SetChatTitle {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ProposeChange {
-    /// Your pushed branch, e.g. `agents/main/work`.
+    /// Your pushed branch, e.g. `agents/botler/work`.
     pub branch: String,
     /// One line saying what the change does.
     pub title: String,

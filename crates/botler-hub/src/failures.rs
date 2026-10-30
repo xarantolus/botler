@@ -43,9 +43,9 @@ pub async fn report(hub: &Hub, f: Failure) -> Result<()> {
     }));
     let applied = hub.applied().await;
     let target = applied.defs.failure_target(&f.runnable);
-    // Without a triage agent the failure still reaches the user through main.
+    // Without a triage agent the failure still reaches the user through the front door.
     let action = match Action::from(&target) {
-        Action::Spawn(d) if !applied.defs.agents.contains_key(&d) => Action::Deliver("main".into()),
+        Action::Spawn(d) if !applied.defs.agents.contains_key(&d) => Action::Deliver(botler_core::FRONT_DOOR.into()),
         a => a,
     };
     let prompt = format!("Job `{}` failed ({}). Investigate and resolve the incident.", f.runnable, f.kind);

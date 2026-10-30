@@ -233,7 +233,7 @@ async fn trip_cycle_breaker(hub: &Hub, ev: &Event, hops: u32) -> Result<()> {
     if hub.store.trip_breaker(&subject, "cycle", &reason).await? {
         tracing::warn!(%subject, %reason, "cycle breaker tripped");
         let alarm = Event::new(kinds::BREAKER_TRIPPED, Source::Hub, Provenance::Trusted, Utc::now())
-            .to("main")
+            .to(botler_core::FRONT_DOOR)
             .urgent(true)
             .payload(
                 json!({ "subject": subject, "breaker": "cycle", "reason": reason, "correlation": chain.to_string() }),
@@ -247,8 +247,8 @@ async fn trip_cycle_breaker(hub: &Hub, ev: &Event, hops: u32) -> Result<()> {
 async fn report_failure(hub: &Hub, ev: &Event, err: &HubError) -> Result<()> {
     let to = match &ev.source {
         Source::Agent(a) => a.clone(),
-        // Failures of hub-originated events go to main, unless main itself is the problem.
-        _ if ev.to.as_deref() != Some("main") => "main".into(),
+        // Failures of hub-originated events go to the front door, unless it is the problem.
+        _ if ev.to.as_deref() != Some(botler_core::FRONT_DOOR) => botler_core::FRONT_DOOR.into(),
         _ => return Ok(()),
     };
     let note = Event::new(kinds::MESSAGE, Source::Hub, Provenance::Trusted, Utc::now())

@@ -50,7 +50,7 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
            name = \"morning-digest\"          # unique in the file\n\
            cron = \"0 7 * * 1-5\"             # or: every = \"30m\"; or: on = \"mail.*\"\n\
            timezone = \"Europe/Berlin\"       # defaults to botler.toml\n\
-           target = { resume = \"main\" }     # or { spawn = \"dev\" } or { run = \"<job>\" }\n\
+           target = { resume = \"botler\" }   # or { spawn = \"dev\" } or { run = \"<job>\" }\n\
            prompt = \"Write my morning digest.\"\n\
            missed = \"skip\"                  # after downtime: skip | run_once\n\
            ```\n\
@@ -66,9 +66,10 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
              user's approval): read it. Nothing you push takes effect until it is merged.\n\n",
             branch.map(|b| format!(" on branch `{b}`")).unwrap_or_default()
         )),
-        Workspace::Volume | Workspace::None => {
-            s.push_str("To change the system itself, ask `main` or spawn a `dev` agent.\n\n")
-        }
+        Workspace::Volume | Workspace::None => s.push_str(&format!(
+            "To change the system itself, ask `{}` or spawn a `dev` agent.\n\n",
+            botler_core::FRONT_DOOR
+        )),
     }
     s.push_str(&format!(
         "## Your files\n\
