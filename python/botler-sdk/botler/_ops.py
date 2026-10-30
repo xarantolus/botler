@@ -169,6 +169,54 @@ def search(*, query: str, limit: int | None = None, raw: bool | None = None, sco
     return call("search", {"query": query, "limit": limit, "raw": raw, "scope": scope, "sources": sources})
 
 
+def memory_write(*, content: str, path: str, expected_sha256: str | None = None) -> Any:
+    """Write a memory file (Markdown) in one of your namespaces: `agents/<definition>/...` (mounted at /memory/self), `projects/<home>/...` (/memory/project) or `user/...` (/memory/user). Pass the sha256 of the version you read as `expected_sha256` (`sha256sum`), or omit it to create a new file. If someone changed it meanwhile you get a conflict with the current content: merge and write again.
+
+    Args:
+        content: The whole new content (Markdown).
+        path: e.g. `agents/dev/github.md`, `projects/groundstation/INDEX.md`, `user/preferences.md`.
+        expected_sha256: sha256 of the version you are replacing (`sha256sum <file>`); omit to create a new file.
+    """
+    return call("memory_write", {"content": content, "path": path, "expected_sha256": expected_sha256})
+
+
+def memory_append(*, path: str, text: str) -> Any:
+    """Append line(s) to a memory file, creating it if needed. No version needed: use it for logs and lists.
+
+    Args:
+        text: Added at the end, on its own line(s). Creates the file if needed.
+    """
+    return call("memory_append", {"path": path, "text": text})
+
+
+def memory_delete(*, expected_sha256: str, path: str) -> Any:
+    """Delete a memory file; `expected_sha256` is the sha256 of the version you are deleting.
+
+    Args:
+        expected_sha256: sha256 of the version you are deleting.
+    """
+    return call("memory_delete", {"expected_sha256": expected_sha256, "path": path})
+
+
+def memory_read(*, path: str) -> Any:
+    """Read a memory file with its sha256."""
+    return call("memory_read", {"path": path})
+
+
+def memory_list(*, prefix: str | None = None) -> Any:
+    """Memory files you may read, optionally under a directory such as `user` or `agents/dev`.
+
+    Args:
+        prefix: A directory such as `user` or `agents/dev`; omit for every file you may read.
+    """
+    return call("memory_list", {"prefix": prefix})
+
+
+def memory_history(*, path: str) -> Any:
+    """The commits that changed a memory file, newest first, with their authors."""
+    return call("memory_history", {"path": path})
+
+
 def get_events(*, correlation: str | None = None, limit: int | None = None, type: str | None = None) -> Any:
     """Read the event journal, newest first: filter by type (`mail.*`) or conversation (`correlation`)."""
     return call("get_events", {"correlation": correlation, "limit": limit, "type": type})
@@ -223,3 +271,12 @@ def state_get(*, key: str) -> Any:
 def state_set(*, key: str, value: str) -> Any:
     """Write this job's persistent key-value state (cursors, dedup keys; up to 64 KiB per value)."""
     return call("state_set", {"key": key, "value": value})
+
+
+def health(*, ok: bool, reason: str | None = None) -> Any:
+    """Report this service's health: `ok=true` is the heartbeat its job.toml `[health]` asks for; `ok=false` with a reason stops and restarts it and reports an unhealthy incident.
+
+    Args:
+        reason: Why it is unhealthy (with `ok = false`).
+    """
+    return call("health", {"ok": ok, "reason": reason})

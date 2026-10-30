@@ -162,12 +162,12 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
     ]);
     crate::localtime::apply(applied.defs.timezone, Path::new(crate::localtime::ZONEINFO), &mut env, &mut mounts);
     let spec = ContainerSpec {
-        name: format!("botler-gate-{id}"),
+        name: format!("botler-{}-gate-{id}", hub.id),
         image,
         command: vec!["sh".into(), "-c".into(), "cd /workspace && sh gate/run 2>&1".into()],
         env,
         mounts,
-        labels: [(crate::jobs::ROLE_LABEL.to_string(), "gate".to_string())].into(),
+        labels: hub.labels("gate"),
         network: NetworkMode::Default,
         workdir: Some("/workspace".into()),
         remove_on_exit: true,

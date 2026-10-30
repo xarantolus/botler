@@ -62,6 +62,7 @@ const openIncidents = computed(() => state.status?.open_incidents ?? 0);
             </NTab>
             <NTab name="proposals">Proposals</NTab>
             <NTab name="secrets">Secrets</NTab>
+            <NTab name="memory">Memory</NTab>
           </NTabs>
         </div>
         <div style="flex: 1; min-height: 0; display: flex; flex-direction: column">

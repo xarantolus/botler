@@ -16,6 +16,9 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::api::{Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, RevertRequest, SecretValue, UserMessage};
+use crate::memory::{
+    MemoryCommit, MemoryConflict, MemoryEntry, MemoryFile, MemoryList, MemoryPath, MemoryWrite, MemoryWritten,
+};
 use crate::ops::{GetRunLogs, IdArg, ProposalDetail, RunLogs};
 use crate::phase::WakePhase;
 use crate::search::{SearchQuery, SearchResults};
@@ -26,6 +29,10 @@ use crate::sessions::Item;
 #[derive(Debug, Serialize, TS)]
 pub struct ApiErrorBody {
     pub error: String,
+    /// For memory writes based on a stale version (409): the current version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub conflict: Option<MemoryConflict>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -49,6 +56,29 @@ pub struct HubStatus {
     pub open_dialogs: usize,
     pub open_incidents: usize,
     pub breakers: Vec<Breaker>,
+    pub services: Vec<ServiceStatus>,
+}
+
+/// A service of the applied definitions and where it can be reached.
+#[derive(Debug, Serialize, TS)]
+pub struct ServiceStatus {
+    pub name: String,
+    pub running: bool,
+    /// Crash-looping: not restarted until its incident is resolved.
+    pub failed: bool,
+    /// Its address for agents granted it, on the services network (`http://<name>:<port>`).
+    pub internal_url: Option<String>,
+    /// Ports published on the host, reachable from outside.
+    pub published: Vec<PublishedPort>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct PublishedPort {
+    pub bind: String,
+    pub host_port: u16,
+    pub port: u16,
+    /// A link to it: the host's name for a `0.0.0.0` bind, else the bound address.
+    pub url: String,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -283,4 +313,8 @@ routes! {
     clear_breaker: POST "/api/v1/breakers/clear", body: ClearBreaker => BreakerCleared;
     run_logs: POST "/api/v1/ops/get_run_logs", body: GetRunLogs => RunLogs;
     proposal: POST "/api/v1/ops/get_proposal", body: IdArg => ProposalDetail;
+    memory_list: POST "/api/v1/ops/memory_list", body: MemoryList => Vec<MemoryEntry>;
+    memory_read: POST "/api/v1/ops/memory_read", body: MemoryPath => MemoryFile;
+    memory_write: POST "/api/v1/ops/memory_write", body: MemoryWrite => MemoryWritten;
+    memory_history: POST "/api/v1/ops/memory_history", body: MemoryPath => Vec<MemoryCommit>;
 }

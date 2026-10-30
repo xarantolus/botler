@@ -51,7 +51,7 @@ async fn cron_trigger_runs_job_and_success_is_reported() {
     let runs = e.hub.store.runs_for("poll", 10).await.unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].status, RunStatus::Running);
-    let name = jobs::container_name(&runs[0].id);
+    let name = jobs::container_name(&e.hub, &runs[0].id);
     let c = &e.fake.containers()[&name];
     assert!(c.spec.env.contains_key("BOTLER_TOKEN"));
     assert_eq!(c.spec.env["TZ"], e.hub.applied().await.defs.timezone.name(), "jobs run in local time");
@@ -85,7 +85,7 @@ async fn failures_open_one_incident_and_spawn_triage_once() {
     e.commit(&refs(&job("flaky", "command = [\"false\"]\n"))).await;
     for _ in 0..2 {
         let run = jobs::start(&e.hub, "flaky", None, None).await.unwrap().unwrap();
-        let name = jobs::container_name(&run);
+        let name = jobs::container_name(&e.hub, &run);
         e.fake.exit(&name, 1);
         supervisor::on_event(&e.hub, &ContainerEvent { name, status: "died".into(), exit_code: Some(1) })
             .await

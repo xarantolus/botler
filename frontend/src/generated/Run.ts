@@ -2,4 +2,8 @@
 import type { RunKind } from "./RunKind";
 import type { RunStatus } from "./RunStatus";
 
-export type Run = { id: string, runnable: string, kind: RunKind, trigger_id: string | null, event_id: string | null, commit_id: string | null, status: RunStatus, container_id: string | null, exit_code: number | null, reason: string | null, started_at: string | null, finished_at: string | null, created_at: string, };
+export type Run = { id: string, runnable: string, kind: RunKind, trigger_id: string | null, event_id: string | null, commit_id: string | null, status: RunStatus, container_id: string | null, exit_code: number | null, reason: string | null, started_at: string | null, finished_at: string | null, created_at: string, 
+/**
+ * Services: the last `health` heartbeat.
+ */
+heartbeat_at: string | null, };

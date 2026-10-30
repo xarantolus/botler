@@ -4,4 +4,8 @@ import type { SecretClass } from "./SecretClass";
 /**
  * Why a change needs the user's approval (never auto-merged).
  */
-export type Escalation = { "kind": "protected_path", path: string, } | { "kind": "secret_granted", secret: string, group: string, to: string, } | { "kind": "secret_declared", secret: string, group: string, class: SecretClass, } | { "kind": "secret_class_changed", secret: string, } | { "kind": "network_opened", agent: string, } | { "kind": "capability_added", agent: string, capability: string, } | { "kind": "mcp_access_added", agent: string, service: string, } | { "kind": "limit_raised", owner: string, operation: string, } | { "kind": "tool_effect", tool: string, effect: string, } | { "kind": "approval_removed", tool: string, } | { "kind": "webhook_added", name: string, } | { "kind": "service_added", job: string, } | { "kind": "invalid_policy", detail: string, };
+export type Escalation = { "kind": "protected_path", path: string, } | { "kind": "secret_granted", secret: string, group: string, to: string, } | { "kind": "secret_declared", secret: string, group: string, class: SecretClass, } | { "kind": "secret_class_changed", secret: string, } | { "kind": "network_opened", agent: string, } | { "kind": "capability_added", agent: string, capability: string, } | { "kind": "mcp_access_added", agent: string, service: string, } | { "kind": "limit_raised", owner: string, operation: string, } | { "kind": "tool_effect", tool: string, effect: string, } | { "kind": "approval_removed", tool: string, } | { "kind": "webhook_added", name: string, } | { "kind": "service_added", job: string, } | { "kind": "port_published", job: string, 
+/**
+ * e.g. `your network at 0.0.0.0:8080`.
+ */
+reach: string, } | { "kind": "mcp_stdio_added", agent: string, server: string, command: string, } | { "kind": "invalid_policy", detail: string, };

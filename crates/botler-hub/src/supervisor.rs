@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use botler_store::RunStatus;
+use botler_store::{RunKind, RunStatus};
 use chrono::Utc;
 
 use crate::hub::{Hub, Result};
@@ -15,8 +15,9 @@ pub async fn reconcile_runs(hub: &Hub) -> Result<()> {
     for run in hub.store.active_runs().await? {
         match run.status {
             RunStatus::Queued => {} // started when its predecessor finishes, or swept below
-            RunStatus::Running => {
-                let name = jobs::container_name(&run.id);
+            // Services are checked by their own reconcile (`services.rs`).
+            RunStatus::Running if run.kind != RunKind::Service => {
+                let name = jobs::container_name(hub, &run.id);
                 match hub.containers.inspect(&name).await? {
                     Some(c) if c.running => tracing::info!(run = %run.id, "re-adopted running job"),
                     Some(c) => jobs::on_exit(hub, &run.id, c.exit_code, c.oom_killed).await?,
@@ -37,7 +38,14 @@ pub async fn on_event(hub: &Hub, ev: &botler_runtime::ContainerEvent) -> Result<
     if ev.status != "died" {
         return Ok(());
     }
-    if let Some(run_id) = ev.name.strip_prefix("botler-run-") {
+    // Containers of other hubs on the same runtime carry another id.
+    let Some(rest) = ev.name.strip_prefix(&format!("botler-{}-", hub.id)) else { return Ok(()) };
+    if rest.starts_with("svc-") {
+        // The service reconcile inspects the container and handles the exit.
+        hub.reconcile_notify.notify_one();
+        return Ok(());
+    }
+    if let Some(run_id) = rest.strip_prefix("run-") {
         let oom = match hub.containers.inspect(&ev.name).await? {
             Some(c) => c.oom_killed,
             None => false,

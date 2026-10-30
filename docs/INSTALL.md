@@ -68,7 +68,8 @@ botler backup --no-key ~/botler-$(date +%F).tar.zst   # without secrets.key
 ```
 
 The archive holds the database (an online snapshot), `secrets.key`, the monorepo (`repo.git`),
-`memory.git`, pi sessions, agent workspaces and homes, and uploads. It leaves out what the hub
+`memory` (agent memory with its git history), pi sessions, agent workspaces and homes, and
+uploads. It leaves out what the hub
 rebuilds (exports, worktrees, rendered agent dirs, unpacked assets, images) and run logs. It is
 compressed with zstd if installed, else gzip, and created with mode 0600: **the key plus the
 database decrypt every secret**, so store it accordingly.

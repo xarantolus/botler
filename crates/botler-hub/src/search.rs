@@ -357,7 +357,7 @@ pub async fn index_pending(hub: &Hub) -> Result<Indexed> {
     Ok(Indexed {
         events: index_events(hub, &pool).await?,
         entries: index_sessions(&hub.paths.root.join("sessions"), &pool).await?,
-        memory: index_memory(&hub.paths.root.join("memory"), &pool).await?,
+        memory: index_memory(&hub.paths.memory(), &pool).await?,
         repo: index_repo(hub, &pool).await?,
     })
 }
@@ -518,8 +518,8 @@ async fn index_session_file(instance: &str, path: &Path, pool: &SqlitePool) -> R
     Ok(n)
 }
 
-/// The namespace of a memory file (`agents/<def>`, `projects/<home>`, `user`), or `None` for
-/// files outside every namespace.
+/// The namespace of a memory file (`agents/<def>`, `projects/<home>`, `user`; see
+/// [`crate::memory`]), or `None` for files outside every namespace.
 fn memory_namespace(rel: &str) -> Option<String> {
     let segs: Vec<&str> = rel.split('/').collect();
     match segs[..] {
@@ -658,15 +658,6 @@ fn plain_query(q: &str) -> String {
     q.split_whitespace().map(|w| format!("\"{}\"", w.replace('"', "\"\""))).collect::<Vec<_>>().join(" ")
 }
 
-/// The memory namespaces of an agent's definition (the memory feature's layout).
-fn memory_namespaces(definition: &str, home: Option<&str>) -> Vec<String> {
-    let mut ns = vec![format!("agents/{definition}"), "user".to_string()];
-    if let Some(h) = home {
-        ns.push(format!("projects/{h}"));
-    }
-    ns
-}
-
 /// Run a search for `caller`: the user sees everything; an agent sees its own session (others'
 /// only with `read_sessions`), its memory namespaces, the event journal and the monorepo.
 pub async fn search(hub: &Hub, caller: &Caller, a: Search) -> Result<SearchResults, OpError> {
@@ -698,7 +689,9 @@ pub async fn search(hub: &Hub, caller: &Caller, a: Search) -> Result<SearchResul
         Principal::Agent { instance, .. } => {
             let inst = hub.store.instance(instance).await?;
             let applied = hub.applied().await;
-            let home = applied.defs.agents.get(&inst.definition).and_then(|d| d.spec.home.clone());
+            // An instance whose definition was removed keeps its session but no memory.
+            let namespaces =
+                applied.defs.agents.get(&inst.definition).map(crate::memory::namespaces).unwrap_or_default();
             qb.push(" AND ((source = 'session' AND owner = ").push_bind(inst.name.clone()).push(")");
             if !own && caller.may(Capability::ReadSessions) {
                 qb.push(" OR source = 'session'");
@@ -707,7 +700,7 @@ pub async fn search(hub: &Hub, caller: &Caller, a: Search) -> Result<SearchResul
                 qb.push(" OR source IN ('event', 'repo')");
             }
             let mut list = qb.push(" OR (source = 'memory' AND owner IN (").separated(", ");
-            for ns in memory_namespaces(&inst.definition, home.as_deref()) {
+            for (_, ns) in namespaces {
                 list.push_bind(ns);
             }
             qb.push(")))");

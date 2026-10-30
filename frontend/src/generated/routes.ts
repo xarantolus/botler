@@ -17,6 +17,13 @@ import type { HubStatus } from "./HubStatus";
 import type { IdArg } from "./IdArg";
 import type { Incident } from "./Incident";
 import type { Instance } from "./Instance";
+import type { MemoryCommit } from "./MemoryCommit";
+import type { MemoryEntry } from "./MemoryEntry";
+import type { MemoryFile } from "./MemoryFile";
+import type { MemoryList } from "./MemoryList";
+import type { MemoryPath } from "./MemoryPath";
+import type { MemoryWrite } from "./MemoryWrite";
+import type { MemoryWritten } from "./MemoryWritten";
 import type { NewChat } from "./NewChat";
 import type { PauseState } from "./PauseState";
 import type { Proposal } from "./Proposal";
@@ -64,6 +71,10 @@ export interface Routes {
   clear_breaker: { method: "POST"; path: "/api/v1/breakers/clear"; params: Record<string, never>; query: never; body: ClearBreaker; response: BreakerCleared };
   run_logs: { method: "POST"; path: "/api/v1/ops/get_run_logs"; params: Record<string, never>; query: never; body: GetRunLogs; response: RunLogs };
   proposal: { method: "POST"; path: "/api/v1/ops/get_proposal"; params: Record<string, never>; query: never; body: IdArg; response: ProposalDetail };
+  memory_list: { method: "POST"; path: "/api/v1/ops/memory_list"; params: Record<string, never>; query: never; body: MemoryList; response: Array<MemoryEntry> };
+  memory_read: { method: "POST"; path: "/api/v1/ops/memory_read"; params: Record<string, never>; query: never; body: MemoryPath; response: MemoryFile };
+  memory_write: { method: "POST"; path: "/api/v1/ops/memory_write"; params: Record<string, never>; query: never; body: MemoryWrite; response: MemoryWritten };
+  memory_history: { method: "POST"; path: "/api/v1/ops/memory_history"; params: Record<string, never>; query: never; body: MemoryPath; response: Array<MemoryCommit> };
 }
 
 export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path: Routes[K]["path"] } } = {
@@ -92,4 +103,8 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   clear_breaker: { method: "POST", path: "/api/v1/breakers/clear" },
   run_logs: { method: "POST", path: "/api/v1/ops/get_run_logs" },
   proposal: { method: "POST", path: "/api/v1/ops/get_proposal" },
+  memory_list: { method: "POST", path: "/api/v1/ops/memory_list" },
+  memory_read: { method: "POST", path: "/api/v1/ops/memory_read" },
+  memory_write: { method: "POST", path: "/api/v1/ops/memory_write" },
+  memory_history: { method: "POST", path: "/api/v1/ops/memory_history" },
 };
