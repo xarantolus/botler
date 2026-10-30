@@ -54,6 +54,7 @@ async fn cron_trigger_runs_job_and_success_is_reported() {
     let name = jobs::container_name(&runs[0].id);
     let c = &e.fake.containers()[&name];
     assert!(c.spec.env.contains_key("BOTLER_TOKEN"));
+    assert_eq!(c.spec.env["TZ"], e.hub.applied().await.defs.timezone.name(), "jobs run in local time");
     assert!(
         c.spec.mounts.iter().any(|m| matches!(m, botler_runtime::Mount::Bind { dst, .. } if dst == "/opt/botler/sdk"))
     );

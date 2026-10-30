@@ -209,6 +209,12 @@ pub mod payload {
         /// starting a turn. The agent reads it with whatever wakes it next.
         #[serde(default)]
         pub quiet: bool,
+        /// When it was delivered, in the instance's time zone (`Fri 2026-10-30 17:05
+        /// Europe/Berlin`, see [`crate::clock::format_local`]).
+        pub at: String,
+        /// After a long silence: `first message in 3 days` (see [`crate::clock::gap_note`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub gap: Option<String>,
     }
 }
 

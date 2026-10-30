@@ -193,7 +193,7 @@ async fn init(paths: &Paths) -> anyhow::Result<()> {
 }
 
 async fn validate(paths: &Paths, dir: &std::path::Path) -> anyhow::Result<()> {
-    let report = botler_core::load(&botler_core::defs::FsTree::new(dir));
+    let report = botler_core::load_with(&botler_core::defs::FsTree::new(dir), botler_hub::localtime::host());
     for d in &report.diagnostics {
         println!("{d}");
     }
@@ -214,6 +214,8 @@ async fn status(paths: Paths) -> anyhow::Result<()> {
     let applied = hub.applied().await;
     println!("commit     {}", applied.commit);
     println!("paused     {}", hub.store.paused().await?);
+    let tz_from = if applied.defs.instance.timezone.is_some() { "botler.toml" } else { "host" };
+    println!("timezone   {} (from {tz_from})", applied.defs.timezone.name());
     for i in hub.store.live_instances().await? {
         println!("instance   {:<28} {:<9} {}", i.name, i.state, i.task.as_deref().unwrap_or(""));
     }

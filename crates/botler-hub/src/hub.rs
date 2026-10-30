@@ -199,7 +199,7 @@ impl Hub {
 /// Load and validate definitions at `commit`.
 pub async fn load_at(repo: &Repo, commit: &str) -> Result<Applied> {
     let tree = repo.definition_tree(commit).await?;
-    let report = botler_core::load(&tree);
+    let report = botler_core::load_with(&tree, crate::localtime::host());
     for d in &report.diagnostics {
         tracing::debug!(%commit, "{d}");
     }

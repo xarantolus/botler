@@ -1,6 +1,7 @@
 # Instance-wide settings. Protected: changes need the user's approval.
 version = 1
-timezone = "UTC"
+# IANA time zone for schedules, agents' clocks and containers. Default: the host's.
+# timezone = "Europe/Berlin"
 
 [models]
 default = "standard"

@@ -183,6 +183,7 @@ async fn status(State(hub): State<AppState>) -> ApiResult {
         "version": env!("CARGO_PKG_VERSION"),
         "commit": applied.commit,
         "paused": hub.paused().await?,
+        "timezone": applied.defs.timezone.name(),
         "runtime": { "binary": info.binary, "version": info.version, "rootless": info.rootless },
         "open_dialogs": hub.store.open_dialogs().await?.len(),
         "open_incidents": hub.store.open_incidents().await?.len(),

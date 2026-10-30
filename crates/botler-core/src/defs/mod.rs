@@ -247,8 +247,14 @@ fn glob_set(patterns: &[String]) -> Result<globset::GlobSet, globset::Error> {
     b.build()
 }
 
-/// Load and validate the monorepo at `tree`.
+/// Load and validate the monorepo at `tree`, with UTC where `botler.toml` names no time zone.
 pub fn load(tree: &dyn Tree) -> LoadReport {
+    load_with(tree, chrono_tz::UTC)
+}
+
+/// Load and validate the monorepo at `tree`; `default_tz` applies when `botler.toml` names no
+/// time zone (the hub passes the host's).
+pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
     let mut l = Loader { tree, diags: Vec::new() };
     let mut defs = Definitions::default();
 
@@ -260,10 +266,11 @@ pub fn load(tree: &dyn Tree) -> LoadReport {
         None if l.diags.is_empty() => l.err("botler.toml", "missing: every monorepo needs a botler.toml"),
         None => {}
     }
-    match defs.instance.timezone.parse::<chrono_tz::Tz>() {
-        Ok(tz) => defs.timezone = tz,
-        Err(_) => {
-            let tz = defs.instance.timezone.clone();
+    match defs.instance.timezone.as_deref().map(str::parse::<chrono_tz::Tz>) {
+        None => defs.timezone = default_tz,
+        Some(Ok(tz)) => defs.timezone = tz,
+        Some(Err(_)) => {
+            let tz = defs.instance.timezone.clone().unwrap_or_default();
             l.err("botler.toml", format!("unknown time zone {tz:?}"));
         }
     }
@@ -645,7 +652,7 @@ fn resolve_trigger(
 ) -> Option<ResolvedTrigger> {
     let id = format!("{path}#{}", spec.name);
     l.check_name(&id, "trigger", &spec.name);
-    let tz_name = spec.timezone.clone().unwrap_or_else(|| defs.instance.timezone.clone());
+    let tz_name = spec.timezone.clone().unwrap_or_else(|| defs.timezone.name().to_string());
     let kind = match (&spec.cron, spec.every, &spec.on, &spec.webhook) {
         (Some(expr), None, None, None) => match ScheduleSpec::cron(expr, &tz_name) {
             Ok(s) => TriggerKind::Schedule(s),

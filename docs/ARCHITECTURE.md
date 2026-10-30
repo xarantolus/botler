@@ -62,6 +62,10 @@
 - **Session cwd:** pi resumes a session in the working directory recorded in its header, and refuses to start if it is missing. When the hub wakes an instance whose session header names another directory (e.g. `/workspace` from before homes), it rewrites that header field to `/home/agent`.
 - **Migration:** at boot, `scratch-spaces/chat-<instance>` moves to `homes/<instance>` and `scratch-spaces/<name>` to `shared-homes/<name>`; a volume agent's old `workspaces/<instance>` moves into its home as `workspace/` on its next wake. Definitions still using `scratch =` fail validation with an error naming `home`.
 
+**Local time.** One time zone drives cron triggers, agents' clocks and containers: `botler.toml`'s `timezone`, or else the host's, detected once at startup (`TZ`, then the `/etc/localtime` symlink target under `zoneinfo/`, then `/etc/timezone`, then UTC with a warning) and passed to the definitions loader as its default; `botler status` shows it and where it came from.
+- **Agents' clock:** the system prompt stays time-free (prompt caching). Each delivery envelope carries the current local time (`at`, e.g. `Fri 2026-10-30 17:05 Europe/Berlin`) and, more than an hour after the instance's previous delivery, a `gap` note (`first message in 3 days`); the extension renders both at the start of the header, notes included.
+- **Containers** (agents, reviewers, jobs, services, gates) get `TZ=<zone>` and the host's zone file mounted read-only at `/etc/localtime` and at `/usr/share/zoneinfo/<zone>`: `TZ` alone falls back to UTC in images without tzdata, and `/etc/localtime` alone is ignored by Node. Without a host zone file they get `TZ` only (warned once).
+
 **Triggers → targets (one model for everything that "starts something").**
 - **Triggers** (declared in definitions, except timers):
   - `schedule` (cron/interval, in a file);
