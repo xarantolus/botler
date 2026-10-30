@@ -1,0 +1,13 @@
+[project]
+name = "web-health"
+version = "0.1.0"
+description = "Daily live check of the web tools in tools/web."
+requires-python = ">=3.11"
+dependencies = ["web"]
+
+[tool.uv.sources]
+web = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -6,3 +6,4 @@ workspace = "monorepo"
 capabilities = ["incidents"]
 model = "standard"
 idle_timeout = "20m"
+tools = ["web.*"]

@@ -19,5 +19,88 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "approval": false,
+    "description": "Fetch a URL (following redirects) and return its content as text: HTML pages as markdown of the\nmain content, plain text and JSON as they are, other types (PDF, images, ...) as metadata only.\n`raw` returns HTML source instead of markdown. Long content is cut at `max_chars`; read on with\n`offset`. The result has the final URL and the HTTP status (error pages are returned, not raised).\nMaintained in the monorepo (tools/web/); if it breaks, fix it.",
+    "effects": [
+      "network"
+    ],
+    "function": "fetch",
+    "module": "web.fetch",
+    "name": "web.fetch",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "max_chars": {
+          "default": 50000,
+          "minimum": 1,
+          "title": "Max Chars",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "raw": {
+          "default": false,
+          "title": "Raw",
+          "type": "boolean"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "approval": false,
+    "description": "Search the web with DuckDuckGo. Returns results as {title, url, snippet}; use web.fetch to read\na result. `region` is a DuckDuckGo region code such as \"us-en\", \"uk-en\" or \"de-de\" (default: none).\nThis tool scrapes DuckDuckGo and is maintained in the monorepo (tools/web/); if it breaks, fix it.",
+    "effects": [
+      "network"
+    ],
+    "function": "search",
+    "module": "web.search",
+    "name": "web.search",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "max_results": {
+          "default": 10,
+          "maximum": 30,
+          "minimum": 1,
+          "title": "Max Results",
+          "type": "integer"
+        },
+        "query": {
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
   }
 ]
