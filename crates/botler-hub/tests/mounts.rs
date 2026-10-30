@@ -195,8 +195,8 @@ async fn a_service_mounts_its_shares_strictly() {
 /// Real Podman (`BOTLER_PODMAN_TESTS=1`): an SFTP server (`rclone serve sftp`, published on a free
 /// host port) and a `chat` granted the share. The chat sees the files after a wake and again after
 /// sleeping and waking; with a wrong password it still runs and the share is reported as failed.
-/// Builds the new agent base under its content tag only (never `latest`), and removes it, the agent
-/// image and every container it started afterwards. No model is called.
+/// Needs the current agent base as `latest` (never built here); removes the agent image and every
+/// container it started afterwards. No model is called.
 #[tokio::test]
 async fn podman_a_granted_chat_sees_the_share() {
     use botler_runtime::{ContainerSpec, Containers, Mount, PortMapping};
@@ -210,11 +210,12 @@ async fn podman_a_granted_chat_sees_the_share() {
     let config = botler_hub::config::HubConfig::new(listener.local_addr().unwrap());
     let e = common::env_with(rt.clone(), botler_runtime::fake::Fake::new(), config).await;
     tokio::spawn(axum::serve(listener, botler_hub::api::router(e.hub.clone())).into_future());
+    // `latest` is shared with every hub on this host, so this test never builds or moves it.
     let base = botler_hub::assets::agent_base_tag();
-    let built_base = rt.image_id(&base).await.unwrap().is_none();
-    if built_base {
-        let ctx = e.hub.paths.assets().join("agent-base");
-        rt.build(&ctx, "Dockerfile", &base, &Default::default()).await.unwrap();
+    let current = rt.image_id(&base).await.unwrap();
+    if current.is_none() || current != rt.image_id(botler_hub::assets::AGENT_BASE_LATEST).await.unwrap() {
+        eprintln!("skipped: {base} (with rclone) is not built or not `latest`; start the hub once to build it");
+        return;
     }
     let host_fuse = || std::fs::read_to_string("/proc/self/mounts").unwrap().matches("fuse.rclone").count();
     let fuse_before = host_fuse();
@@ -286,9 +287,6 @@ async fn podman_a_granted_chat_sees_the_share() {
     let owned = e.hub.labels("x").into_iter().filter(|(k, _)| k == botler_hub::images::OWNER_LABEL).collect();
     for t in rt.images(&owned).await.unwrap() {
         rt.remove_image(&t).await.unwrap();
-    }
-    if built_base {
-        rt.remove_image(&base).await.unwrap();
     }
 
     assert_eq!(outcome[0].0.as_deref(), Ok("hello from the share\n"), "{outcome:?}");

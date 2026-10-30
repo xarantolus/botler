@@ -166,6 +166,8 @@ pub trait Containers: Send + Sync {
     async fn images(&self, labels: &BTreeMap<String, String>) -> Result<Vec<String>>;
     /// Remove one tag; the image goes when its last tag does.
     async fn remove_image(&self, tag: &str) -> Result<()>;
+    /// Point tag `target` at the image `source` names (moving it if it exists).
+    async fn tag(&self, source: &str, target: &str) -> Result<()>;
     /// Start detached; returns the container id.
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String>;
     async fn run_attached(&self, spec: &ContainerSpec) -> Result<Attached>;
@@ -392,6 +394,10 @@ impl Containers for Cli {
 
     async fn remove_image(&self, tag: &str) -> Result<()> {
         run(&self.info.binary, &["rmi", tag]).await.map(|_| ())
+    }
+
+    async fn tag(&self, source: &str, target: &str) -> Result<()> {
+        run(&self.info.binary, &["tag", source, target]).await.map(|_| ())
     }
 
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {

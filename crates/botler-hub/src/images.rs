@@ -102,23 +102,31 @@ fn botler_bases(dockerfile: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Build the agent base image if missing (tagged with its content hash and `latest`).
+/// Build the agent base image if missing (tagged with its content hash), and point `latest`,
+/// which monorepo Dockerfiles build `FROM`, at it: a `latest` left from an older hub would
+/// otherwise keep their images on the old base.
 pub async fn ensure_base(hub: &Hub) -> Result<()> {
     let tag = assets::agent_base_tag();
-    let exists = |t: String| async move { hub.containers.image_id(&t).await.map(|id| id.is_some()) };
-    if exists(tag.clone()).await? && exists(assets::AGENT_BASE_LATEST.into()).await? {
+    let current = || async {
+        let id = hub.containers.image_id(&tag).await?;
+        Ok::<_, HubError>(id.is_some() && id == hub.containers.image_id(assets::AGENT_BASE_LATEST).await?)
+    };
+    if current().await? {
         return Ok(());
     }
     let _guard = hub.build_lock.lock().await;
-    // Another caller may have built it while this one waited for the lock.
-    if exists(tag.clone()).await? && exists(assets::AGENT_BASE_LATEST.into()).await? {
+    // Another caller may have done it while this one waited for the lock.
+    if current().await? {
         return Ok(());
     }
-    let ctx = hub.paths.assets().join("agent-base");
-    tracing::info!(%tag, "building agent base image");
-    // Unlabelled: the base belongs to the hub version, not to the monorepo, and is never collected.
-    hub.containers.build(&ctx, "Dockerfile", &tag, &BTreeMap::new()).await?;
-    hub.containers.build(&ctx, "Dockerfile", assets::AGENT_BASE_LATEST, &BTreeMap::new()).await?;
+    if hub.containers.image_id(&tag).await?.is_none() {
+        let ctx = hub.paths.assets().join("agent-base");
+        tracing::info!(%tag, "building agent base image");
+        // Unlabelled: the base belongs to the hub version, not to the monorepo, and is never collected.
+        hub.containers.build(&ctx, "Dockerfile", &tag, &BTreeMap::new()).await?;
+    }
+    tracing::info!(%tag, latest = assets::AGENT_BASE_LATEST, "pointing latest at the agent base image");
+    hub.containers.tag(&tag, assets::AGENT_BASE_LATEST).await?;
     Ok(())
 }
 

@@ -276,6 +276,13 @@ impl Containers for Fake {
             .collect())
     }
 
+    async fn tag(&self, source: &str, target: &str) -> Result<()> {
+        let mut st = self.lock();
+        let image = st.images.get(source).cloned().ok_or_else(|| ContainerError::NotFound(source.into()))?;
+        st.images.insert(target.into(), image);
+        Ok(())
+    }
+
     async fn remove_image(&self, tag: &str) -> Result<()> {
         match self.lock().images.remove(tag) {
             Some(_) => Ok(()),
