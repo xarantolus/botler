@@ -47,6 +47,8 @@ pub enum HubError {
     Memory(#[from] crate::memory::MemoryError),
     #[error("{instance} keeps crashing; next start allowed at {until}")]
     Backoff { instance: String, until: chrono::DateTime<chrono::Utc> },
+    #[error("host port {ports} is already in use by another program or container; publish a free port: {source}")]
+    PortInUse { ports: String, source: botler_runtime::ContainerError },
 }
 
 pub type Result<T> = std::result::Result<T, HubError>;
@@ -70,6 +72,10 @@ pub enum Live {
 
 pub struct Hub {
     pub paths: Paths,
+    /// Short id of this hub (a hash of its data directory). It is part of every container and
+    /// network name the hub creates, so hubs sharing one container runtime never touch each
+    /// other's containers.
+    pub id: String,
     pub config: HubConfig,
     pub store: Store,
     pub repo: Repo,
@@ -84,6 +90,8 @@ pub struct Hub {
     pub dispatch_notify: Notify,
     /// Woken when timers or schedules change.
     pub schedule_notify: Notify,
+    /// Woken when services may need starting or stopping (apply, resume, a service exit).
+    pub reconcile_notify: Notify,
     pub live: broadcast::Sender<Live>,
     pub agents: crate::agents::Agents,
     /// Serialises image builds so the same tag is never built twice concurrently.
@@ -113,7 +121,12 @@ impl Hub {
         let applied = Self::load_bootable(&store, &repo).await?;
         let memory = crate::memory::Memory::open(paths.memory()).await?;
         let (live, _) = broadcast::channel(1024);
+        let id = {
+            use sha2::Digest;
+            hex::encode(sha2::Sha256::digest(crate::config::path_str(&paths.root)))[..8].to_string()
+        };
         Ok(Arc::new(Self {
+            id,
             paths,
             config,
             store,
@@ -126,6 +139,7 @@ impl Hub {
             route_notify: Notify::new(),
             dispatch_notify: Notify::new(),
             schedule_notify: Notify::new(),
+            reconcile_notify: Notify::new(),
             live,
             agents: crate::agents::Agents::default(),
             build_lock: Mutex::new(()),
@@ -167,6 +181,7 @@ impl Hub {
         self.store.set_last_applied_commit(&applied.commit).await?;
         *self.applied.write().await = Arc::new(applied);
         self.schedule_notify.notify_one();
+        self.reconcile_notify.notify_one();
         Ok(())
     }
 
@@ -193,6 +208,20 @@ impl Hub {
                 Err(HubError::RateLimited { operation: operation.into(), retry_after })
             }
         }
+    }
+
+    /// Labels of a container this hub creates: its role and the owning data directory (the same
+    /// owner label its images carry). Lists and cleanups filter by the owner.
+    pub fn labels(&self, role: &str) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::from([
+            (crate::jobs::ROLE_LABEL.to_string(), role.to_string()),
+            (crate::images::OWNER_LABEL.to_string(), crate::config::path_str(&self.paths.root)),
+        ])
+    }
+
+    /// The user-defined network services and the agents granted them share.
+    pub fn network(&self) -> String {
+        format!("botler-{}", self.id)
     }
 
     pub async fn paused(&self) -> Result<bool> {

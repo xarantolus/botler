@@ -59,6 +59,18 @@ pub enum Escalation {
     ServiceAdded {
         job: String,
     },
+    /// A service port is newly published on the host (or its mapping changed).
+    PortPublished {
+        job: String,
+        /// e.g. `your network at 0.0.0.0:8080`.
+        reach: String,
+    },
+    /// An agent gets a new (or changed) stdio MCP server: code that runs in its container.
+    McpStdioAdded {
+        agent: String,
+        server: String,
+        command: String,
+    },
     /// The protection policy itself could not be evaluated; treated as touching everything.
     InvalidPolicy {
         detail: String,
@@ -84,6 +96,10 @@ impl Escalation {
             Self::ApprovalRemoved { tool } => format!("action `{tool}` no longer requires approval"),
             Self::WebhookAdded { name } => format!("opens webhook `/hooks/{name}` to inbound calls"),
             Self::ServiceAdded { job } => format!("adds always-on service `{job}`"),
+            Self::PortPublished { job, reach } => format!("makes service `{job}` reachable from {reach}"),
+            Self::McpStdioAdded { agent, server, command } => {
+                format!("runs MCP server `{server}` (`{command}`) inside agent `{agent}`'s container")
+            }
             Self::InvalidPolicy { detail } => {
                 format!("cannot evaluate protected paths ({detail}); treating all paths as protected")
             }
@@ -247,6 +263,12 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
                 esc.insert(Escalation::McpAccessAdded { agent: a.name.clone(), service: m.clone() });
             }
         }
+        for (server, s) in &a.spec.mcp_stdio {
+            if prev.and_then(|p| p.spec.mcp_stdio.get(server)) != Some(s) {
+                let command = s.command.join(" ");
+                esc.insert(Escalation::McpStdioAdded { agent: a.name.clone(), server: server.clone(), command });
+            }
+        }
         for (op, lim) in &a.spec.limits {
             let baseline = prev.and_then(|p| p.spec.limits.get(op)).copied().unwrap_or_else(|| default_limit(op));
             if !lim.is_at_most(&baseline) {
@@ -258,6 +280,14 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         let prev = old.jobs.get(&j.name);
         if j.spec.lifetime == Lifetime::Service && !prev.is_some_and(|p| p.spec.lifetime == Lifetime::Service) {
             esc.insert(Escalation::ServiceAdded { job: j.name.clone() });
+        }
+        if j.spec.lifetime == Lifetime::Service {
+            for p in &j.spec.publish {
+                let before = prev.filter(|o| o.spec.lifetime == Lifetime::Service).map_or(&[][..], |o| &o.spec.publish);
+                if !before.contains(p) {
+                    esc.insert(Escalation::PortPublished { job: j.name.clone(), reach: p.reach() });
+                }
+            }
         }
         for (op, lim) in &j.spec.limits {
             let baseline = prev.and_then(|p| p.spec.limits.get(op)).copied().unwrap_or_else(|| default_limit(op));
@@ -315,26 +345,37 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
     }
 
     let mut activities = Vec::new();
-    let running = |d: &Definitions| -> BTreeMap<String, String> {
+    // Key -> (description, the definition it runs: a change restarts it).
+    let running = |d: &Definitions| -> BTreeMap<String, (String, String)> {
         let mut m = BTreeMap::new();
         for j in d.services() {
-            m.insert(
-                format!("service:{}", j.name),
-                format!("service `{}` runs continuously ({})", j.name, j.spec.description),
-            );
+            let mut what = format!("service `{}` runs continuously ({})", j.name, j.spec.description);
+            if let Some(p) = j.spec.port {
+                what.push_str(&format!(", on port {p} inside the services network"));
+            }
+            for p in &j.spec.publish {
+                what.push_str(&format!(", reachable from {} (container port {})", p.reach(), p.port));
+            }
+            m.insert(format!("service:{}", j.name), (what, format!("{:?}", j.spec)));
         }
         for a in d.persistent_agents().filter(|a| a.spec.always_on) {
-            m.insert(format!("agent:{}", a.name), format!("agent `{}` stays awake at all times", a.name));
+            m.insert(
+                format!("agent:{}", a.name),
+                (format!("agent `{}` stays awake at all times", a.name), String::new()),
+            );
         }
         m
     };
     let (was, will) = (running(old), running(new));
-    for (k, what) in &will {
-        if !was.contains_key(k) {
-            activities.push(Activity { status: Status::Added, what: what.clone() });
+    for (k, (what, def)) in &will {
+        match was.get(k) {
+            None => activities.push(Activity { status: Status::Added, what: what.clone() }),
+            Some((_, old_def)) if old_def != def => activities
+                .push(Activity { status: Status::Changed, what: format!("{what}; restarted with the new definition") }),
+            Some(_) => {}
         }
     }
-    for (k, what) in &was {
+    for (k, (what, _)) in &was {
         if !will.contains_key(k) {
             activities.push(Activity { status: Status::Removed, what: what.clone() });
         }
@@ -563,8 +604,13 @@ impl ChangeSummary {
             s.push('\n');
         }
         let changed: Vec<&TriggerPreview> = self.triggers.iter().filter(|t| t.status == Status::Changed).collect();
-        if !changed.is_empty() {
+        let changed_activities: Vec<&Activity> =
+            self.activities.iter().filter(|a| a.status == Status::Changed).collect();
+        if !changed.is_empty() || !changed_activities.is_empty() {
             s.push_str("**Will change:**\n");
+            for a in changed_activities {
+                s.push_str(&format!("- {}\n", a.what));
+            }
             for t in changed {
                 match &t.before {
                     Some(b) => s.push_str(&format!(
@@ -664,6 +710,72 @@ mod tests {
         let md = s.to_markdown(chrono_tz::Europe::Berlin);
         assert!(md.contains("**Will start happening:**") && md.contains("message the `main` agent"), "{md}");
         assert!(md.contains("next:"), "{md}");
+    }
+
+    fn service(port: u16, host_port: u16) -> String {
+        format!(
+            "lifetime = \"service\"\ncommand = [\"python\", \"-m\", \"app\"]\nport = {port}\n[[publish]]\nport = {port}\nhost_port = {host_port}\n"
+        )
+    }
+
+    #[test]
+    fn published_ports_and_stdio_mcp_escalate_and_show_up() {
+        let with_svc = |host_port: u16| {
+            base().with("jobs/app/job.toml", service(8000, host_port)).with("jobs/app/Dockerfile", "FROM x").with(
+                "agents/main/agent.toml",
+                "kind = \"persistent\"\nmcp = [\"app\"]\n[mcp_stdio.fs]\ncommand = [\"npx\", \"fs-mcp\"]\n",
+            )
+        };
+        let (old, new) = (defs(&base()), defs(&with_svc(8080)));
+        let s = preview(&old, &new, &[], Utc::now());
+        let reach = "your network at 0.0.0.0:8080".to_string();
+        assert!(s.escalations.contains(&Escalation::PortPublished { job: "app".into(), reach: reach.clone() }));
+        assert!(s.escalations.contains(&Escalation::McpAccessAdded { agent: "main".into(), service: "app".into() }));
+        assert!(s.escalations.contains(&Escalation::McpStdioAdded {
+            agent: "main".into(),
+            server: "fs".into(),
+            command: "npx fs-mcp".into()
+        }));
+        let md = s.to_markdown(chrono_tz::Europe::Berlin);
+        assert!(md.contains("reachable from your network at 0.0.0.0:8080"), "{md}");
+        assert!(
+            md.contains("**Will start happening:**") && md.contains("on port 8000 inside the services network"),
+            "{md}"
+        );
+
+        // Moving the port is a new exposure and restarts the service; an identical tree is quiet.
+        let s = preview(&new, &defs(&with_svc(8081)), &[], Utc::now());
+        assert_eq!(s.escalations.len(), 1, "{:?}", s.escalations);
+        assert!(s.to_markdown(chrono_tz::Europe::Berlin).contains("**Will change:**\n- service `app`"));
+        assert!(preview(&new, &defs(&with_svc(8080)), &[], Utc::now()).escalations.is_empty());
+    }
+
+    #[test]
+    fn service_ports_are_validated() {
+        let errors = |t: MemTree| -> Vec<String> {
+            load(&t)
+                .diagnostics
+                .into_iter()
+                .filter(|d| d.severity == crate::defs::Severity::Error)
+                .map(|d| d.message)
+                .collect()
+        };
+        let t = base()
+            .with("jobs/a/job.toml", service(8000, 80))
+            .with("jobs/a/Dockerfile", "FROM x")
+            .with("jobs/b/job.toml", service(8000, 80))
+            .with("jobs/b/Dockerfile", "FROM x")
+            .with("jobs/c/job.toml", "command = [\"x\"]\nport = 1\n")
+            .with("jobs/c/Dockerfile", "FROM x")
+            .with("jobs/d/job.toml", "lifetime = \"service\"\ncommand = [\"x\"]\n")
+            .with("jobs/d/Dockerfile", "FROM x")
+            .with("agents/main/agent.toml", "kind = \"persistent\"\nmcp = [\"d\"]\nnetwork = \"none\"\n");
+        let e = errors(t).join("\n");
+        assert!(e.contains("below 1024"), "{e}");
+        assert!(e.contains("host port 80 is already published by service `a`"), "{e}");
+        assert!(e.contains("only apply to services"), "{e}");
+        assert!(e.contains("declares no `port`"), "{e}");
+        assert!(e.contains("network = \"none\""), "{e}");
     }
 
     #[test]

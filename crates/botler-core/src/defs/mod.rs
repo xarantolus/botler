@@ -583,9 +583,30 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
         }
         for m in &a.spec.mcp {
             match defs.jobs.get(m) {
+                Some(j) if j.spec.lifetime == Lifetime::Service && j.spec.port.is_none() => {
+                    l.err(&path, format!("mcp {m:?}: the service declares no `port` to reach it on"))
+                }
                 Some(j) if j.spec.lifetime == Lifetime::Service => {}
                 Some(_) => l.err(&path, format!("mcp {m:?} is a oneshot job, not a service")),
                 None => l.err(&path, format!("mcp {m:?} is not a job in jobs/")),
+            }
+        }
+        if !a.spec.mcp.is_empty() && a.spec.network == Network::None {
+            l.err(
+                &path,
+                "`mcp` services are reached over the network; an agent with network = \"none\" cannot use them",
+            );
+        }
+        for (name, s) in &a.spec.mcp_stdio {
+            let ok = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+            if !ok {
+                l.err(&path, format!("mcp_stdio server name {name:?} may only use letters, digits, `_` and `-`"));
+            }
+            if name == "botler" || a.spec.mcp.contains(name) {
+                l.err(&path, format!("mcp_stdio server name {name:?} is already taken"));
+            }
+            if s.command.first().is_none_or(|c| c.trim().is_empty()) {
+                l.err(&path, format!("mcp_stdio {name:?}: command must not be empty"));
             }
         }
         if let Err(e) = glob_set(&a.spec.tools) {
@@ -606,8 +627,33 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
 }
 
 fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
+    let mut host_ports: BTreeMap<u16, &str> = BTreeMap::new();
     for j in defs.jobs.values() {
         let path = format!("jobs/{}/job.toml", j.name);
+        if j.spec.lifetime == Lifetime::Oneshot && (j.spec.port.is_some() || !j.spec.publish.is_empty()) {
+            l.err(&path, "`port` and `publish` only apply to services (lifetime = \"service\")");
+        }
+        for p in &j.spec.publish {
+            if p.host_port < 1024 {
+                l.err(
+                    &path,
+                    format!(
+                        "publish host_port {} is below 1024; rootless Podman cannot bind privileged ports, use e.g. {}",
+                        p.host_port,
+                        8000 + p.host_port % 1000
+                    ),
+                );
+            }
+            if p.bind.parse::<std::net::IpAddr>().is_err() {
+                l.err(
+                    &path,
+                    format!("publish bind {:?} is not an IP address (use \"0.0.0.0\" or \"127.0.0.1\")", p.bind),
+                );
+            }
+            if let Some(other) = host_ports.insert(p.host_port, &j.name) {
+                l.err(&path, format!("host port {} is already published by service `{other}`", p.host_port));
+            }
+        }
         for g in &j.spec.secrets {
             check_container_group(l, defs, &path, g);
         }

@@ -218,6 +218,7 @@ async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
         open_dialogs: hub.store.open_dialogs().await?.len(),
         open_incidents: hub.store.open_incidents().await?.len(),
         breakers: hub.store.breakers().await?,
+        services: crate::services::status(&hub).await?,
     }))
 }
 

@@ -42,6 +42,7 @@ struct State {
     events: Vec<mpsc::Sender<ContainerEvent>>,
     fail_builds: bool,
     crash_on_start: bool,
+    networks: HashSet<String>,
     /// Attached containers that are not pi (e.g. the gate) print this and exit with this code.
     script: (String, i32),
 }
@@ -74,6 +75,11 @@ impl Fake {
 
     pub fn containers(&self) -> BTreeMap<String, FakeContainer> {
         self.lock().containers.clone()
+    }
+
+    /// Networks created with [`Containers::ensure_network`].
+    pub fn networks(&self) -> HashSet<String> {
+        self.lock().networks.clone()
     }
 
     pub fn builds(&self) -> Vec<String> {
@@ -206,6 +212,29 @@ impl Containers for Fake {
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {
         Self::check_mounts(spec)?;
         let mut st = self.lock();
+        let fail = |stderr: String| ContainerError::Command {
+            binary: "fake".into(),
+            args: format!("run {}", spec.name),
+            stderr,
+        };
+        if st.containers.contains_key(&spec.name) {
+            return Err(fail(format!("the container name {:?} is already in use", spec.name)));
+        }
+        if let crate::container::NetworkMode::Named(n) = &spec.network
+            && !st.networks.contains(n)
+        {
+            return Err(fail(format!("unable to find network with name or ID {n}: network not found")));
+        }
+        for p in &spec.ports {
+            let taken =
+                st.containers.values().any(|c| c.running && c.spec.ports.iter().any(|o| o.host_port == p.host_port));
+            if taken {
+                return Err(fail(format!(
+                    "rootlessport listen tcp {}:{}: bind: address already in use",
+                    p.bind, p.host_port
+                )));
+            }
+        }
         st.containers.insert(spec.name.clone(), FakeContainer { spec: spec.clone(), running: true, exit_code: None });
         Ok(format!("id-{}", spec.name))
     }
@@ -375,6 +404,11 @@ impl Containers for Fake {
         let (tx, rx) = mpsc::channel(256);
         self.lock().events.push(tx);
         Ok(rx)
+    }
+
+    async fn ensure_network(&self, name: &str) -> Result<()> {
+        self.lock().networks.insert(name.into());
+        Ok(())
     }
 }
 

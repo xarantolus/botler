@@ -4,9 +4,15 @@ import { h, onMounted, ref, watch, shallowRef } from "vue";
 import { useRoute } from "vue-router";
 import { call } from "../api/client";
 import RunLogs from "../components/RunLogs.vue";
-import type { Run, RunStatus } from "../generated";
+import type { PublishedPort, Run, RunStatus } from "../generated";
 import { ago } from "../lib/time";
 import { notifyError } from "../notify";
+import { state } from "../store";
+
+/** A published service port as a link: through the name this page was reached by, when the
+ * service listens on every interface. */
+const portUrl = (p: PublishedPort) =>
+  p.bind === "0.0.0.0" || p.bind === "::" ? `http://${location.hostname}:${p.host_port}` : p.url;
 
 const route = useRoute();
 const runs = shallowRef<Run[]>([]);
@@ -67,6 +73,17 @@ const columns: DataTableColumns<Run> = [
 <template>
   <div style="height: 100%; padding: 8px 12px; display: flex; flex-direction: column; min-height: 0; gap: 8px">
     <div><NButton size="small" :loading="loading" @click="load">Refresh</NButton></div>
+    <div v-if="state.status?.services.length" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center">
+      <span>Services:</span>
+      <span v-for="s in state.status.services" :key="s.name">
+        <NTag size="small" :bordered="false" :type="s.failed ? 'error' : s.running ? 'success' : 'default'">
+          {{ s.name }}
+        </NTag>
+        <a v-for="p in s.published" :key="p.host_port" :href="portUrl(p)" target="_blank" rel="noopener" style="margin-left: 4px">
+          :{{ p.host_port }}
+        </a>
+      </span>
+    </div>
     <NDataTable
       :columns="columns"
       :data="runs"

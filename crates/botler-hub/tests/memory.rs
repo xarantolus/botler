@@ -221,7 +221,7 @@ async fn agents_get_their_namespaces_read_only_and_their_indexes_in_the_prompt()
 
     let chat = router::spawn(&e.hub, "station", None, Some("check the antenna"), None, None).await.unwrap();
     agents::dispatch_pending(&e.hub).await.unwrap();
-    let c = &e.fake.containers()[&agents::container_name(&chat)];
+    let c = &e.fake.containers()[&agents::container_name(&e.hub, &chat)];
     let mem = e.hub.paths.memory();
     for (dst, src) in [
         ("/memory/self", mem.join("agents/station")),
@@ -247,6 +247,6 @@ async fn agents_get_their_namespaces_read_only_and_their_indexes_in_the_prompt()
     // Agents without a shared home get no project namespace.
     let dev = router::spawn(&e.hub, "dev", None, Some("x"), None, None).await.unwrap();
     agents::dispatch_pending(&e.hub).await.unwrap();
-    let c = &e.fake.containers()[&agents::container_name(&dev)];
+    let c = &e.fake.containers()[&agents::container_name(&e.hub, &dev)];
     assert!(!c.spec.mounts.iter().any(|m| matches!(m, Mount::Bind { dst, .. } if dst == "/memory/project")));
 }

@@ -119,8 +119,8 @@ impl Agents {
     }
 }
 
-pub fn container_name(instance: &str) -> String {
-    format!("botler-agent-{instance}")
+pub fn container_name(hub: &Hub, instance: &str) -> String {
+    format!("botler-{}-agent-{instance}", hub.id)
 }
 
 pub fn branch_for(instance: &str) -> String {
@@ -443,15 +443,7 @@ async fn container_spec(
             "toolExposure": ops::TURN_ENDING.iter().map(|n| (*n, "hidden")).collect::<BTreeMap<_, _>>(),
         }),
     );
-    for svc in &def.spec.mcp {
-        servers.insert(
-            svc.clone(),
-            json!({
-                "url": format!("{}/services/{svc}/mcp", hub.config.container_url),
-                "headers": { "Authorization": "Bearer ${BOTLER_TOKEN}" }
-            }),
-        );
-    }
+    servers.extend(mcp_servers(applied, def));
     // Python tools this agent is granted (`tools` globs); the extension registers them.
     let tools = applied.defs.tools_for(&def.spec);
     // Hub ops that end the turn; the extension registers them with `terminate: true`.
@@ -530,23 +522,46 @@ async fn container_spec(
     }
 
     Ok(ContainerSpec {
-        name: container_name(&instance.name),
+        name: container_name(hub, &instance.name),
         image,
         command,
         env,
         mounts,
-        labels: BTreeMap::from([
-            (crate::jobs::ROLE_LABEL.into(), "agent".into()),
-            ("botler.instance".into(), instance.name.clone()),
-        ]),
+        labels: {
+            let mut l = hub.labels("agent");
+            l.insert("botler.instance".into(), instance.name.clone());
+            l
+        },
         network: match def.spec.network {
-            Network::Default => NetworkMode::Default,
             Network::None => NetworkMode::None,
+            // Granted services are reached by name on the services network.
+            Network::Default if !def.spec.mcp.is_empty() => {
+                hub.containers.ensure_network(&hub.network()).await?;
+                NetworkMode::Named(hub.network())
+            }
+            Network::Default => NetworkMode::Default,
         },
         workdir: Some(HOME.into()),
         remove_on_exit: true,
         ..Default::default()
     })
+}
+
+/// `mcp.json` entries besides the hub: granted services, reached directly on the services network
+/// (they get no botler token), and stdio servers pi starts inside the container.
+fn mcp_servers(applied: &crate::hub::Applied, def: &AgentDef) -> serde_json::Map<String, serde_json::Value> {
+    let mut servers = serde_json::Map::new();
+    for svc in &def.spec.mcp {
+        // Validation guarantees a service with a port.
+        let Some(port) = applied.defs.jobs.get(svc).and_then(|j| j.spec.port) else { continue };
+        let url = format!("http://{svc}:{port}/mcp"); // the service's alias on the network
+        servers.insert(svc.clone(), json!({ "url": url }));
+    }
+    for (name, s) in &def.spec.mcp_stdio {
+        let Some((command, args)) = s.command.split_first() else { continue };
+        servers.insert(name.clone(), json!({ "command": command, "args": args, "env": s.env }));
+    }
+    servers
 }
 
 fn to_json(v: &serde_json::Value) -> Result<String> {
@@ -857,8 +872,7 @@ pub async fn stop_all(hub: &Hub) {
 /// After a restart no pi connection survives: mark instances dormant and remove leftovers.
 pub async fn reconcile_on_boot(hub: &Hub) -> Result<()> {
     let n = hub.store.reset_running_instances().await?;
-    let leftovers =
-        hub.containers.list(&BTreeMap::from([(crate::jobs::ROLE_LABEL.to_string(), "agent".to_string())])).await?;
+    let leftovers = hub.containers.list(&hub.labels("agent")).await?;
     for c in leftovers {
         hub.containers.remove(&c.name).await?;
     }

@@ -57,11 +57,11 @@ async fn send(e: &common::Env, from: &Caller, to: &str, text: &str) {
 }
 
 fn prompts(e: &common::Env, name: &str) -> Vec<String> {
-    e.fake.prompts(&agents::container_name(name))
+    e.fake.prompts(&agents::container_name(&e.hub, name))
 }
 
 fn notes(e: &common::Env, name: &str) -> Vec<String> {
-    e.fake.notes(&agents::container_name(name))
+    e.fake.notes(&agents::container_name(&e.hub, name))
 }
 
 #[tokio::test]
@@ -200,7 +200,7 @@ async fn a_turn_ending_with_a_message_to_the_parent_sends_no_notice() {
     e.fake.set_hold_turns(true);
     let child = router::spawn(&e.hub, "dev", Some(&parent), Some("build it"), None, None).await.unwrap();
     pump(&e).await;
-    let container = agents::container_name(&child);
+    let container = agents::container_name(&e.hub, &child);
     let me = caller(&e, &child).await;
 
     // Work, then report to the parent as the last thing: the report is the only message.
@@ -241,7 +241,7 @@ async fn parent_and_child_acknowledgements_end_the_conversation() {
     let e = env().await;
     let (parent, cp) = awake_chat(&e).await;
     let child = router::spawn(&e.hub, "dev", Some(&parent), Some("build it"), None, None).await.unwrap();
-    let child_c = agents::container_name(&child);
+    let child_c = agents::container_name(&e.hub, &child);
     e.fake.set_last_reply(&child_c, "Done: built the parser, tests pass.");
     pump(&e).await;
     // The child's end-of-turn report woke the parent.
