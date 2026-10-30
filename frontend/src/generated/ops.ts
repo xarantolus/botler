@@ -53,6 +53,7 @@ import type { ReadSession } from "./ReadSession";
 import type { RequestAccess } from "./RequestAccess";
 import type { RequestCancelled } from "./RequestCancelled";
 import type { RequestOpened } from "./RequestOpened";
+import type { RequestVisit } from "./RequestVisit";
 import type { Requests } from "./Requests";
 import type { ResolveIncident } from "./ResolveIncident";
 import type { RestartService } from "./RestartService";
@@ -121,6 +122,7 @@ export interface Ops {
   memory_history: { input: MemoryHistory; output: Array<MemoryCommit> };
   get_events: { input: GetEvents; output: Array<BotlerEvent> };
   ask_user: { input: AskUser; output: Asked };
+  request_visit: { input: RequestVisit; output: Asked };
   get_run_logs: { input: GetRunLogs; output: RunLogs };
   get_incident: { input: GetIncident; output: Incident };
   get_incident_history: { input: GetIncidentHistory; output: Array<Incident> };

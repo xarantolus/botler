@@ -125,6 +125,10 @@ pub struct DialogView {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub new_group: Option<bool>,
+    /// What to open (visit requests).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub visit: Option<crate::ops::VisitSpec>,
 }
 
 #[derive(Debug, Serialize, TS)]

@@ -50,7 +50,15 @@ async fn message_wakes_botler_and_is_delivered_once() {
     let names: Vec<&str> = turn.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["propose_change", "trial_run", "request_secrets", "request_access", "archive_ready", "ask_user"],
+        [
+            "propose_change",
+            "trial_run",
+            "request_secrets",
+            "request_access",
+            "archive_ready",
+            "ask_user",
+            "request_visit"
+        ],
         "botler is no reviewer"
     );
     let ask = turn.as_array().unwrap().iter().find(|t| t["name"] == "ask_user").unwrap();

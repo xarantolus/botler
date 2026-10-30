@@ -28,7 +28,8 @@ const KIND = {
   approval: { label: "Approval", icon: "i-lucide-shield-question", color: "primary" },
   credentials: { label: "Secrets", icon: "i-lucide-key-round", color: "info" },
   access: { label: "Access", icon: "i-lucide-shield-plus", color: "warning" },
-} as const;
+  visit: { label: "Visit", icon: "i-lucide-external-link", color: "info" },
+} as const satisfies Record<DialogView["kind"], unknown>;
 const kind = computed(() => KIND[d.value.kind]);
 
 async function done() {
