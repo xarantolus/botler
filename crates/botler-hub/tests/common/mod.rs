@@ -37,6 +37,11 @@ pub async fn env() -> Env {
 
 /// Like [`env`], but on `runtime` (`fake` is then unused).
 pub async fn env_on(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake) -> Env {
+    env_with(runtime, fake, HubConfig::new(SocketAddr::from(([127, 0, 0, 1], 0)))).await
+}
+
+/// Like [`env_on`], with `config`.
+pub async fn env_with(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake, config: HubConfig) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::new(dir.path().join("data"));
     paths.ensure().unwrap();
@@ -44,7 +49,7 @@ pub async fn env_on(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake) ->
     copy_dir(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template")), &tpl);
     botler_repo::Repo::new(paths.repo(), paths.worktrees()).init_from(&tpl).await.unwrap();
     assets::unpack(&paths).unwrap();
-    let hub = Hub::open(paths, HubConfig::new(SocketAddr::from(([127, 0, 0, 1], 0))), runtime).await.unwrap();
+    let hub = Hub::open(paths, config, runtime).await.unwrap();
     Env { _dir: dir, hub, fake }
 }
 
@@ -64,6 +69,21 @@ fn git(dir: &Path, args: &[&str]) {
 
 impl Env {
     /// Commit files on top of main, advance main and apply it (what a merged proposal does).
+    /// Commit files on top of main and push them as `branch` (what an agent does). Returns the head.
+    pub async fn push(&self, branch: &str, files: &[(&str, &str)]) -> String {
+        let work = self._dir.path().join(format!("clone-{}", uuid::Uuid::now_v7()));
+        git(self._dir.path(), &["clone", "-q", self.hub.repo.git_dir().to_str().unwrap(), work.to_str().unwrap()]);
+        for (rel, body) in files {
+            let p = work.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "-q", "-m", "agent change"]);
+        git(&work, &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")]);
+        self.hub.repo.rev(&format!("refs/heads/{branch}")).await.unwrap().unwrap()
+    }
+
     pub async fn commit(&self, files: &[(&str, &str)]) {
         let work = self._dir.path().join(format!("clone-{}", uuid::Uuid::now_v7()));
         git(self._dir.path(), &["clone", "-q", self.hub.repo.git_dir().to_str().unwrap(), work.to_str().unwrap()]);

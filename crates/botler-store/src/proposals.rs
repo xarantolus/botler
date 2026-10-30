@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
-use crate::{Error, Result, Store, new_id, parse_ts, text_enum, ts};
+use crate::{Error, Result, Store, new_id, parse_opt_ts, parse_ts, text_enum, ts};
 
 text_enum!(ProposalKind {
     Change = "change",
@@ -26,6 +26,28 @@ impl ProposalStatus {
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Merged | Self::Approved | Self::Rejected | Self::Failed)
     }
+}
+
+text_enum!(ProposalStage {
+    Rebase = "rebase",
+    /// Building the image the gate runs in.
+    Image = "image",
+    /// Running `gate/run`.
+    Gate = "gate",
+    Review = "review",
+    Approval = "approval",
+    Merge = "merge",
+});
+
+/// Who decided a proposal and why.
+#[derive(Clone, Debug)]
+pub struct ProposalDecision<'a> {
+    /// `user`, or the reviewer's instance name.
+    pub by: &'a str,
+    /// Why it went this way (the decision table's outcome), for the user.
+    pub why: &'a str,
+    /// The user's reason (rejections) or comment (approvals).
+    pub reason: Option<&'a str>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
@@ -49,6 +71,15 @@ pub struct Proposal {
     pub merged_commit: Option<String>,
     pub reviewer: Option<String>,
     pub attempts: i64,
+    /// Where the pipeline is, or stopped.
+    pub stage: Option<ProposalStage>,
+    pub stage_at: Option<DateTime<Utc>>,
+    /// Why it went the way it did, e.g. `merged without asking you: the reviewer approved and nothing needs your approval`.
+    pub decision: Option<String>,
+    pub decided_by: Option<String>,
+    pub decided_at: Option<DateTime<Utc>>,
+    /// The user's reason for rejecting, or comment on approving.
+    pub decision_reason: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -91,12 +122,20 @@ fn row(r: &SqliteRow) -> Result<Proposal> {
         merged_commit: r.get("merged_commit"),
         reviewer: r.get("reviewer"),
         attempts: r.get("attempts"),
+        stage: r.get::<Option<String>, _>("stage").map(|s| ProposalStage::parse(T, &s)).transpose()?,
+        stage_at: parse_opt_ts(T, r.get("stage_at"))?,
+        decision: r.get("decision"),
+        decided_by: r.get("decided_by"),
+        decided_at: parse_opt_ts(T, r.get("decided_at"))?,
+        decision_reason: r.get("decision_reason"),
         created_at: parse_ts(T, r.get("created_at"))?,
         updated_at: parse_ts(T, r.get("updated_at"))?,
     })
 }
 
 impl Store {
+    // The pipeline's writes below only touch proposals still in flight, so a decision (the
+    // user's rejection) is never overwritten by a pipeline step that was already running.
     pub async fn create_proposal(
         &self,
         kind: ProposalKind,
@@ -149,7 +188,7 @@ impl Store {
     }
 
     pub async fn set_proposal_status(&self, id: &str, status: ProposalStatus) -> Result<()> {
-        sqlx::query("UPDATE proposals SET status = ?, updated_at = ? WHERE id = ?")
+        sqlx::query("UPDATE proposals SET status = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')")
             .bind(status.as_str())
             .bind(ts(Utc::now()))
             .bind(id)
@@ -165,7 +204,7 @@ impl Store {
         summary: &botler_core::change::ChangeSummary,
         report: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE proposals SET head_commit = ?, summary = ?, gate_report = ?, updated_at = ? WHERE id = ?")
+        sqlx::query("UPDATE proposals SET head_commit = ?, summary = ?, gate_report = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')")
             .bind(head_commit)
             .bind(crate::encode("proposal summary", summary)?)
             .bind(report)
@@ -200,7 +239,7 @@ impl Store {
     /// Hand the proposal to `reviewer`: status and reviewer change together, so nobody sees a
     /// proposal under review without its reviewer.
     pub async fn set_proposal_reviewing(&self, id: &str, reviewer: &str) -> Result<()> {
-        sqlx::query("UPDATE proposals SET status = ?, reviewer = ?, updated_at = ? WHERE id = ?")
+        sqlx::query("UPDATE proposals SET status = ?, reviewer = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')")
             .bind(ProposalStatus::Reviewing.as_str())
             .bind(reviewer)
             .bind(ts(Utc::now()))
@@ -220,11 +259,22 @@ impl Store {
         Ok(self.proposal(id).await?.attempts)
     }
 
-    /// Record why a proposal failed or was rejected.
-    pub async fn set_proposal_outcome(&self, id: &str, status: ProposalStatus, detail: &str) -> Result<()> {
-        sqlx::query("UPDATE proposals SET status = ?, review_notes = COALESCE(review_notes || char(10), '') || ?, updated_at = ? WHERE id = ?")
+    /// Record why a proposal failed or was rejected. False if it had already finished.
+    pub async fn set_proposal_outcome(&self, id: &str, status: ProposalStatus, detail: &str) -> Result<bool> {
+        let n = sqlx::query("UPDATE proposals SET status = ?, review_notes = COALESCE(review_notes || char(10), '') || ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')")
             .bind(status.as_str())
             .bind(detail)
+            .bind(ts(Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(n == 1)
+    }
+
+    pub async fn set_proposal_merged(&self, id: &str, commit: &str) -> Result<()> {
+        sqlx::query("UPDATE proposals SET status = 'merged', merged_commit = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')")
+            .bind(commit)
             .bind(ts(Utc::now()))
             .bind(id)
             .execute(&self.pool)
@@ -232,13 +282,46 @@ impl Store {
         Ok(())
     }
 
-    pub async fn set_proposal_merged(&self, id: &str, commit: &str) -> Result<()> {
-        sqlx::query("UPDATE proposals SET status = 'merged', merged_commit = ?, updated_at = ? WHERE id = ?")
-            .bind(commit)
-            .bind(ts(Utc::now()))
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+    /// Move an in-flight proposal to `stage`. False if it finished, or is merging (which a
+    /// rejection can no longer stop).
+    pub async fn set_proposal_stage(&self, id: &str, stage: ProposalStage) -> Result<bool> {
+        let now = ts(Utc::now());
+        let n = sqlx::query(
+            "UPDATE proposals SET stage = ?, stage_at = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user') AND COALESCE(stage, '') != 'merge'",
+        )
+        .bind(stage.as_str())
+        .bind(&now)
+        .bind(&now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(n == 1)
+    }
+
+    /// Record who decided an in-flight proposal and why; with `status`, also finish it there.
+    /// False if it had already finished or is merging.
+    pub async fn decide_proposal(
+        &self,
+        id: &str,
+        status: Option<ProposalStatus>,
+        d: &ProposalDecision<'_>,
+    ) -> Result<bool> {
+        let now = ts(Utc::now());
+        let n = sqlx::query(
+            "UPDATE proposals SET status = COALESCE(?, status), decision = ?, decided_by = ?, decided_at = ?, decision_reason = ?, updated_at = ?
+             WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user') AND COALESCE(stage, '') != 'merge'",
+        )
+        .bind(status.map(ProposalStatus::as_str))
+        .bind(d.why)
+        .bind(d.by)
+        .bind(&now)
+        .bind(d.reason)
+        .bind(&now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(n == 1)
     }
 }

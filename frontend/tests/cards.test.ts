@@ -105,6 +105,34 @@ describe("DialogCard", () => {
     expect(w.text()).toContain("passed");
     expect(w.findAll("button").map((b) => b.text())).toEqual(expect.arrayContaining(["approve", "reject"]));
   });
+
+  it("rejects an approval only with a reason, which reaches the hub", async () => {
+    const w = await mountInApp(DialogCard, {
+      dialog: dialog({ kind: "approval", ctas: ["approve", "reject"], proposal_id: "p1", detail: null }),
+    });
+    expect(w.find('a[href="/proposals/p1"]').text()).toContain("Review changes");
+    await w.findAll("button").find((b) => b.text() === "reject")!.trigger("click");
+    await flushPromises();
+    const modal = () => document.querySelector('[role="dialog"]')!;
+    const confirmButton = () => [...modal().querySelectorAll("button")].find((b) => b.textContent?.trim() === "Reject")!;
+    expect(modal().textContent).toContain("Reject this change?");
+    expect(confirmButton().disabled).toBe(true);
+    const box = modal().querySelector("textarea")!;
+    box.value = "   ";
+    box.dispatchEvent(new Event("input"));
+    await flushPromises();
+    expect(confirmButton().disabled, "blank is no reason").toBe(true);
+    box.value = "Not on weekdays";
+    box.dispatchEvent(new Event("input"));
+    await flushPromises();
+    expect(confirmButton().disabled).toBe(false);
+    confirmButton().click();
+    await flushPromises();
+    expect(calls.find((c) => c.name === "answer_dialog")).toEqual({
+      name: "answer_dialog",
+      args: { params: { id: "d1" }, body: { answer: "reject", reason: "Not on weekdays" } },
+    });
+  });
 });
 
 describe("EnvelopeCard", () => {

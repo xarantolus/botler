@@ -70,6 +70,7 @@ pub enum Live {
     Pi { instance: String, event: serde_json::Value },
     Instance { instance: String, status: crate::phase::AgentStatus },
     Dialog { notice: crate::notify::DialogNotice },
+    Proposal { proposal: Box<botler_store::Proposal> },
 }
 
 pub struct Hub {

@@ -71,7 +71,7 @@ pub enum Merge {
 fn is_definition_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
-        ["botler.toml" | "secrets.toml" | "tools.manifest.json"] => true,
+        ["botler.toml" | "secrets.toml" | "tools.manifest.json" | "events.manifest.json"] => true,
         ["policies", f] => f.ends_with(".toml") || f.ends_with(".md"),
         ["agents", _, "agent.toml" | "AGENTS.md"] => true,
         ["jobs", _, "job.toml" | "Dockerfile"] => true,
@@ -299,6 +299,15 @@ impl Repo {
     /// Unified diff between two commits, for the reviewer.
     pub async fn diff(&self, base: &str, head: &str) -> Result<String> {
         self.git(&["diff", "--no-color", "--stat", "--patch", base, head]).await
+    }
+
+    /// What `head` changes since its merge base with `base`, with renames detected, as git
+    /// reports it: `--numstat -z` (counts and paths) and the patch, files in the same order.
+    pub async fn diff_files(&self, base: &str, head: &str) -> Result<(String, String)> {
+        let range = format!("{base}...{head}");
+        let numstat = self.git(&["diff", "--no-color", "--no-ext-diff", "-M", "--numstat", "-z", &range]).await?;
+        let patch = self.git(&["diff", "--no-color", "--no-ext-diff", "-M", "--patch", &range]).await?;
+        Ok((numstat, patch))
     }
 
     pub async fn log_subjects(&self, base: &str, head: &str) -> Result<Vec<String>> {
@@ -642,6 +651,7 @@ mod tests {
             "triggers/a.toml",
             "images/agent/Dockerfile",
             "policies/reviewer.md",
+            "events.manifest.json",
         ] {
             assert!(is_definition_path(p), "{p}");
         }

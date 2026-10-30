@@ -66,6 +66,8 @@ import type { SubmitReview } from "./SubmitReview";
 import type { Timer } from "./Timer";
 import type { TimerCancelled } from "./TimerCancelled";
 import type { TimerSet } from "./TimerSet";
+import type { TrialRun } from "./TrialRun";
+import type { TrialStarted } from "./TrialStarted";
 
 /** Every hub op, called as `POST /api/v1/ops/{name}` with its input. */
 export interface Ops {
@@ -79,6 +81,7 @@ export interface Ops {
   list_chats: { input: ListChats; output: Chats };
   propose_change: { input: ProposeChange; output: Proposed };
   preview_change: { input: PreviewChange; output: ChangePreview };
+  trial_run: { input: TrialRun; output: TrialStarted };
   get_proposal: { input: GetProposal; output: ProposalDetail };
   submit_review: { input: SubmitReview; output: ReviewRecorded };
   request_secrets: { input: SecretRequest; output: RequestOpened };

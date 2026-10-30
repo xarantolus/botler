@@ -168,19 +168,13 @@ pub struct ChangeSummary {
 
 pub const UPCOMING: usize = 5;
 
-/// Compare two definition sets. `changed_paths` are repo paths touched by the change.
-pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], now: DateTime<Utc>) -> ChangeSummary {
-    let mut esc = BTreeSet::new();
-
-    // Protection is judged by the *old* policy plus the built-ins, so a change cannot unprotect
-    // paths and edit them in the same step.
-    let mut protected: Vec<String> = old.policy.protected_paths.clone();
-    protected.extend(CapabilityPolicy::ALWAYS_PROTECTED.iter().map(|s| (*s).to_string()));
-    protected.push("policies/capabilities.toml".into());
-    // Fail closed: if the protection set cannot be built, every changed path counts as protected.
+/// The paths only the user may approve changes to: `defs`' protection policy plus the built-ins.
+/// `Err` (why) if the policy has invalid globs; callers then treat every path as protected.
+pub fn protected_paths(defs: &Definitions) -> Result<globset::GlobSet, String> {
     let mut builder = globset::GlobSetBuilder::new();
     let mut invalid = Vec::new();
-    for p in &protected {
+    let builtin = CapabilityPolicy::ALWAYS_PROTECTED.iter().copied().chain(["policies/capabilities.toml"]);
+    for p in defs.policy.protected_paths.iter().map(String::as_str).chain(builtin) {
         match globset::Glob::new(p) {
             Ok(g) => {
                 builder.add(g);
@@ -188,14 +182,22 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
             Err(e) => invalid.push(format!("{p:?}: {e}")),
         }
     }
-    let set = match builder.build() {
-        Ok(set) if invalid.is_empty() => Some(set),
-        Ok(_) => {
-            esc.insert(Escalation::InvalidPolicy { detail: invalid.join("; ") });
-            None
-        }
-        Err(e) => {
-            esc.insert(Escalation::InvalidPolicy { detail: e.to_string() });
+    if !invalid.is_empty() {
+        return Err(invalid.join("; "));
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+/// Compare two definition sets. `changed_paths` are repo paths touched by the change.
+pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], now: DateTime<Utc>) -> ChangeSummary {
+    let mut esc = BTreeSet::new();
+
+    // Protection is judged by the *old* policy plus the built-ins, so a change cannot unprotect
+    // paths and edit them in the same step.
+    let set = match protected_paths(old) {
+        Ok(set) => Some(set),
+        Err(detail) => {
+            esc.insert(Escalation::InvalidPolicy { detail });
             None
         }
     };
@@ -276,11 +278,13 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
     }
     for j in new.jobs.values() {
         let prev = old.jobs.get(&j.name);
-        if j.spec.lifetime == Lifetime::Service && !prev.is_some_and(|p| p.spec.lifetime == Lifetime::Service) {
+        // Ask once per service: when it first runs (new, enabled, or turned from a oneshot). Later
+        // code-only changes do not ask; new secrets, ports and network still do.
+        if j.spec.is_service() && !prev.is_some_and(|p| p.spec.is_service()) {
             esc.insert(Escalation::ServiceAdded { job: j.name.clone() });
         }
-        if j.spec.lifetime == Lifetime::Service {
-            let before = prev.filter(|o| o.spec.lifetime == Lifetime::Service).map_or(&none, |o| &o.spec.env);
+        if j.spec.is_service() {
+            let before = prev.filter(|o| o.spec.is_service()).map_or(&none, |o| &o.spec.env);
             for e in before.escalations(&j.spec.env) {
                 if let EnvEscalation::Port(p) = e {
                     esc.insert(Escalation::PortPublished { job: j.name.clone(), reach: p.reach() });
@@ -436,7 +440,7 @@ fn likely_mistakes(old: &Definitions, new: &Definitions, now: DateTime<Utc>) -> 
             out.push(format!("`{}` listens for `{pattern}`, which matches no declared event type.", t.id));
         }
     }
-    for j in new.jobs.values().filter(|j| j.spec.lifetime == crate::defs::Lifetime::Oneshot) {
+    for j in new.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Oneshot) {
         let ran_before = old.triggers.values().any(|t| t.target == crate::defs::Target::Run(j.name.clone()));
         let runs_now = new.triggers.values().any(|t| t.target == crate::defs::Target::Run(j.name.clone()))
             || new.jobs.values().any(|o| o.spec.on_failure == Some(crate::defs::Target::Run(j.name.clone())));
@@ -746,6 +750,34 @@ mod tests {
         assert_eq!(s.escalations.len(), 1, "{:?}", s.escalations);
         assert!(s.to_markdown(chrono_tz::Europe::Berlin).contains("**Will change:**\n- service `app`"));
         assert!(preview(&new, &defs(&with_svc(8080)), &[], Utc::now()).escalations.is_empty());
+    }
+
+    #[test]
+    fn a_service_asks_once() {
+        let svc = |toml: &str| defs(&base().with("jobs/w/job.toml", toml).with("jobs/w/Dockerfile", "FROM x"));
+        let added = Escalation::ServiceAdded { job: "w".into() };
+        let paths = ["jobs/w/src/w/__main__.py".to_string()];
+        let esc = |old: &Definitions, new: &Definitions| preview(old, new, &paths, Utc::now()).escalations;
+        let v1 = svc("lifetime = \"service\"\ncommand = [\"w\"]\n");
+        assert_eq!(esc(&defs(&base()), &v1), std::slice::from_ref(&added), "the first deployment asks");
+        let v2 = svc("lifetime = \"service\"\ncommand = [\"w\", \"--fast\"]\n");
+        let s = preview(&v1, &v2, &paths, Utc::now());
+        assert!(s.escalations.is_empty(), "code-only changes do not: {:?}", s.escalations);
+        assert_eq!(decide(&s, Verdict::Approve), Decision::Merge);
+        let v3 = svc("lifetime = \"service\"\ncommand = [\"w\"]\nsecrets = [\"gitlab\"]\n");
+        assert_eq!(
+            esc(&v2, &v3),
+            [Escalation::SecretGranted { secret: "GITLAB_TOKEN".into(), group: "gitlab".into(), to: "job `w`".into() }],
+            "new secrets still do"
+        );
+
+        // Turning a oneshot into a service asks; a disabled service asks when it is enabled.
+        let oneshot = svc("command = [\"w\"]\n");
+        assert_eq!(esc(&oneshot, &v1), std::slice::from_ref(&added));
+        let disabled = svc("lifetime = \"service\"\nenabled = false\ncommand = [\"w\"]\n");
+        assert!(esc(&defs(&base()), &disabled).is_empty());
+        assert!(disabled.services().next().is_none(), "a disabled service does not run");
+        assert_eq!(esc(&disabled, &v1), [added]);
     }
 
     #[test]

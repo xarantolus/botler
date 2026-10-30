@@ -26,8 +26,8 @@ use crate::hub::{Hub, HubError};
 use crate::ops::{self, Caller, OpError};
 use crate::wire::{
     ApiErrorBody, ArchiveOutcome, BreakerCleared, BudgetView, Cancelled, ChatCreated, ChatRestored, DialogAnswer,
-    DialogView, Dialogs, EventPosted, HubStatus, PauseState, QueuedMessage, ReachedChat, Reverted, RuntimeInfo, Saved,
-    SecretFieldView, SecretGroupView, SessionAnchor, SessionView, Trace, Usage,
+    DialogView, Dialogs, EventPosted, HubStatus, PauseState, ProposalView, QueuedMessage, ReachedChat, Reverted,
+    RuntimeInfo, Saved, SecretFieldView, SecretGroupView, SessionAnchor, SessionView, Trace, Usage,
 };
 
 type AppState = Arc<Hub>;
@@ -71,6 +71,9 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/secrets", get(secrets))
         .route("/api/v1/secrets/{name}", put(set_secret))
         .route("/api/v1/proposals", get(proposals))
+        .route("/api/v1/proposals/{id}", get(proposal))
+        .route("/api/v1/proposals/{id}/diff", get(proposal_diff))
+        .route("/api/v1/proposals/{id}/decision", post(decide_proposal))
         .route("/api/v1/revert", post(revert))
         .route("/api/v1/pause", post(pause))
         .route("/api/v1/resume", post(resume))
@@ -347,6 +350,10 @@ async fn dialogs(State(hub): State<AppState>, Extension(p): Extension<Principal>
 #[derive(Deserialize, ts_rs::TS)]
 pub struct Answer {
     answer: String,
+    /// Approvals: why the user rejects (required) or a comment on approving. The agent reads it.
+    #[serde(default)]
+    #[ts(optional)]
+    reason: Option<String>,
 }
 
 async fn answer_dialog(
@@ -362,14 +369,16 @@ async fn answer_dialog(
             "credentials requests are answered with the secrets form".into(),
         ));
     }
-    let d = hub.store.answer_dialog(&id, &a.answer).await?;
-    debug_assert_eq!(d.status, DialogStatus::Answered);
+    let d = hub.store.dialog(&id).await?;
     if d.kind == botler_store::DialogKind::Approval
+        && d.status == DialogStatus::Open
         && let Some(pid) = &d.proposal_id
     {
-        crate::transactions::on_approval(&hub, pid, a.answer == "approve").await?;
-        return Ok(Json(DialogAnswer { dialog: d }));
+        // Answers the dialog too.
+        decide(&hub, pid, a.answer == "approve", a.reason.as_deref()).await?;
+        return Ok(Json(DialogAnswer { dialog: hub.store.dialog(&id).await? }));
     }
+    let d = hub.store.answer_dialog(&id, &a.answer).await?;
     let ev = user_event(BuiltinPayload::DialogAnswered(DialogAnsweredPayload {
         dialog_id: d.id.clone(),
         question: d.question.clone(),
@@ -667,6 +676,58 @@ async fn set_secret(
 async fn proposals(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Proposal>>> {
     user_only(&p)?;
     Ok(Json(hub.store.recent_proposals(50).await?))
+}
+
+async fn proposal(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ProposalView>> {
+    user_only(&p)?;
+    Ok(Json(proposal_view(&hub, &id).await?))
+}
+
+async fn proposal_view(hub: &Hub, id: &str) -> Result<ProposalView, ApiError> {
+    let proposal = hub.store.proposal(id).await?;
+    let tz = hub.applied().await.defs.timezone;
+    Ok(ProposalView { summary: proposal.summary.as_ref().map(|s| s.to_markdown(tz)), proposal })
+}
+
+async fn proposal_diff(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::review::ProposalDiff>> {
+    user_only(&p)?;
+    Ok(Json(crate::review::proposal_diff(&hub, &id).await?))
+}
+
+/// The user's decision on a proposal.
+#[derive(Deserialize, ts_rs::TS)]
+pub struct ProposalVerdict {
+    approve: bool,
+    /// Required to reject; an optional comment when approving. The agent reads it.
+    #[serde(default)]
+    #[ts(optional)]
+    reason: Option<String>,
+}
+
+async fn decide_proposal(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+    Json(v): Json<ProposalVerdict>,
+) -> ApiResult<Json<ProposalView>> {
+    user_only(&p)?;
+    decide(&hub, &id, v.approve, v.reason.as_deref()).await?;
+    Ok(Json(proposal_view(&hub, &id).await?))
+}
+
+async fn decide(hub: &Arc<Hub>, id: &str, approve: bool, reason: Option<&str>) -> Result<(), ApiError> {
+    if !approve && reason.is_none_or(|r| r.trim().is_empty()) {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "rejecting needs a reason; the agent reads it".into()));
+    }
+    Ok(crate::transactions::on_approval(hub, id, approve, reason).await?)
 }
 
 #[derive(Deserialize, ts_rs::TS)]

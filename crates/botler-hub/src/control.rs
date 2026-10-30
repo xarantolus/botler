@@ -8,6 +8,7 @@ pub async fn pause(hub: &Hub) -> Result<()> {
     hub.store.set_paused(true).await?;
     crate::agents::stop_all(hub).await;
     crate::services::stop_all(hub).await?;
+    crate::trials::stop_all(hub).await?;
     tracing::warn!("botler paused");
     Ok(())
 }

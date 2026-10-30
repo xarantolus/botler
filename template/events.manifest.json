@@ -16,5 +16,23 @@
       "type": "object"
     },
     "type": "example.greeting"
+  },
+  {
+    "description": "The example watcher service (jobs/example-watcher) ticked: a template for watcher events.",
+    "schema": {
+      "description": "The example watcher service (jobs/example-watcher) ticked: a template for watcher events.",
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "count"
+      ],
+      "title": "ExampleTick",
+      "type": "object"
+    },
+    "type": "example.tick"
   }
 ]

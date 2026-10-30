@@ -8,6 +8,7 @@ const BUILTIN = {
   "dialog.answered": true,
   "dialog.aborted": true,
   "proposal.updated": true,
+  "trial.finished": true,
   "action.result": true,
   "breaker.tripped": true,
   "archive.requested": true,
@@ -28,6 +29,7 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   "dialog.answered": "i-lucide-message-square-reply",
   "dialog.aborted": "i-lucide-message-square-x",
   "proposal.updated": "i-lucide-git-pull-request-arrow",
+  "trial.finished": "i-lucide-flask-conical",
   "action.result": "i-lucide-zap",
   "breaker.tripped": "i-lucide-octagon-pause",
   "archive.requested": "i-lucide-archive",
@@ -70,6 +72,8 @@ export function eventSummary(ev: BotlerEvent): string {
       return `"${b.payload.question}" withdrawn: ${b.payload.reason}`;
     case "proposal.updated":
       return `${b.payload.title}: ${b.payload.status}`;
+    case "trial.finished":
+      return `trial of ${b.payload.job}: ${b.payload.outcome}, ${b.payload.effects.length} effects recorded`;
     case "action.result":
       return `${b.payload.action}: ${b.payload.ok ? "ok" : "failed"}`;
     case "breaker.tripped":
