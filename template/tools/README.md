@@ -1,7 +1,8 @@
 # tools/
 
 Python tools that agents can call. Each subdirectory is a uv workspace package whose functions are
-decorated with `@botler.tool` (see `example/`):
+decorated with `@botler.tool` (see `example/`). The `botler` SDK is on `PYTHONPATH` in every
+container (not a dependency); a tool package depends on `pydantic`, which tool schemas need:
 
 ```python
 import botler
@@ -18,6 +19,7 @@ models work) give its argument schema and the docstring its description.
 
 `python -m botler.tools manifest` regenerates `tools.manifest.json`; commit it. The gate fails if it
 is stale. Agents get a tool when their `agent.toml` lists a matching glob in `tools = [...]`; pi
-calls it as `weather_weather`, running `python -m botler.tools call` from the applied main commit.
+calls it as `weather_weather`, running `python -m botler.tools call` from the applied main commit
+(`/botler/applied`).
 A tool that needs a `hub`-class secret must be an `@action` in `connectors/` instead: those only run
 after the user approves.

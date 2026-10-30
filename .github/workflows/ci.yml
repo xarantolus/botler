@@ -37,4 +37,15 @@ jobs:
       - run: npm run typecheck
 
   # web: frontend checks (lint, type-check, build) go here once the Vue app lands.
-  # python-sdk: ruff / type-check / pytest for the Python SDK go here once it lands.
+
+  python-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --python 3.12 pytest
+        working-directory: python/botler-sdk
+      # botler/_ops.py is generated from the hub's OPS specs; this fails when it is stale.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p botler --test sdk

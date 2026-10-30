@@ -146,7 +146,7 @@ async fn granted_python_tools_reach_the_agent() {
         ("agents/counter/AGENTS.md", "counts words"),
     ])
     .await;
-    for to in ["counter", "main"] {
+    for to in ["counter", "botler"] {
         let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, chrono::Utc::now())
             .to(to)
             .payload(serde_json::json!({"text": "hi"}));
@@ -164,13 +164,13 @@ async fn granted_python_tools_reach_the_agent() {
     let containers = e.fake.containers();
     let monorepo = |name: &str| {
         containers[&agents::container_name(name)].spec.mounts.iter().find_map(|m| match m {
-            Mount::Bind { src, dst, read_only } if dst == "/monorepo" => Some((src.clone(), *read_only)),
+            Mount::Bind { src, dst, read_only } if dst == "/botler/applied" => Some((src.clone(), *read_only)),
             _ => None,
         })
     };
     let (src, ro) = monorepo("counter").expect("applied commit mounted for tool code");
     assert!(ro && src.join("tools/example/src/example/__init__.py").exists() && src.join("uv.lock").exists());
-    assert!(monorepo("main").is_none(), "no tools granted, nothing mounted");
-    let none = std::fs::read_to_string(e.hub.paths.agent_dir("main").join("tools.json")).unwrap();
+    assert!(monorepo("botler").is_none(), "no tools granted, nothing mounted");
+    let none = std::fs::read_to_string(e.hub.paths.agent_dir("botler").join("tools.json")).unwrap();
     assert_eq!(none.trim(), "[]");
 }

@@ -9,7 +9,7 @@
 // Hub tools come from the hub's MCP server (see mcp.json). Python tools from the monorepo's
 // `tools/` are registered here: the hub renders the ones this agent is granted into
 // /botler/agent-dir/tools.json (entries of tools.manifest.json) and mounts the applied main commit
-// at /monorepo; each call runs `python -m botler.tools call <name>` there.
+// at /botler/applied; each call runs `python -m botler.tools call <name>` there.
 
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const TOOLS_FILE = "/botler/agent-dir/tools.json";
-const MONOREPO = "/monorepo";
+const APPLIED = "/botler/applied";
 const TOOL_TIMEOUT_MS = 300_000; // the first call may install the tools' dependencies
 const MAX_OUTPUT = 50_000;
 
@@ -46,10 +46,10 @@ function loadTools(): ToolDecl[] {
 
 /** Run one tool call in a subprocess: JSON args on stdin, `{ok, result | error}` on stdout. */
 export function runTool(name: string, args: unknown, signal?: AbortSignal): Promise<unknown> {
-  const argv = ["run", "--frozen", "--no-dev", "--all-packages", "--project", MONOREPO, "python", "-m", "botler.tools", "call", name];
+  const argv = ["run", "--frozen", "--no-dev", "--all-packages", "--project", APPLIED, "python", "-m", "botler.tools", "call", name];
   return new Promise((resolve, reject) => {
     const child = spawn("uv", argv, {
-      cwd: MONOREPO,
+      cwd: APPLIED,
       env: { ...process.env, UV_PROJECT_ENVIRONMENT: "/tmp/botler-tools-venv", PYTHONDONTWRITEBYTECODE: "1" },
       timeout: TOOL_TIMEOUT_MS,
       signal,

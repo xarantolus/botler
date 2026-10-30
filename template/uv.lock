@@ -19,20 +19,6 @@ wheels = [
 ]
 
 [[package]]
-name = "botler"
-version = "1.0.0"
-source = { editable = "../opt/botler/sdk" }
-dependencies = [
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.6" }]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
-
-[[package]]
 name = "botler-monorepo"
 version = "0.0.0"
 source = { virtual = "." }
@@ -67,11 +53,11 @@ name = "example"
 version = "0.1.0"
 source = { editable = "tools/example" }
 dependencies = [
-    { name = "botler" },
+    { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "botler", editable = "../opt/botler/sdk" }]
+requires-dist = [{ name = "pydantic", specifier = ">=2.6" }]
 
 [[package]]
 name = "iniconfig"
@@ -329,11 +315,11 @@ name = "shared"
 version = "0.1.0"
 source = { editable = "packages/shared" }
 dependencies = [
-    { name = "botler" },
+    { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "botler", editable = "../opt/botler/sdk" }]
+requires-dist = [{ name = "pydantic", specifier = ">=2.6" }]
 
 [[package]]
 name = "typing-extensions"

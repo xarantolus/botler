@@ -1,8 +1,7 @@
 # The botler SDK. The hub embeds this directory and mounts it at /opt/botler/sdk in every container,
 # so the importable package always matches the running hub. The runtime (`import botler`) is
 # standard library only; `botler.Event` and `botler.tool` need pydantic (authoring and the gate).
-# The version is fixed on purpose: monorepo lockfiles reference this path and must not go stale
-# when the hub is upgraded.
+# Monorepos do not depend on this package (it is on PYTHONPATH); this file is for its own tests.
 [project]
 name = "botler"
 version = "1.0.0"

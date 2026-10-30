@@ -196,8 +196,11 @@ impl Store {
         Ok(())
     }
 
-    pub async fn set_proposal_reviewer(&self, id: &str, reviewer: &str) -> Result<()> {
-        sqlx::query("UPDATE proposals SET reviewer = ?, updated_at = ? WHERE id = ?")
+    /// Hand the proposal to `reviewer`: status and reviewer change together, so nobody sees a
+    /// proposal under review without its reviewer.
+    pub async fn set_proposal_reviewing(&self, id: &str, reviewer: &str) -> Result<()> {
+        sqlx::query("UPDATE proposals SET status = ?, reviewer = ?, updated_at = ? WHERE id = ?")
+            .bind(ProposalStatus::Reviewing.as_str())
             .bind(reviewer)
             .bind(ts(Utc::now()))
             .bind(id)

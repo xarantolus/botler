@@ -3,7 +3,7 @@ name = "shared"
 version = "0.1.0"
 description = "Shared clients, helpers and event types for jobs, tools and connectors. Reuse before writing new code."
 requires-python = ">=3.11"
-dependencies = ["botler"]
+dependencies = ["pydantic>=2.6"]
 
 [build-system]
 requires = ["hatchling"]

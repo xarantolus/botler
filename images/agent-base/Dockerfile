@@ -18,7 +18,7 @@ RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | env UV_INSTALL_DI
 # Fixed paths the hub mounts into every agent container.
 #   /botler/agent-dir   rendered pi config (models.json, mcp.json, tools.json, AGENTS.md)  ro
 #   /botler/extension   botler pi extension                                                    ro
-#   /monorepo           applied main commit, when the agent is granted Python tools            ro
+#   /botler/applied     applied main commit, when the agent is granted Python tools            ro
 #   /opt/botler/sdk     botler Python SDK                                                      ro
 #   /botler/sessions    this instance's pi session files                                       rw
 #   /home/agent         the agent's persistent home ($HOME, working directory)                 rw

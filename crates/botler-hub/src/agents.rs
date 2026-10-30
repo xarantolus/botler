@@ -459,10 +459,10 @@ async fn container_spec(
     }
 
     if !tools.is_empty() {
-        // Tool code runs from the applied main commit, like agent-authored pi resources below.
-        // One level deep like /workspace: uv.lock records the SDK as `../opt/botler/sdk`.
+        // Tool code runs from the applied main commit (not the agent's own checkout), like
+        // agent-authored pi resources below.
         let export = images::export(hub, &applied.commit).await?;
-        mounts.push(Mount::Bind { src: export, dst: "/monorepo".into(), read_only: true });
+        mounts.push(Mount::Bind { src: export, dst: "/botler/applied".into(), read_only: true });
     }
 
     let mut command = vec![

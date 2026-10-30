@@ -8,11 +8,6 @@ requires-python = ">=3.11"
 # Every job, tool package and connector is a workspace member.
 members = ["packages/*", "tools/*", "connectors/*", "jobs/*"]
 
-[tool.uv.sources]
-# The botler SDK. The hub mounts the copy matching its own version at /opt/botler/sdk in every
-# container (agents, jobs, the gate), so members depend on `botler` and get it from there.
-botler = { path = "/opt/botler/sdk", editable = true }
-
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.8", "pyright>=1.1.390"]
 
@@ -26,6 +21,10 @@ ignore = ["S101"]  # assert is fine in tests
 
 [tool.pyright]
 typeCheckingMode = "strict"
+# The botler SDK is not a dependency: the hub mounts the copy matching its own version at
+# /opt/botler/sdk in every container (agents, jobs, the gate) and puts it on PYTHONPATH.
+# Packages that declare events or tools depend on pydantic themselves.
+extraPaths = ["/opt/botler/sdk"]
 reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]

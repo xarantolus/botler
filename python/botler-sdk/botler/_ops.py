@@ -9,7 +9,7 @@ from ._client import call
 
 
 def send_message(*, text: str, to: str, reply_to: str | None = None, urgent: bool | None = None) -> Any:
-    """Send a message to an agent instance (e.g. `main`). Replies come back to you as messages. Set `reply_to` to the event you are answering to keep the thread.
+    """Send a message to an agent instance (e.g. `botler`). Replies come back to you as messages. Set `reply_to` to the event you are answering to keep the thread.
 
     Args:
         to: Recipient instance name.
@@ -78,7 +78,7 @@ def propose_change(*, branch: str, title: str) -> Any:
     """Propose your pushed branch (agents/<you>/...) for merging into main. Runs asynchronously: rebase, validation, a plain-language deployment summary (what will run when, what needs the user's approval), the gate (gate/run), a reviewer, maybe the user. Progress arrives as proposal.updated events; nothing takes effect until it is merged.
 
     Args:
-        branch: Your pushed branch, e.g. `agents/main/work`.
+        branch: Your pushed branch, e.g. `agents/botler/work`.
         title: One line saying what the change does.
     """
     return call("propose_change", {"branch": branch, "title": title})
