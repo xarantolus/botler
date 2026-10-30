@@ -36,7 +36,7 @@ pub async fn env() -> Env {
     paths.ensure().unwrap();
     let tpl = dir.path().join("template");
     copy_dir(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template")), &tpl);
-    botler_repo::Repo::new(paths.repo(), paths.scratch()).init_from(&tpl).await.unwrap();
+    botler_repo::Repo::new(paths.repo(), paths.worktrees()).init_from(&tpl).await.unwrap();
     assets::unpack(&paths).unwrap();
     let fake = Fake::new();
     let hub =

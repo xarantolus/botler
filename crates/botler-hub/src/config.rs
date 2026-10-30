@@ -27,9 +27,9 @@ impl Paths {
     pub fn memory(&self) -> PathBuf {
         self.root.join("memory.git")
     }
-    /// The hub's own short-lived git worktrees.
-    pub fn scratch(&self) -> PathBuf {
-        self.root.join("scratch")
+    /// The hub's own short-lived git worktrees (rebases, reverts, hub-authored commits).
+    pub fn worktrees(&self) -> PathBuf {
+        self.root.join("worktrees")
     }
     /// Exported commits used as image build contexts, one directory per commit.
     pub fn exports(&self) -> PathBuf {
@@ -39,7 +39,7 @@ impl Paths {
     pub fn sessions(&self, instance: &str) -> PathBuf {
         self.root.join("sessions").join(instance)
     }
-    /// Agent workspaces (monorepo clones or private volumes), one directory per instance.
+    /// Monorepo clones of agents, one per instance, mounted at `/home/agent/monorepo`.
     pub fn workspace(&self, instance: &str) -> PathBuf {
         self.root.join("workspaces").join(instance)
     }
@@ -47,9 +47,14 @@ impl Paths {
     pub fn agent_dir(&self, instance: &str) -> PathBuf {
         self.root.join("agent-dirs").join(instance)
     }
-    /// Persistent scratch space: `chat-<instance>` for a chat's own, or a shared project name.
-    pub fn scratch_space(&self, key: &str) -> PathBuf {
-        self.root.join("scratch-spaces").join(key)
+    /// An instance's own home directory (`/home/agent`), kept across sleeps and archiving.
+    pub fn home(&self, instance: &str) -> PathBuf {
+        self.root.join("homes").join(instance)
+    }
+    /// A home shared by every agent whose definition names it (`home = "<name>"`). Kept apart
+    /// from per-instance homes so a shared name can never collide with an instance id.
+    pub fn shared_home(&self, name: &str) -> PathBuf {
+        self.root.join("shared-homes").join(name)
     }
     pub fn uploads(&self) -> PathBuf {
         self.root.join("uploads")
@@ -64,7 +69,9 @@ impl Paths {
     }
 
     pub fn ensure(&self) -> std::io::Result<()> {
-        for d in ["sessions", "workspaces", "agent-dirs", "uploads", "logs", "exports", "scratch"] {
+        for d in
+            ["sessions", "workspaces", "homes", "shared-homes", "agent-dirs", "uploads", "logs", "exports", "worktrees"]
+        {
             std::fs::create_dir_all(self.root.join(d))?;
         }
         Ok(())

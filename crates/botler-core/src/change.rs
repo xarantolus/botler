@@ -404,6 +404,31 @@ fn likely_mistakes(old: &Definitions, new: &Definitions, now: DateTime<Utc>) -> 
             out.push(format!("job `{}` is no longer run by any trigger (it still exists).", j.name));
         }
     }
+    for a in new.agents.values() {
+        let before = old.agents.get(&a.name).map(|p| p.spec.home.as_deref());
+        if before.is_none_or(|h| h == a.spec.home.as_deref()) {
+            continue;
+        }
+        match &a.spec.home {
+            Some(home) => {
+                let others: Vec<&str> = new
+                    .agents
+                    .values()
+                    .filter(|o| o.name != a.name && o.spec.home.as_deref() == Some(home.as_str()))
+                    .map(|o| o.name.as_str())
+                    .collect();
+                out.push(format!(
+                    "agent `{}` switches to the shared home `{home}`{}; files in its previous home are not moved.",
+                    a.name,
+                    if others.is_empty() { String::new() } else { format!(" (shared with {})", others.join(", ")) }
+                ));
+            }
+            None => out.push(format!(
+                "agent `{}` stops using a shared home: each instance gets its own; the shared files are not moved.",
+                a.name
+            )),
+        }
+    }
     out
 }
 
@@ -709,6 +734,33 @@ mod tests {
         assert!(md.contains("Check this") && md.contains("fires 1440 times"), "{md}");
         assert!(md.contains("event type `mail.received` is removed but still listened to"), "{md}");
         assert!(md.contains("listens for `mial.*`, which matches no declared event type"), "{md}");
+    }
+
+    #[test]
+    fn switching_homes_is_called_out() {
+        let old = defs(&base());
+        let new = defs(
+            &base()
+                .with("agents/main/agent.toml", "kind = \"persistent\"\nhome = \"station\"\n")
+                .with("agents/triage/agent.toml", "home = \"station\"\n"),
+        );
+        let md = preview(&old, &new, &[], Utc::now()).to_markdown(chrono_tz::UTC);
+        assert!(md.contains("agent `main` switches to the shared home `station` (shared with triage)"), "{md}");
+        let back = preview(&new, &old, &[], Utc::now()).to_markdown(chrono_tz::UTC);
+        assert!(back.contains("agent `main` stops using a shared home"), "{back}");
+    }
+
+    #[test]
+    fn renamed_scratch_key_names_its_replacement() {
+        let r = load(&base().with("agents/main/agent.toml", "kind = \"persistent\"\nscratch = \"x\"\n"));
+        assert!(r.definitions.is_none());
+        assert!(
+            r.diagnostics.iter().any(|d| d.path == "agents/main/agent.toml" && d.message.contains("renamed to `home`")),
+            "{:?}",
+            r.diagnostics
+        );
+        let bad = load(&base().with("agents/main/agent.toml", "kind = \"persistent\"\nhome = \"Bad Name\"\n"));
+        assert!(bad.diagnostics.iter().any(|d| d.message.contains("home name")), "{:?}", bad.diagnostics);
     }
 
     #[test]

@@ -58,25 +58,24 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
     );
     match def.spec.workspace {
         Workspace::Monorepo => s.push_str(&format!(
-            "Your working directory `/workspace` is a clone of the monorepo{}. Change the system by \
-             editing it, running `gate/run`, committing, `git push origin HEAD`, then \
-             `propose_change(branch, title)`. The result includes a deployment summary in plain words \
-             (what will run when, what needs the user's approval): read it. Nothing you push takes \
-             effect until it is merged.\n\n",
+            "`~/monorepo` is your own clone of the monorepo{}. Change the system by editing it, running \
+             `gate/run`, committing, `git push origin HEAD`, then `propose_change(branch, title)`. The \
+             result includes a deployment summary in plain words (what will run when, what needs the \
+             user's approval): read it. Nothing you push takes effect until it is merged.\n\n",
             branch.map(|b| format!(" on branch `{b}`")).unwrap_or_default()
         )),
-        Workspace::Volume => s.push_str(
-            "Your working directory `/workspace` is your private persistent volume. To change the system \
-             itself, ask `main` or spawn a `dev` agent.\n\n",
-        ),
-        Workspace::None => s.push_str("You have no filesystem workspace.\n\n"),
+        Workspace::Volume | Workspace::None => {
+            s.push_str("To change the system itself, ask `main` or spawn a `dev` agent.\n\n")
+        }
     }
     s.push_str(&format!(
-        "`/scratch` is persistent storage that is never committed: downloads, recordings, build \
-         outputs, notes that do not belong in the repo. {}\n\n",
-        match &def.spec.scratch {
-            Some(name) => format!("It is the shared scratch space `{name}`: other chats of this project see it too."),
-            None => "It belongs to this chat.".to_string(),
+        "## Your files\n\
+         Your home `/home/agent` (`$HOME`, your working directory) persists across wakes and restarts; \
+         `/tmp` and everything else outside your home and mounts is wiped whenever you sleep. Clone repos \
+         and keep notes and tools in your home. {}\n\n",
+        match &def.spec.home {
+            Some(name) => format!("It is the shared home `{name}`: other agents of this project use it too."),
+            None => "It is yours alone.".to_string(),
         }
     ));
     s.push_str(

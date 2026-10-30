@@ -249,59 +249,139 @@ async fn archive_hands_over_and_messaging_restores() {
     assert_ne!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Archived, "messaging restores");
 }
 
-#[tokio::test]
-async fn secret_groups_and_scratch_reach_the_container() {
-    use botler_runtime::Mount;
-    let e = env().await;
-    with_key(&e).await;
-    let secrets = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template/secrets.toml")).unwrap()
-        + "\n[[group]]\nname = \"station\"\nclass = \"container\"\n[[group.secret]]\nname = \"STATION_KEY\"\nfile = \"/root/.ssh/id_ed25519\"\n[[group.secret]]\nname = \"STATION_HOST\"\n";
-    e.commit(&[
-        ("secrets.toml", secrets.as_str()),
-        ("agents/station/agent.toml", "kind = \"persistent\"\nsecrets = [\"station\"]\nscratch = \"groundstation\"\n"),
-        ("agents/station/AGENTS.md", "station agent"),
-    ])
-    .await;
-    e.hub.store.set_secret(&e.hub.secret_key, "STATION_KEY", "-----BEGIN KEY-----").await.unwrap();
-    e.hub.store.set_secret(&e.hub.secret_key, "STATION_HOST", "station.lan").await.unwrap();
+fn bind_src(c: &botler_runtime::fake::FakeContainer, dst: &str) -> Option<std::path::PathBuf> {
+    c.spec.mounts.iter().find_map(|m| match m {
+        botler_runtime::Mount::Bind { src, dst: d, .. } if d == dst => Some(src.clone()),
+        _ => None,
+    })
+}
+
+async fn message(e: &common::Env, to: &str, text: &str) {
     e.hub
         .emit(
             Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
-                .to("station")
-                .payload(json!({"text": "hi"})),
+                .to(to.to_string())
+                .payload(json!({"text": text})),
         )
         .await
         .unwrap();
     e.route().await;
     agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+}
+
+async fn sleep_all(e: &common::Env) {
+    for a in e.hub.agents.all().await {
+        e.hub.store.set_instance_state(&a.instance, InstanceState::Dormant, None).await.unwrap();
+    }
+    agents::stop_all(&e.hub).await;
+    settle().await;
+}
+
+#[tokio::test]
+async fn secret_groups_and_shared_homes_reach_the_container() {
+    use botler_runtime::Mount;
+    let e = env().await;
+    with_key(&e).await;
+    let secrets = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template/secrets.toml")).unwrap()
+        + "\n[[group]]\nname = \"station\"\nclass = \"container\"\n[[group.secret]]\nname = \"STATION_KEY\"\nfile = \"/home/agent/.ssh/id_ed25519\"\n[[group.secret]]\nname = \"STATION_HOST\"\n";
+    e.commit(&[
+        ("secrets.toml", secrets.as_str()),
+        ("agents/station/agent.toml", "kind = \"persistent\"\nsecrets = [\"station\"]\nhome = \"groundstation\"\n"),
+        ("agents/station/AGENTS.md", "station agent"),
+        ("agents/antenna/agent.toml", "workspace = \"none\"\nhome = \"groundstation\"\n"),
+        ("agents/antenna/AGENTS.md", "antenna agent"),
+    ])
+    .await;
+    e.hub.store.set_secret(&e.hub.secret_key, "STATION_KEY", "-----BEGIN KEY-----").await.unwrap();
+    e.hub.store.set_secret(&e.hub.secret_key, "STATION_HOST", "station.lan").await.unwrap();
+    message(&e, "station", "hi").await;
 
     let c = &e.fake.containers()[&agents::container_name("station")];
     assert_eq!(c.spec.env["STATION_HOST"], "station.lan");
     assert!(!c.spec.env.contains_key("STATION_KEY"), "file secrets are not env vars");
     let key_mount = c.spec.mounts.iter().find_map(|m| match m {
-        Mount::Bind { src, dst, read_only } if dst == "/root/.ssh/id_ed25519" => Some((src.clone(), *read_only)),
+        Mount::Bind { src, dst, read_only } if dst == "/home/agent/.ssh/id_ed25519" => Some((src.clone(), *read_only)),
         _ => None,
     });
     let (src, ro) = key_mount.expect("key mounted");
     assert!(ro);
     assert_eq!(std::fs::read_to_string(&src).unwrap(), "-----BEGIN KEY-----");
-    let scratch = c.spec.mounts.iter().find_map(|m| match m {
-        Mount::Bind { src, dst, .. } if dst == "/scratch" => Some(src.clone()),
-        _ => None,
-    });
-    assert_eq!(scratch.unwrap(), e.hub.paths.scratch_space("groundstation"));
-    let main_scratch = e
-        .fake
-        .containers()
-        .values()
-        .find(|c| c.spec.name == agents::container_name("main"))
-        .map(|c| c.spec.mounts.clone());
-    if let Some(m) = main_scratch {
-        assert!(
-            m.iter()
-                .any(|m| matches!(m, Mount::Bind { src, dst, .. } if dst == "/scratch" && src.ends_with("chat-main")))
-        );
+    let shared = e.hub.paths.shared_home("groundstation");
+    assert_eq!(bind_src(c, "/home/agent").unwrap(), shared);
+
+    // Two instances of another definition naming the same home share it too.
+    let a = router::spawn(&e.hub, "antenna", None, Some("align"), None, None).await.unwrap();
+    let b = router::spawn(&e.hub, "antenna", None, Some("align again"), None, None).await.unwrap();
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    for i in [&a, &b] {
+        let c = &e.fake.containers()[&agents::container_name(i)];
+        assert_eq!(bind_src(c, "/home/agent").unwrap(), shared, "{i}");
+        assert!(bind_src(c, "/home/agent/monorepo").is_none(), "workspace = none has no clone");
     }
+}
+
+#[tokio::test]
+async fn home_persists_across_wakes_and_archiving() {
+    let e = env().await;
+    with_key(&e).await;
+    let chat = router::spawn(&e.hub, "dev", Some("main"), Some("clone the repo"), None, None).await.unwrap();
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    let name = agents::container_name(&chat);
+    let c = &e.fake.containers()[&name];
+    let home = e.hub.paths.home(&chat);
+    assert_eq!(bind_src(c, "/home/agent").unwrap(), home);
+    assert_eq!(bind_src(c, "/home/agent/monorepo").unwrap(), e.hub.paths.workspace(&chat));
+    assert_eq!(c.spec.env["HOME"], "/home/agent");
+    assert_eq!(c.spec.workdir.as_deref(), Some("/home/agent"));
+    assert!(
+        !c.spec
+            .mounts
+            .iter()
+            .any(|m| matches!(m, botler_runtime::Mount::Bind { dst, .. } if dst == "/scratch" || dst == "/workspace"))
+    );
+    std::fs::create_dir_all(home.join("groundstation")).unwrap();
+    std::fs::write(home.join("groundstation/README"), "cloned").unwrap();
+
+    // Sleep, wake: same host directory, contents intact.
+    sleep_all(&e).await;
+    message(&e, &chat, "continue").await;
+    let c = &e.fake.containers()[&name];
+    assert_eq!(bind_src(c, "/home/agent").unwrap(), home);
+    assert_eq!(std::fs::read_to_string(home.join("groundstation/README")).unwrap(), "cloned");
+
+    // Archive, then message it: restored with the same home.
+    sleep_all(&e).await;
+    e.hub.store.archive_instance(&chat, &json!({"forced": true})).await.unwrap();
+    message(&e, &chat, "one more thing").await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running);
+    let c = &e.fake.containers()[&name];
+    assert_eq!(bind_src(c, "/home/agent").unwrap(), home);
+    assert!(home.join("groundstation/README").exists());
+}
+
+#[tokio::test]
+async fn old_sessions_and_private_volumes_move_to_the_home() {
+    let e = env().await;
+    with_key(&e).await;
+    let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    // A chat from before homes: a private /workspace volume and a session started in /workspace.
+    let legacy = e.hub.paths.workspace(&chat);
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(legacy.join("draft.md"), "draft").unwrap();
+    let sessions = e.hub.paths.sessions(&chat);
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join(format!("{chat}.jsonl")),
+        "{\"type\":\"session\",\"version\":3,\"cwd\":\"/workspace\"}\n",
+    )
+    .unwrap();
+    message(&e, &chat, "hello again").await;
+    assert_eq!(std::fs::read_to_string(e.hub.paths.home(&chat).join("workspace/draft.md")).unwrap(), "draft");
+    assert!(!legacy.exists());
+    let header = std::fs::read_to_string(sessions.join(format!("{chat}.jsonl"))).unwrap();
+    assert!(header.contains("\"cwd\":\"/home/agent\""), "{header}");
 }
 
 #[tokio::test]

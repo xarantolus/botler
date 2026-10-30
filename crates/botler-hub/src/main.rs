@@ -169,7 +169,7 @@ async fn init(paths: &Paths) -> anyhow::Result<()> {
         std::fs::remove_dir_all(&tmp)?;
     }
     template::write_to(&tmp)?;
-    let commit = botler_repo::Repo::new(paths.repo(), paths.scratch()).init_from(&tmp).await?;
+    let commit = botler_repo::Repo::new(paths.repo(), paths.worktrees()).init_from(&tmp).await?;
     std::fs::remove_dir_all(&tmp)?;
     let hub = offline_hub(paths.clone()).await?;
     let token = hub.tokens.issue(&Principal::User, chrono::Duration::days(90), chrono::Utc::now());

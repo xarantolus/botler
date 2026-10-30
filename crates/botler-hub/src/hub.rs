@@ -90,11 +90,15 @@ impl std::fmt::Debug for Hub {
 impl Hub {
     /// Assemble a hub over an existing data directory whose repo already has a main branch.
     pub async fn open(paths: Paths, config: HubConfig, containers: Arc<dyn Containers>) -> Result<Arc<Self>> {
+        let stale_worktrees = crate::migrate::layout(&paths)?;
         paths.ensure()?;
         let store = Store::open(&paths.db()).await?;
         let secret_key = SecretKey::load_or_create(&paths.secret_key())?;
         let tokens = Tokens::from_secret_key(&secret_key);
-        let repo = Repo::new(paths.repo(), paths.scratch());
+        let repo = Repo::new(paths.repo(), paths.worktrees());
+        if stale_worktrees {
+            repo.prune_worktrees().await?;
+        }
         let applied = Self::load_bootable(&store, &repo).await?;
         let (live, _) = broadcast::channel(1024);
         Ok(Arc::new(Self {

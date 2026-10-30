@@ -22,7 +22,7 @@ pub struct NewField {
     pub name: String,
     /// What the user should paste and where to get it.
     pub description: String,
-    /// Deliver as a file at this absolute path instead (e.g. `/root/.ssh/id_ed25519`).
+    /// Deliver as a file at this absolute path instead (e.g. `/home/agent/.ssh/id_ed25519`).
     #[serde(default)]
     pub file: Option<String>,
 }
@@ -391,10 +391,10 @@ mod tests {
         r.group = "station".into();
         r.description = Some("Ground station".into());
         r.remove.clear();
-        r.add[0].file = Some("/root/.ssh/id_ed25519".into());
+        r.add[0].file = Some("/home/agent/.ssh/id_ed25519".into());
         let out = edit_secrets_toml("version = 1\n", &r, true).unwrap();
         let parsed: botler_core::defs::SecretsFile = toml::from_str(&out).unwrap();
         assert_eq!(parsed.groups[0].name, "station");
-        assert_eq!(parsed.groups[0].secrets[0].file.as_deref(), Some("/root/.ssh/id_ed25519"));
+        assert_eq!(parsed.groups[0].secrets[0].file.as_deref(), Some("/home/agent/.ssh/id_ed25519"));
     }
 }

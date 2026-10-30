@@ -190,10 +190,11 @@ pub struct Agent {
     pub model: Option<String>,
     #[serde(default)]
     pub workspace: Workspace,
-    /// Persistent scratch space mounted at `/scratch`, never committed. Defaults to one per
-    /// chat; naming one (e.g. `"groundstation"`) shares it between every chat that names it.
+    /// The persistent home directory mounted at `/home/agent` (`$HOME`, the working directory).
+    /// Defaults to one per instance; naming one (e.g. `"groundstation"`) shares it between every
+    /// instance of every definition that names it.
     #[serde(default)]
-    pub scratch: Option<String>,
+    pub home: Option<String>,
     #[serde(default)]
     pub idle_timeout: Option<HumanDuration>,
     /// Keep this agent's pi session running at all times (persistent agents only), e.g. `main`.
@@ -235,16 +236,16 @@ pub enum AgentKind {
     Ephemeral,
 }
 
-/// What filesystem an agent works in.
+/// What an agent gets besides its home (`/home/agent`, which every agent has).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Workspace {
-    /// A git worktree of the monorepo on its own branch, plus a scratch volume.
+    /// Its own clone of the monorepo on its own branch, at `/home/agent/monorepo`.
     #[default]
     Monorepo,
-    /// Only a persistent private volume.
+    /// Only the home. Kept for existing definitions: the home is the private persistent volume.
     Volume,
-    /// Pure reasoning: no mounts at all.
+    /// Only the home.
     None,
 }
 

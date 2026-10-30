@@ -39,7 +39,7 @@ async fn fixture() -> Fixture {
     write(&tpl, "jobs/poll/job.toml", "command = [\"python\", \"-m\", \"poll\"]\n");
     write(&tpl, "jobs/poll/Dockerfile", "FROM x\n");
     write(&tpl, "jobs/poll/src/poll.py", "print('not a definition')\n");
-    let repo = Repo::new(dir.path().join("repo.git"), dir.path().join("scratch"));
+    let repo = Repo::new(dir.path().join("repo.git"), dir.path().join("worktrees"));
     repo.init_from(&tpl).await.unwrap();
     let root = dir.path().to_path_buf();
     Fixture { _dir: dir, repo, root }
@@ -102,8 +102,8 @@ async fn rebase_and_conflict() {
     let c2 = agent_commit(&f, "b", "agents/b/c2", "botler.toml", "timezone = \"Asia/Tokyo\"\n");
     f.repo.advance_main(&rebased, &c1).await.unwrap();
     assert!(matches!(f.repo.rebase_onto_main(&c2, "c2").await, Err(Error::Conflict { .. })));
-    // scratch worktrees are cleaned up even on conflict
-    assert_eq!(std::fs::read_dir(f.root.join("scratch")).unwrap().count(), 0);
+    // temporary worktrees are cleaned up even on conflict
+    assert_eq!(std::fs::read_dir(f.root.join("worktrees")).unwrap().count(), 0);
 }
 
 #[tokio::test]

@@ -143,13 +143,19 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
         Mount::Bind { src: dir.clone(), dst: "/workspace".into(), read_only: false },
         Mount::Bind { src: hub.paths.assets().join("sdk"), dst: plumbing::SDK_DIR.into(), read_only: true },
         // Dependency downloads are cached across gate runs.
-        Mount::Volume { name: "botler-gate-uv-cache".into(), dst: "/root/.cache/uv".into() },
+        Mount::Volume { name: "botler-gate-uv-cache".into(), dst: "/home/agent/.cache/uv".into() },
     ];
     let spec = ContainerSpec {
         name: format!("botler-gate-{id}"),
         image,
         command: vec!["sh".into(), "-c".into(), "cd /workspace && sh gate/run 2>&1".into()],
-        env: [("PYTHONPATH".to_string(), plumbing::SDK_DIR.to_string()), ("CI".into(), "1".into())].into(),
+        env: [
+            ("PYTHONPATH".to_string(), plumbing::SDK_DIR.to_string()),
+            ("CI".into(), "1".into()),
+            // Explicit, so images built before the base image moved HOME still use the cache.
+            ("HOME".into(), crate::agents::HOME.into()),
+        ]
+        .into(),
         mounts,
         labels: [(crate::jobs::ROLE_LABEL.to_string(), "gate".to_string())].into(),
         network: NetworkMode::Default,

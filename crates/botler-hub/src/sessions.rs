@@ -94,6 +94,39 @@ fn texts(content: &Value, kind: &str, field: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Point an existing session's header at working directory `cwd`. pi resumes a session in the
+/// directory its header records (and refuses to start if that directory is missing), so moving
+/// agents to a new working directory means rewriting that one field. Returns whether the file
+/// changed. Only called while the instance's container is not running.
+pub async fn retarget_cwd(path: &std::path::Path, cwd: &str) -> Result<bool> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let file = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(HubError::Io(e)),
+    };
+    let mut reader = tokio::io::BufReader::new(file);
+    let mut first = String::new();
+    reader.read_line(&mut first).await?;
+    let Ok(mut header) = serde_json::from_str::<Value>(first.trim_end()) else { return Ok(false) };
+    if header.get("type").and_then(Value::as_str) != Some("session")
+        || header.get("cwd").and_then(Value::as_str) == Some(cwd)
+    {
+        return Ok(false);
+    }
+    header["cwd"] = Value::String(cwd.into());
+    let line = serde_json::to_string(&header).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+    let tmp = path.with_extension("jsonl.retarget");
+    let mut out = tokio::fs::File::create(&tmp).await?;
+    out.write_all(line.as_bytes()).await?;
+    out.write_all(b"\n").await?;
+    tokio::io::copy(&mut reader, &mut out).await?;
+    out.sync_all().await?;
+    drop(out);
+    tokio::fs::rename(&tmp, path).await?;
+    Ok(true)
+}
+
 /// The active branch of an instance's session, oldest first.
 pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
     let inst = hub.store.instance(instance).await?;
@@ -200,6 +233,21 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn retarget_rewrites_only_the_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s.jsonl");
+        let body = "{\"type\":\"message\",\"id\":\"a\",\"cwd\":\"/workspace\"}\n";
+        std::fs::write(&p, format!("{{\"type\":\"session\",\"version\":3,\"cwd\":\"/workspace\"}}\n{body}")).unwrap();
+        assert!(retarget_cwd(&p, "/home/agent").await.unwrap());
+        let text = std::fs::read_to_string(&p).unwrap();
+        let (head, rest) = text.split_once('\n').unwrap();
+        assert_eq!(serde_json::from_str::<Value>(head).unwrap()["cwd"], "/home/agent");
+        assert_eq!(rest, body, "entries after the header are untouched");
+        assert!(!retarget_cwd(&p, "/home/agent").await.unwrap(), "idempotent");
+        assert!(!retarget_cwd(&dir.path().join("missing.jsonl"), "/x").await.unwrap());
+    }
 
     #[test]
     fn header_parsing() {

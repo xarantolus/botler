@@ -24,6 +24,10 @@ use crate::{images, plumbing, prompt};
 const MAX_ATTEMPTS: i64 = 5;
 /// Upper bound only: agent tokens die with their wake (see `Agents::wakes`).
 const AGENT_TOKEN_TTL_HOURS: i64 = 24 * 7;
+/// Every agent's persistent home: `$HOME` and the working directory.
+pub const HOME: &str = "/home/agent";
+/// Where a `workspace = "monorepo"` agent's own clone is mounted, inside its home.
+pub const MONOREPO: &str = "/home/agent/monorepo";
 
 pub struct LiveAgent {
     pub instance: String,
@@ -245,6 +249,12 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     let image = images::ensure_agent_image(hub, &def.spec.image, &applied.commit).await?;
     set_phase(hub, &instance.name, "preparing workspace").await;
     let branch = prepare_workspace(hub, instance, def).await?;
+    prepare_home(hub, instance, def).await?;
+    // pi resumes a session in the working directory recorded in its header, not its own.
+    let session = hub.paths.sessions(&instance.name).join(&instance.session_file);
+    if crate::sessions::retarget_cwd(&session, HOME).await? {
+        tracing::info!(instance = %instance.name, cwd = HOME, "moved the session's working directory");
+    }
     set_phase(hub, &instance.name, "starting container").await;
     let wake = uuid::Uuid::now_v7().simple().to_string();
     let spec = container_spec(hub, instance, def, &applied, image, branch.as_deref(), &wake).await?;
@@ -276,15 +286,37 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     Ok(agent)
 }
 
+/// The host directory mounted as an instance's home: its own, or the shared one its definition
+/// names. Created on first use and never deleted (sleeping and archiving keep it).
+pub fn home_dir(hub: &Hub, instance: &Instance, def: &AgentDef) -> std::path::PathBuf {
+    match &def.spec.home {
+        Some(name) => hub.paths.shared_home(name),
+        None => hub.paths.home(&instance.name),
+    }
+}
+
+async fn prepare_home(hub: &Hub, instance: &Instance, def: &AgentDef) -> Result<()> {
+    let home = home_dir(hub, instance, def);
+    tokio::fs::create_dir_all(&home).await?;
+    // Before homes, `workspace = "volume"` agents had a private directory at `/workspace`. The
+    // home replaces it; its contents move into the home once so nothing is lost.
+    let legacy = hub.paths.workspace(&instance.name);
+    if def.spec.workspace != Workspace::Monorepo && legacy.exists() {
+        let mut to = home.join("workspace");
+        if to.exists() {
+            to = home.join(format!("workspace-{}", instance.name));
+        }
+        tracing::info!(instance = %instance.name, from = %legacy.display(), to = %to.display(), "moving the old private workspace into the home");
+        tokio::fs::rename(&legacy, &to).await?;
+    }
+    Ok(())
+}
+
 /// Clone the monorepo into a new workspace (never touching an existing one: agents own it).
 async fn prepare_workspace(hub: &Hub, instance: &Instance, def: &AgentDef) -> Result<Option<String>> {
     let dir = hub.paths.workspace(&instance.name);
     match def.spec.workspace {
-        Workspace::None => Ok(None),
-        Workspace::Volume => {
-            tokio::fs::create_dir_all(&dir).await?;
-            Ok(None)
-        }
+        Workspace::None | Workspace::Volume => Ok(None),
         Workspace::Monorepo => {
             let branch = branch_for(&instance.name);
             if !dir.join(".git").exists() {
@@ -353,6 +385,8 @@ async fn container_spec(
     let mut env = p.env;
     env.insert("PI_OFFLINE".into(), "1".into());
     env.insert("BOTLER_INSTANCE".into(), instance.name.clone());
+    // Set here as well as in the base image, so images built before homes existed get it too.
+    env.insert("HOME".into(), HOME.into());
     // Lets git in the workspace push to the hub without storing the token in .git/config.
     env.insert("GIT_CONFIG_COUNT".into(), "1".into());
     env.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
@@ -411,19 +445,15 @@ async fn container_spec(
         dst: "/botler/extension".into(),
         read_only: true,
     });
-    if def.spec.workspace != Workspace::None {
-        mounts.push(Mount::Bind {
-            src: hub.paths.workspace(&instance.name),
-            dst: "/workspace".into(),
-            read_only: false,
-        });
+    // The home first: the monorepo clone and file secrets may be mounted inside it.
+    mounts.insert(0, Mount::Bind { src: home_dir(hub, instance, def), dst: HOME.into(), read_only: false });
+    if def.spec.workspace == Workspace::Monorepo {
+        // Per instance even when the home is shared: each instance works on its own branch.
+        mounts.insert(
+            1,
+            Mount::Bind { src: hub.paths.workspace(&instance.name), dst: MONOREPO.into(), read_only: false },
+        );
     }
-    // Shared scratch names are validated definition names; per-chat ones are prefixed so they
-    // can never collide with a project name.
-    let scratch =
-        hub.paths.scratch_space(&def.spec.scratch.clone().unwrap_or_else(|| format!("chat-{}", instance.name)));
-    tokio::fs::create_dir_all(&scratch).await?;
-    mounts.push(Mount::Bind { src: scratch, dst: "/scratch".into(), read_only: false });
 
     let mut command = vec![
         "pi".to_string(),
@@ -471,7 +501,7 @@ async fn container_spec(
             Network::Default => NetworkMode::Default,
             Network::None => NetworkMode::None,
         },
-        workdir: Some(if def.spec.workspace == Workspace::None { "/".into() } else { "/workspace".into() }),
+        workdir: Some(HOME.into()),
         remove_on_exit: true,
         ..Default::default()
     })

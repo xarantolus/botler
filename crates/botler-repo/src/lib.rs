@@ -66,13 +66,13 @@ fn is_definition_path(path: &str) -> bool {
 #[derive(Clone, Debug)]
 pub struct Repo {
     git_dir: PathBuf,
-    /// Scratch directory for the hub's own short-lived worktrees.
-    scratch: PathBuf,
+    /// Directory for the hub's own short-lived worktrees.
+    worktrees: PathBuf,
 }
 
 impl Repo {
-    pub fn new(git_dir: impl Into<PathBuf>, scratch: impl Into<PathBuf>) -> Self {
-        Self { git_dir: git_dir.into(), scratch: scratch.into() }
+    pub fn new(git_dir: impl Into<PathBuf>, worktrees: impl Into<PathBuf>) -> Self {
+        Self { git_dir: git_dir.into(), worktrees: worktrees.into() }
     }
 
     pub fn git_dir(&self) -> &Path {
@@ -110,7 +110,7 @@ impl Repo {
         self.run(self.cmd(), args).await
     }
 
-    /// Run git inside one of the hub's own scratch worktrees.
+    /// Run git inside one of the hub's own short-lived worktrees.
     async fn git_in(&self, worktree: &Path, args: &[&str]) -> Result<String> {
         let mut c = Self::base_cmd();
         c.arg("-C").arg(worktree);
@@ -274,7 +274,7 @@ impl Repo {
         if self.is_ancestor(&main, branch_commit).await? {
             return Ok(branch_commit.to_string());
         }
-        let wt = self.scratch_worktree(branch_commit).await?;
+        let wt = self.temp_worktree(branch_commit).await?;
         let result = match self.git_in(&wt, &["rebase", "--no-autostash", &main]).await {
             Ok(_) => self.git_in(&wt, &["rev-parse", "HEAD"]).await,
             Err(Error::Git { stderr, .. }) => {
@@ -296,7 +296,7 @@ impl Repo {
             args.extend(["-m", "1"]);
         }
         args.push(commit);
-        let wt = self.scratch_worktree(&main).await?;
+        let wt = self.temp_worktree(&main).await?;
         let result = match self.git_in(&wt, &args).await {
             Ok(_) => self.git_in(&wt, &["rev-parse", "HEAD"]).await,
             Err(Error::Git { stderr, .. }) => {
@@ -312,7 +312,7 @@ impl Repo {
     /// A commit on top of `base` that writes (`Some`) or deletes (`None`) files. Used by the hub
     /// for changes the user approved directly (e.g. declaring secrets from a filled form).
     pub async fn commit_files(&self, base: &str, files: &[(&str, Option<&str>)], message: &str) -> Result<String> {
-        let wt = self.scratch_worktree(base).await?;
+        let wt = self.temp_worktree(base).await?;
         let result = async {
             for (rel, body) in files {
                 let path = wt.join(rel);
@@ -388,14 +388,19 @@ impl Repo {
         Ok(())
     }
 
+    /// Forget worktrees whose directories are gone.
+    pub async fn prune_worktrees(&self) -> Result<()> {
+        self.git(&["worktree", "prune"]).await.map(|_| ())
+    }
+
     /// Push main to a mirror remote.
     pub async fn push_mirror(&self, url: &str) -> Result<()> {
         self.git(&["push", "--force", url, &format!("refs/heads/{MAIN}:refs/heads/{MAIN}")]).await.map(|_| ())
     }
 
-    async fn scratch_worktree(&self, commit: &str) -> Result<PathBuf> {
-        tokio::fs::create_dir_all(&self.scratch).await?;
-        let path = self.scratch.join(uuid::Uuid::now_v7().to_string());
+    async fn temp_worktree(&self, commit: &str) -> Result<PathBuf> {
+        tokio::fs::create_dir_all(&self.worktrees).await?;
+        let path = self.worktrees.join(uuid::Uuid::now_v7().to_string());
         let p = path.to_string_lossy().to_string();
         self.git(&["worktree", "add", "--detach", "--force", &p, commit]).await?;
         Ok(path)
@@ -409,7 +414,7 @@ impl Repo {
         }
     }
 
-    /// Remove a scratch worktree. Failures are logged, not returned: cleanup must not turn a
+    /// Remove a short-lived worktree. Failures are logged, not returned: cleanup must not turn a
     /// completed operation into a failed one, and leftovers are pruned on the next removal.
     async fn remove_worktree(&self, path: &Path) {
         let p = path.to_string_lossy().to_string();
@@ -418,7 +423,7 @@ impl Repo {
         if let Err(e) = tokio::fs::remove_dir_all(path).await
             && e.kind() != std::io::ErrorKind::NotFound
         {
-            tracing::error!(path = %p, error = %e, "could not delete scratch worktree");
+            tracing::error!(path = %p, error = %e, "could not delete temporary worktree");
         }
         if let Err(e) = self.git(&["worktree", "prune"]).await {
             tracing::error!(error = %e, "git worktree prune failed");

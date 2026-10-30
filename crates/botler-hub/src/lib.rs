@@ -12,6 +12,7 @@ pub mod hub;
 pub mod images;
 pub mod jobs;
 pub mod mcp;
+pub mod migrate;
 pub mod notify;
 pub mod ops;
 pub mod plumbing;
