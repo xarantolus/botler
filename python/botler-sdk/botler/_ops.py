@@ -170,8 +170,8 @@ def cancel_request(*, id: str, reason: str) -> dict[str, Any]:
     return call("cancel_request", {"id": id, "reason": reason})
 
 
-def archive_ready(*, summary: str, handoff: Any = None, outstanding: list[str] | None = None, state: list[str] | None = None) -> dict[str, Any]:
-    """Hand over before this chat is archived (only after an archive.requested event): what you did, what is outstanding, where your state lives, and optionally who should continue.
+def handover_ready(*, summary: str, handoff: Any = None, outstanding: list[str] | None = None, state: list[str] | None = None) -> dict[str, Any]:
+    """Hand over, only after an archive.requested or handover.requested event: what you did, what is outstanding, where your state lives, and (when archiving) optionally who should continue. For a handover to yourself you continue on a fresh session that starts from this report.
 
     Args:
         summary: Everything you did in this chat, for someone who has not read it.
@@ -179,7 +179,17 @@ def archive_ready(*, summary: str, handoff: Any = None, outstanding: list[str] |
         outstanding: Work you did not finish.
         state: Where your state lives: branches, files, memory notes, external systems.
     """
-    return call("archive_ready", {"summary": summary, "handoff": handoff, "outstanding": outstanding, "state": state})
+    return call("handover_ready", {"summary": summary, "handoff": handoff, "outstanding": outstanding, "state": state})
+
+
+def handover(*, chat: str, reason: str | None = None, to: str | None = None) -> dict[str, Any]:
+    """Ask a chat to hand over now: to a fresh session of itself (`to = self`, the default) or to another chat or agent (then it is archived). The chat writes its report with `handover_ready`.
+
+    Args:
+        chat: The chat (name or slug).
+        to: `self` (default): continue on a fresh session seeded with its report. Otherwise a chat or an agent definition that takes over; the chat is then archived.
+    """
+    return call("handover", {"chat": chat, "reason": reason, "to": to})
 
 
 def stop_chat(*, chat: str, cascade: bool | None = None, reason: str | None = None) -> dict[str, Any]:

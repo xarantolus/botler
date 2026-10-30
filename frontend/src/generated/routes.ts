@@ -22,6 +22,8 @@ import type { EventsQuery } from "./EventsQuery";
 import type { Freed } from "./Freed";
 import type { GetProposal } from "./GetProposal";
 import type { GetRunLogs } from "./GetRunLogs";
+import type { Handover } from "./Handover";
+import type { HandoverRequested } from "./HandoverRequested";
 import type { HubStatus } from "./HubStatus";
 import type { Incident } from "./Incident";
 import type { Instance } from "./Instance";
@@ -58,6 +60,7 @@ import type { SecretGroupView } from "./SecretGroupView";
 import type { SecretValue } from "./SecretValue";
 import type { SecretsOutcome } from "./SecretsOutcome";
 import type { ServiceRestarted } from "./ServiceRestarted";
+import type { SessionQuery } from "./SessionQuery";
 import type { SessionView } from "./SessionView";
 import type { StopChat } from "./StopChat";
 import type { StorageOverview } from "./StorageOverview";
@@ -83,7 +86,7 @@ export interface Routes {
   trace: { method: "GET"; path: "/api/v1/events/{id}/trace"; params: { id: string }; query: never; body: never; response: Trace };
   search: { method: "GET"; path: "/api/v1/search"; params: Record<string, never>; query: SearchQuery; body: never; response: SearchResults };
   instances: { method: "GET"; path: "/api/v1/instances"; params: Record<string, never>; query: never; body: never; response: Array<Instance> };
-  session: { method: "GET"; path: "/api/v1/sessions/{instance}"; params: { instance: string }; query: never; body: never; response: SessionView };
+  session: { method: "GET"; path: "/api/v1/sessions/{instance}"; params: { instance: string }; query: SessionQuery; body: never; response: SessionView };
   new_chat: { method: "POST"; path: "/api/v1/chats"; params: Record<string, never>; query: never; body: NewChat; response: ChatCreated };
   archive_chat: { method: "POST"; path: "/api/v1/chats/{instance}/archive"; params: { instance: string }; query: never; body: ArchiveRequest; response: ArchiveOutcome };
   restore_chat: { method: "POST"; path: "/api/v1/chats/{instance}/restore"; params: { instance: string }; query: never; body: RestoreRequest; response: ChatRestored };
@@ -116,6 +119,7 @@ export interface Routes {
   run_job: { method: "POST"; path: "/api/v1/ops/run_job"; params: Record<string, never>; query: never; body: RunJob; response: JobStarted };
   restart_service: { method: "POST"; path: "/api/v1/ops/restart_service"; params: Record<string, never>; query: never; body: RestartService; response: ServiceRestarted };
   stop_chat: { method: "POST"; path: "/api/v1/ops/stop_chat"; params: Record<string, never>; query: never; body: StopChat; response: ChatsStopped };
+  handover: { method: "POST"; path: "/api/v1/ops/handover"; params: Record<string, never>; query: never; body: Handover; response: HandoverRequested };
 }
 
 export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path: Routes[K]["path"] } } = {
@@ -163,4 +167,5 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   run_job: { method: "POST", path: "/api/v1/ops/run_job" },
   restart_service: { method: "POST", path: "/api/v1/ops/restart_service" },
   stop_chat: { method: "POST", path: "/api/v1/ops/stop_chat" },
+  handover: { method: "POST", path: "/api/v1/ops/handover" },
 };

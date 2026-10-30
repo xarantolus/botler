@@ -1,6 +1,7 @@
 //! Reading pi session files for viewers: a flat list of the entries on the active branch,
 //! with the delivery/event ids from botler's message headers so events link to messages.
 
+use botler_core::payloads::BuiltinPayload;
 use std::collections::HashMap;
 
 use serde::Serialize;
@@ -73,6 +74,16 @@ pub enum Item {
         id: String,
         at: Option<String>,
         summary: String,
+    },
+    /// The chat continues here from a handover: the report it wrote in the previous session.
+    SessionStarted {
+        id: String,
+        at: Option<String>,
+        /// The previous session file (`?file=` reads it).
+        previous: String,
+        summary: String,
+        outstanding: Vec<String>,
+        state: Vec<String>,
     },
 }
 
@@ -337,10 +348,39 @@ pub fn parse_entry(e: &Value) -> Option<Item> {
     }
 }
 
-/// The active branch of an instance's session, oldest first.
-pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
+/// An instance's session files, oldest first; the current one last (also before it exists).
+pub async fn files(hub: &Hub, instance: &str) -> Result<Vec<String>> {
     let inst = hub.store.instance(instance).await?;
-    let path = hub.paths.sessions(&inst.name).join(&inst.session_file);
+    let mut found = Vec::new();
+    let mut rd = match tokio::fs::read_dir(hub.paths.sessions(&inst.name)).await {
+        Ok(rd) => Some(rd),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(HubError::Io(e)),
+    };
+    while let Some(entry) = match rd.as_mut() {
+        Some(rd) => rd.next_entry().await?,
+        None => None,
+    } {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".jsonl") && name != inst.session_file {
+            found.push((entry.metadata().await?.modified()?, name));
+        }
+    }
+    found.sort();
+    let mut out: Vec<String> = found.into_iter().map(|(_, n)| n).collect();
+    out.push(inst.session_file);
+    Ok(out)
+}
+
+/// The active branch of one of an instance's sessions (default: the current one), oldest first.
+pub async fn read(hub: &Hub, instance: &str, file: Option<&str>) -> Result<Vec<Item>> {
+    let inst = hub.store.instance(instance).await?;
+    let file = match file {
+        None => inst.session_file.clone(),
+        Some(f) if files(hub, instance).await?.iter().any(|x| x == f) => f.to_string(),
+        Some(f) => return Err(HubError::Undefined { kind: "session file", name: f.into() }),
+    };
+    let path = hub.paths.sessions(&inst.name).join(&file);
     let raw = match tokio::fs::read_to_string(&path).await {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -362,6 +402,21 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
         let Some(mut item) = parse_entry(e) else { continue };
         if let Item::User { event: Some(ev), message_text, .. } = &mut item {
             *message_text = user_text(hub, ev).await?;
+        }
+        if let Item::Note { id, at, event_kind, event, .. } = &item
+            && event_kind == botler_core::event::kinds::SESSION_STARTED
+        {
+            let ev = hub.store.event(event).await?;
+            if let Some(Ok(BuiltinPayload::SessionStarted(p))) = BuiltinPayload::of(&ev) {
+                item = Item::SessionStarted {
+                    id: id.clone(),
+                    at: at.clone(),
+                    previous: p.previous,
+                    summary: p.summary,
+                    outstanding: p.outstanding,
+                    state: p.state,
+                };
+            }
         }
         out.push(item);
     }

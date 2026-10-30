@@ -42,7 +42,7 @@ pub struct Instance {
 /// The record kept when a chat is archived.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct ArchiveRecord {
-    /// Whether the agent handed over (`archive_ready`) rather than being archived by force.
+    /// Whether the agent handed over (`handover_ready`) rather than being archived by force.
     pub confirmed_by_agent: bool,
     #[serde(default)]
     pub forced: bool,
@@ -242,6 +242,19 @@ impl Store {
         .bind(name)
         .execute(&self.pool)
         .await?;
+        if r.rows_affected() == 0 {
+            return Err(crate::not_found("instance", name));
+        }
+        Ok(())
+    }
+
+    /// Continue `name` in session file `file` (a rollover; the old file stays).
+    pub async fn set_session_file(&self, name: &str, file: &str) -> Result<()> {
+        let r = sqlx::query("UPDATE instances SET session_file = ? WHERE name = ?")
+            .bind(file)
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
         if r.rows_affected() == 0 {
             return Err(crate::not_found("instance", name));
         }

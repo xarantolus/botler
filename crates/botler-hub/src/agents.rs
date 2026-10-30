@@ -92,7 +92,7 @@ impl LiveAgent {
         *self.last_active.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    async fn stop(&self) {
+    pub(crate) async fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         if let Some(k) = self.kill.lock().await.take()
             && k.send(()).is_err()
@@ -597,6 +597,16 @@ async fn container_spec(
     let vars = &mut spec.env;
     vars.insert("PI_OFFLINE".into(), "1".into());
     vars.insert("BOTLER_INSTANCE".into(), instance.name.clone());
+    // Commits in the workspace are the chat's: `git commit` needs an identity.
+    let email = format!("{}@botler.invalid", instance.name);
+    for (key, value) in [
+        ("GIT_AUTHOR_NAME", &instance.name),
+        ("GIT_COMMITTER_NAME", &instance.name),
+        ("GIT_AUTHOR_EMAIL", &email),
+        ("GIT_COMMITTER_EMAIL", &email),
+    ] {
+        vars.insert(key.into(), value.clone());
+    }
     // Lets git in the workspace push to the hub without storing the token in .git/config.
     vars.insert("GIT_CONFIG_COUNT".into(), "1".into());
     vars.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
@@ -754,7 +764,8 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
 
 async fn turn_succeeded(hub: &Hub, agent: &LiveAgent) -> Result<()> {
     crate::turns::succeeded(hub, &agent.instance).await?;
-    notify_parent(hub, agent).await
+    notify_parent(hub, agent).await?;
+    crate::handover::check(hub, agent).await
 }
 
 /// The delivery that started the agent's current turn. A delivery still being recorded may be

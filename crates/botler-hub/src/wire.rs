@@ -17,11 +17,11 @@ use uuid::Uuid;
 
 use crate::api::{
     Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, ProposalVerdict, RestoreRequest, RevertRequest,
-    SecretValue, UserMessage,
+    SecretValue, SessionQuery, UserMessage,
 };
 use crate::memory::{MemoryConflict, MemoryHistory, MemoryList, MemoryRead, MemoryWrite};
 use crate::ops::{ClearChatCaches, CollectGarbage, DeleteChat, StorageUsage};
-use crate::ops::{GetProposal, GetRunLogs, ListConnections, Op, RevokeAccess, StopChat, Unsubscribe};
+use crate::ops::{GetProposal, GetRunLogs, Handover, ListConnections, Op, RevokeAccess, StopChat, Unsubscribe};
 use crate::phase::WakePhase;
 use crate::review::ProposalDiff;
 use crate::search::{SearchQuery, SearchResults};
@@ -189,6 +189,11 @@ pub struct SessionView {
     pub tool_renders: BTreeMap<String, ToolRender>,
     /// The user's messages not delivered yet (waiting for the turn to end), oldest first.
     pub queued: Vec<QueuedMessage>,
+    /// The chat's session files, oldest first, the current one last: earlier ones are from
+    /// handovers to a fresh session.
+    pub sessions: Vec<String>,
+    /// The session file shown.
+    pub file: String,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -380,6 +385,7 @@ routes! {
         run_job: crate::ops::RunJob;
         restart_service: crate::ops::RestartService;
         stop_chat: StopChat;
+        handover: Handover;
     }
     status: GET "/api/v1/status" => HubStatus;
     usage: GET "/api/v1/usage" => Usage;
@@ -392,7 +398,7 @@ routes! {
     trace: GET "/api/v1/events/{id}/trace" => Trace;
     search: GET "/api/v1/search", query: SearchQuery => SearchResults;
     instances: GET "/api/v1/instances" => Vec<Instance>;
-    session: GET "/api/v1/sessions/{instance}" => SessionView;
+    session: GET "/api/v1/sessions/{instance}", query: SessionQuery => SessionView;
     new_chat: POST "/api/v1/chats", body: NewChat => ChatCreated;
     archive_chat: POST "/api/v1/chats/{instance}/archive", body: ArchiveRequest => ArchiveOutcome;
     restore_chat: POST "/api/v1/chats/{instance}/restore", body: RestoreRequest => ChatRestored;

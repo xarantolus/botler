@@ -232,9 +232,11 @@ async fn in_review(e: &common::Env) -> (Proposal, String) {
 }
 
 async fn awaiting_user(e: &common::Env, id: &str) -> Proposal {
+    // The status flips before the approval dialog is written: wait for both.
     until("the user's approval", || async {
         let p = e.hub.store.proposal(id).await.unwrap();
-        (p.status == ProposalStatus::AwaitingUser).then_some(p)
+        let asked = e.hub.store.open_dialogs().await.unwrap().iter().any(|d| d.proposal_id.as_deref() == Some(id));
+        (p.status == ProposalStatus::AwaitingUser && asked).then_some(p)
     })
     .await
 }

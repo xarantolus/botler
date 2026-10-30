@@ -1,4 +1,5 @@
-//! A chat's lifecycle as the user steers it: stopping it (and what it started).
+//! A chat's lifecycle as the user steers it: stopping it (and what it started), and handing it
+//! over (to a fresh session of itself, or to another chat).
 
 use std::sync::Arc;
 
@@ -93,4 +94,44 @@ async fn stop(
         router::note(hub, &parent, BuiltinPayload::ChatStopped(payload.clone())).await?;
     }
     Ok(payload)
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+#[ts(optional_fields)]
+pub struct Handover {
+    /// The chat (name or slug).
+    pub chat: String,
+    /// `self` (default): continue on a fresh session seeded with its report. Otherwise a chat or
+    /// an agent definition that takes over; the chat is then archived.
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct HandoverRequested {
+    pub chat: String,
+    pub to: String,
+    /// False when a handover was already pending.
+    pub requested: bool,
+}
+
+impl Op for Handover {
+    const NAME: &'static str = "handover";
+    const DESCRIPTION: &'static str = "Ask a chat to hand over now: to a fresh session of itself (`to = self`, the default) or to another chat or agent (then it is archived). The chat writes its report with `handover_ready`.";
+    const WHO: Who = Who::User;
+    type Output = HandoverRequested;
+
+    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<HandoverRequested, OpError> {
+        let chat = hub
+            .store
+            .resolve_instance(&self.chat)
+            .await?
+            .ok_or_else(|| OpError::BadRequest(format!("no chat named {}", self.chat)))?
+            .name;
+        let to = self.to.unwrap_or_else(|| crate::handover::SELF.into());
+        let requested = crate::handover::request(hub, &chat, &to, self.reason).await?;
+        Ok(HandoverRequested { chat, to, requested })
+    }
 }

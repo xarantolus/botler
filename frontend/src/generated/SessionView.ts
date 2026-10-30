@@ -25,4 +25,13 @@ tool_renders: { [key in string]: ToolRender },
 /**
  * The user's messages not delivered yet (waiting for the turn to end), oldest first.
  */
-queued: Array<QueuedMessage>, };
+queued: Array<QueuedMessage>, 
+/**
+ * The chat's session files, oldest first, the current one last: earlier ones are from
+ * handovers to a fresh session.
+ */
+sessions: Array<string>, 
+/**
+ * The session file shown.
+ */
+file: string, };
