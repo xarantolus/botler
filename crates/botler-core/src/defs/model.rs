@@ -23,9 +23,9 @@ fn default_version() -> u32 {
 pub struct Instance {
     #[serde(default = "default_version")]
     pub version: u32,
-    /// IANA time zone used when a trigger does not name one.
-    #[serde(default = "default_tz")]
-    pub timezone: String,
+    /// IANA time zone for schedules, agents' clocks and containers. Unset: the host's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
     #[serde(default)]
     pub models: Models,
     #[serde(default)]
@@ -36,10 +36,6 @@ pub struct Instance {
     pub mirror: Option<Mirror>,
     #[serde(default)]
     pub push: Option<Push>,
-}
-
-fn default_tz() -> String {
-    "UTC".into()
 }
 
 /// How emitted events are checked against declarations.

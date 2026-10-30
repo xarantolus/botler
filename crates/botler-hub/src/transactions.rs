@@ -5,6 +5,8 @@
 //! a `proposal.updated` event. Approval binds to the pinned, gated commit: if main moves before
 //! the merge, the pipeline starts over instead of merging something nobody reviewed.
 
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -140,23 +142,24 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
         tokio::fs::remove_dir_all(&dir).await?;
     }
     hub.repo.export(commit, &dir).await?;
-    let mounts = vec![
+    let mut mounts = vec![
         Mount::Bind { src: dir.clone(), dst: "/workspace".into(), read_only: false },
         Mount::Bind { src: hub.paths.assets().join("sdk"), dst: plumbing::SDK_DIR.into(), read_only: true },
         // Dependency downloads are cached across gate runs.
         Mount::Volume { name: "botler-gate-uv-cache".into(), dst: "/home/agent/.cache/uv".into() },
     ];
+    let mut env = BTreeMap::from([
+        ("PYTHONPATH".to_string(), plumbing::SDK_DIR.to_string()),
+        ("CI".into(), "1".into()),
+        // Explicit, so images built before the base image moved HOME still use the cache.
+        ("HOME".into(), crate::agents::HOME.into()),
+    ]);
+    crate::localtime::apply(applied.defs.timezone, Path::new(crate::localtime::ZONEINFO), &mut env, &mut mounts);
     let spec = ContainerSpec {
         name: format!("botler-gate-{id}"),
         image,
         command: vec!["sh".into(), "-c".into(), "cd /workspace && sh gate/run 2>&1".into()],
-        env: [
-            ("PYTHONPATH".to_string(), plumbing::SDK_DIR.to_string()),
-            ("CI".into(), "1".into()),
-            // Explicit, so images built before the base image moved HOME still use the cache.
-            ("HOME".into(), crate::agents::HOME.into()),
-        ]
-        .into(),
+        env,
         mounts,
         labels: [(crate::jobs::ROLE_LABEL.to_string(), "gate".to_string())].into(),
         network: NetworkMode::Default,
@@ -366,7 +369,7 @@ pub async fn preview_branch(hub: &Hub, instance: &str, branch: &str) -> Result<s
         .ok_or_else(|| HubError::Forbidden(format!("branch {branch} is not on the hub; push it first")))?;
     let base = hub.repo.main().await?;
     let tree = hub.repo.definition_tree(&head).await?;
-    let report = botler_core::load(&tree);
+    let report = botler_core::load_with(&tree, crate::localtime::host());
     let diagnostics: Vec<String> = report.diagnostics.iter().map(ToString::to_string).collect();
     let Some(new) = report.definitions else {
         return Ok(json!({ "valid": false, "diagnostics": diagnostics }));
