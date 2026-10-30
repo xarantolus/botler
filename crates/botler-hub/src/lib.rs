@@ -1,5 +1,6 @@
 //! The botler hub.
 
+pub mod agent_env;
 pub mod agents;
 pub mod api;
 pub mod assets;

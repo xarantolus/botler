@@ -55,6 +55,7 @@ export type * from "./DialogStatus";
 export type * from "./DialogView";
 export type * from "./Dialogs";
 export type * from "./EmitEvent";
+export type * from "./EnvironmentUpdatedPayload";
 export type * from "./Escalation";
 export type * from "./EventEmitted";
 export type * from "./EventPosted";

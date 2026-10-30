@@ -241,6 +241,13 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         guidance: "A grant is applied to your container when you are next woken; a revoked one is gone from then \
                    on. Carry on with what needed it, or stop using it.",
     },
+    BuiltinEvent {
+        kind: kinds::ENVIRONMENT_UPDATED,
+        summary: "Your container was restarted with a changed environment (e.g. a merged change); this conversation goes on.",
+        fields: &[("changes", "what changed: tools, image, instructions, pi resources, secrets, services")],
+        follow_up: &[],
+        guidance: "Use what is new from now on (new tools are in your tool list). Nothing to answer.",
+    },
 ];
 
 pub fn builtin(kind: &str) -> Option<&'static BuiltinEvent> {
@@ -356,6 +363,7 @@ mod tests {
             kinds::ARCHIVE_REQUESTED,
             kinds::AGENT_IDLE,
             kinds::ACCESS_CHANGED,
+            kinds::ENVIRONMENT_UPDATED,
         ] {
             assert!(builtin(k).is_some(), "{k} missing from catalog");
         }

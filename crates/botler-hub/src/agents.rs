@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use botler_core::catalog;
 use botler_core::defs::{AgentDef, Budget, Environment, Workspace};
 use botler_core::loops::TurnLog;
-use botler_core::payloads::{AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, MessagePayload};
+use botler_core::payloads::{
+    AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, EnvironmentUpdatedPayload, MessagePayload,
+};
 use botler_core::{Event, Source};
 use botler_runtime::{ContainerSpec, Mount, PiClient, PiError, PiEvent, PiEventKind, Streaming};
 use botler_store::{Delivery, Instance, InstanceState};
@@ -17,6 +19,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+use crate::agent_env::AgentEnv;
 use crate::auth::Principal;
 use crate::environment::{self, Runnable};
 use crate::hub::{Hub, HubError, Live, Result, builtin};
@@ -35,9 +38,13 @@ pub struct LiveAgent {
     pub wake: String,
     pub container: String,
     pub pi: PiClient,
-    /// The grants applied to this container: when the chat's grants change, it is restarted
-    /// before its next delivery.
-    grants: Vec<String>,
+    /// What this container was started with. When the applied definitions or the chat's grants
+    /// change it, the agent is restarted between turns (see [`drifted`]).
+    env: AgentEnv,
+    /// The applied commit and grants `env` was last found current for (skips recomputing it).
+    checked: std::sync::Mutex<String>,
+    /// What changed since its previous container, told with its next delivery.
+    changes: std::sync::Mutex<Vec<String>>,
     busy: AtomicBool,
     last_active: std::sync::Mutex<DateTime<Utc>>,
     /// Set when the hub stops the agent on purpose (idle, kill switch), so the exit is not a crash.
@@ -97,6 +104,8 @@ pub struct Agents {
     phases: Mutex<HashMap<String, WakePhase>>,
     /// Serialises waking per hub so one instance is never started twice.
     waking: Mutex<()>,
+    /// The applied commit and when it was first seen, to restart agents once per burst of merges.
+    applied_at: Mutex<Option<(String, DateTime<Utc>)>>,
 }
 
 impl std::fmt::Debug for Agents {
@@ -160,17 +169,27 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
         return Ok(());
     }
     if let Some(agent) = hub.agents.get(name).await
-        && agent.grants != crate::grants::environment(hub, name).await?.1
+        && drifted(hub, &agent).await?
     {
-        // Granted or revoked since it woke: restart it (once its turn is over) so the container
-        // has exactly what it holds now. The exit wakes the dispatcher again.
+        // A merge or a grant changed what its container should be: restart it (once its turn is
+        // over) so the delivery reaches the new one. The exit wakes the dispatcher again.
         if !agent.busy() {
-            tracing::info!(instance = %name, "grants changed; restarting the container");
+            tracing::info!(instance = %name, "environment changed; restarting the container");
             agent.stop().await;
         }
         return Ok(());
     }
     let agent = ensure_awake(hub, &instance).await?;
+    let changes = std::mem::take(&mut *agent.changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    if !changes.is_empty() {
+        // Ahead of the rest, as a note: the agent reads it with what woke it.
+        let payload = BuiltinPayload::EnvironmentUpdated(EnvironmentUpdatedPayload { changes });
+        let ev = builtin(payload, Source::Hub)?.to(name);
+        hub.store.append_event(&ev).await?;
+        hub.store.mark_routed(&ev.id.to_string()).await?;
+        let d = hub.store.enqueue_delivery_with(&ev.id.to_string(), name, None, None, true, None).await?;
+        deliver_one(hub, &agent, &d).await?;
+    }
     for d in hub.store.pending_deliveries(name).await? {
         deliver_one(hub, &agent, &d).await?;
     }
@@ -300,8 +319,10 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     set_phase(hub, &instance.name, WakeStep::StartingContainer).await;
     let wake = uuid::Uuid::now_v7().simple().to_string();
     // The definition's environment plus what the chat holds, on every wake.
-    let (granted, grants) = crate::grants::environment(hub, &instance.name).await?;
-    let (env, _) = def.spec.env.extend(&granted);
+    let agent_env = crate::agent_env::compute(hub, instance, def, &applied, Some(image.clone())).await?;
+    let checked = check_key(hub, &applied, &instance.name).await?;
+    let changes = remember_env(hub, &instance.name, &agent_env).await?;
+    let env = agent_env.env.clone();
     let spec = container_spec(hub, instance, def, &env, &applied, image, branch.as_deref(), &wake).await?;
     tracing::info!(instance = %instance.name, %wake, "waking agent");
     hub.agents.wakes.lock().await.insert(instance.name.clone(), wake.clone());
@@ -318,7 +339,9 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         wake,
         container: spec.name.clone(),
         pi,
-        grants,
+        env: agent_env,
+        checked: std::sync::Mutex::new(checked),
+        changes: std::sync::Mutex::new(changes),
         busy: AtomicBool::new(false),
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
@@ -332,6 +355,85 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     tokio::spawn(pump(hub.clone(), agent.clone(), events));
     tokio::spawn(watch_exit(hub.clone(), agent.clone(), attached.exited, attached.stderr));
     Ok(agent)
+}
+
+/// kv owner of each instance's last container environment (to tell it what changed).
+const ENV_KV: &str = "hub:agent-env";
+/// A burst of merges within this long restarts an idle agent once.
+pub const RESTART_DEBOUNCE_SECS: i64 = 10;
+
+/// Store `env` as `instance`'s current environment; returns what changed since the previous one.
+async fn remember_env(hub: &Hub, instance: &str, env: &AgentEnv) -> Result<Vec<String>> {
+    let json = |e: serde_json::Error| HubError::Io(std::io::Error::other(e));
+    let previous: Option<AgentEnv> = match hub.store.kv_get(ENV_KV, instance).await? {
+        // A shape from an older hub is no basis for a comparison.
+        Some(v) => serde_json::from_str(&v).ok(),
+        None => None,
+    };
+    hub.store.kv_set(ENV_KV, instance, &serde_json::to_string(env).map_err(json)?).await?;
+    Ok(previous.map(|p| crate::agent_env::changes(&p, env)).unwrap_or_default())
+}
+
+/// What `agent`'s environment was computed for: the applied commit and its grants.
+async fn check_key(hub: &Hub, applied: &crate::hub::Applied, instance: &str) -> Result<String> {
+    let (_, grants) = crate::grants::environment(hub, instance).await?;
+    Ok(format!("{} {}", applied.commit, grants.join(",")))
+}
+
+/// Whether `agent`'s container no longer matches what it would get now (after a merge or a
+/// grant). Cheap when nothing changed since the last check.
+async fn drifted(hub: &Hub, agent: &LiveAgent) -> Result<bool> {
+    let applied = hub.applied().await;
+    let key = check_key(hub, &applied, &agent.instance).await?;
+    let lock = || agent.checked.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *lock() == key {
+        return Ok(false);
+    }
+    let instance = hub.store.instance(&agent.instance).await?;
+    // A removed definition keeps running agents as they are until they sleep.
+    let Some(def) = applied.defs.agents.get(&instance.definition) else { return Ok(false) };
+    let now = crate::agent_env::compute(hub, &instance, def, &applied, None).await?;
+    if now == agent.env {
+        *lock() = key;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// After a merge (or a grant): build the images running agents now need, then restart those whose
+/// environment changed, each once its turn is over and no further merge came within
+/// [`RESTART_DEBOUNCE_SECS`]. They resume the same session with the same home; always-on agents
+/// are started again right away, others when their next message arrives.
+pub async fn refresh_environments(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
+    let applied = hub.applied().await;
+    let since = {
+        let mut seen = hub.agents.applied_at.lock().await;
+        match &*seen {
+            Some((commit, at)) if *commit == applied.commit => *at,
+            _ => {
+                *seen = Some((applied.commit.clone(), now));
+                now
+            }
+        }
+    };
+    for agent in hub.agents.all().await {
+        if !drifted(hub, &agent).await? {
+            continue;
+        }
+        let instance = hub.store.instance(&agent.instance).await?;
+        if let Some(def) = applied.defs.agents.get(&instance.definition)
+            && let Err(e) = images::ensure_agent_image(hub, def.spec.env.image(), &applied.commit).await
+        {
+            tracing::error!(instance = %agent.instance, error = %e, "could not build the new image; restart waits");
+            continue;
+        }
+        if agent.busy() || now - since < Duration::seconds(RESTART_DEBOUNCE_SECS) {
+            continue;
+        }
+        tracing::info!(instance = %agent.instance, "environment changed; restarting between turns");
+        agent.stop().await;
+    }
+    Ok(())
 }
 
 /// The host directory mounted as an instance's home: its own, or the shared one its definition
@@ -931,6 +1033,9 @@ pub async fn run(hub: Arc<Hub>) {
     loop {
         if let Err(e) = keep_always_on(&hub).await {
             tracing::error!(error = %e, "always-on check failed");
+        }
+        if let Err(e) = refresh_environments(&hub, Utc::now()).await {
+            tracing::error!(error = %e, "environment refresh failed");
         }
         if let Err(e) = dispatch_pending(&hub).await {
             tracing::error!(error = %e, "dispatch failed");
