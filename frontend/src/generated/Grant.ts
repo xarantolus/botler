@@ -18,4 +18,9 @@ granted_by: string, created_at: string, revoked_at: string | null,
 /**
  * The holder is archived: the grant applies again when it is restored.
  */
-suspended: boolean, };
+suspended: boolean, 
+/**
+ * Why it no longer applies (its resource is gone or has no values); stale grants are kept
+ * for the record but never applied.
+ */
+stale: string | null, };

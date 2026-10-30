@@ -118,6 +118,7 @@ fn archive_record() -> ArchiveRecord {
         report: None,
         handed_to: None,
         at: Utc::now(),
+        freed_bytes: None,
     }
 }
 

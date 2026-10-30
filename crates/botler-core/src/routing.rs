@@ -36,6 +36,8 @@ pub struct Subscription {
     pub wake: bool,
     pub note: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Why it no longer applies (its event type is gone); stale subscriptions are not routed.
+    pub stale: Option<String>,
 }
 
 impl Subscription {
@@ -238,6 +240,7 @@ mod tests {
             wake,
             note: None,
             created_at: Utc::now(),
+            stale: None,
         }
     }
 

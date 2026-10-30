@@ -10,6 +10,7 @@ mod messages;
 mod proposals;
 mod requests;
 mod state;
+mod storage;
 mod subscriptions;
 mod timers;
 mod trial;
@@ -35,6 +36,7 @@ pub use messages::*;
 pub use proposals::*;
 pub use requests::*;
 pub use state::*;
+pub use storage::*;
 pub use subscriptions::*;
 pub use timers::*;
 pub use trial::*;
@@ -153,6 +155,8 @@ pub enum Who {
     Capable(Capability),
     /// Only agents with this capability.
     AgentsWith(Capability),
+    /// Only the user.
+    User,
 }
 
 impl Who {
@@ -165,6 +169,7 @@ impl Who {
             Self::Runs => run,
             Self::Capable(cap) => c.may(cap),
             Self::AgentsWith(cap) => c.capabilities.contains(&cap),
+            Self::User => matches!(c.principal, Principal::User),
         }
     }
 }
@@ -271,6 +276,10 @@ pub static OPS: &[OpSpec] = &[
     op::<StateGet>(),
     op::<StateSet>(),
     op::<health::Health>(),
+    op::<StorageUsage>(),
+    op::<ClearChatCaches>(),
+    op::<DeleteChat>(),
+    op::<CollectGarbage>(),
 ];
 
 /// The ops `caller` may call.

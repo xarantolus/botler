@@ -69,6 +69,24 @@ enum Command {
         /// Leave out `secrets.key`; secret values in the archive then cannot be decrypted.
         #[arg(long)]
         no_key: bool,
+        /// Also include files git ignores in the git checkouts of homes and workspaces
+        /// (`node_modules`, `target`, `.venv`, ...), which are left out by default.
+        #[arg(long)]
+        full: bool,
+    },
+    /// Disk use by chat and by kind, largest first.
+    Storage {
+        /// `podman` or `docker` (default: auto-detect).
+        #[arg(long, env = "BOTLER_RUNTIME")]
+        runtime: Option<String>,
+    },
+    /// Remove unused images and exports, and run logs older than `--logs-older-than`.
+    Gc {
+        #[arg(long, default_value = "30d")]
+        logs_older_than: botler_core::duration::HumanDuration,
+        /// `podman` or `docker` (default: auto-detect).
+        #[arg(long, env = "BOTLER_RUNTIME")]
+        runtime: Option<String>,
     },
 }
 
@@ -170,7 +188,14 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Status => status(paths).await,
         Command::Template { command: TemplateCommand::Status } => template_status(paths).await,
-        Command::Backup { dest, no_key } => backup(&paths, &dest, !no_key).await,
+        Command::Backup { dest, no_key, full } => backup(&paths, &dest, !no_key, full).await,
+        Command::Storage { runtime } => storage(runtime_hub(paths, runtime).await?).await,
+        Command::Gc { logs_older_than, runtime } => {
+            let hub = runtime_hub(paths, runtime).await?;
+            let freed = botler_hub::storage::collect_garbage(&hub, logs_older_than.0).await?;
+            println!("freed {}", human_bytes(freed));
+            Ok(())
+        }
     }
 }
 
@@ -281,7 +306,7 @@ async fn template_status(paths: Paths) -> anyhow::Result<()> {
 /// assets, images, the search index `search.db`) is derived and rebuilt by the hub.
 const BACKUP_DIRS: &[&str] = &["repo.git", "memory", "sessions", "workspaces", "homes", "shared-homes", "uploads"];
 
-async fn backup(paths: &Paths, dest: &std::path::Path, with_key: bool) -> anyhow::Result<()> {
+async fn backup(paths: &Paths, dest: &std::path::Path, with_key: bool, full: bool) -> anyhow::Result<()> {
     if !paths.db().exists() {
         bail!("{} is not initialised; run `botler init`", paths.root.display());
     }
@@ -292,7 +317,7 @@ async fn backup(paths: &Paths, dest: &std::path::Path, with_key: bool) -> anyhow
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
     let file = opts.open(dest).with_context(|| format!("creating {}", dest.display()))?;
     let staging = dest.with_extension("staging");
-    let result = write_backup(paths, file, &staging, with_key).await;
+    let result = write_backup(paths, file, &staging, with_key, full).await;
     let cleanup = match std::fs::remove_dir_all(&staging) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
         _ => Ok(()),
@@ -320,13 +345,32 @@ async fn write_backup(
     file: std::fs::File,
     staging: &std::path::Path,
     with_key: bool,
+    full: bool,
 ) -> anyhow::Result<()> {
     std::fs::create_dir(staging).with_context(|| format!("creating {}", staging.display()))?;
+    // What git ignores in the checkouts of homes and workspaces is rebuildable. tar's own
+    // `--exclude-vcs-ignores` gets negations and anchoring wrong, so git lists it; names with a
+    // newline cannot be written as a pattern and stay in.
+    let mut excludes = String::new();
+    if !full {
+        for dir in ["homes", "shared-homes", "workspaces"] {
+            for p in botler_hub::storage::ignored_paths(&paths.root.join(dir))? {
+                let rel = p.strip_prefix(&paths.root)?.to_string_lossy().into_owned();
+                if !rel.contains('\n') {
+                    excludes.push_str(&rel);
+                    excludes.push('\n');
+                }
+            }
+        }
+    }
+    let exclude_file = std::path::absolute(staging.join("excludes"))?;
+    std::fs::write(&exclude_file, excludes)?;
     let store = botler_store::Store::open(&paths.db()).await?;
     store.backup(&staging.join("hub.db")).await.context("snapshotting hub.db")?;
     let zstd = tokio::process::Command::new("zstd").arg("--version").output().await.is_ok_and(|o| o.status.success());
     let mut tar = tokio::process::Command::new("tar");
     tar.arg("-c").arg(if zstd { "--zstd" } else { "--gzip" }).arg("-f").arg("-");
+    tar.args(["--no-wildcards", "--anchored"]).arg("--exclude-from").arg(&exclude_file);
     // Absolute, because each `-C` is relative to the previous one.
     tar.arg("-C").arg(std::path::absolute(staging)?).arg("hub.db").arg("-C").arg(std::path::absolute(&paths.root)?);
     tar.args(BACKUP_DIRS.iter().filter(|d| paths.root.join(d).exists()));
@@ -344,6 +388,50 @@ async fn write_backup(
         }
         _ => bail!("tar failed ({status})"),
     }
+}
+
+/// A hub handle with the real container runtime (no containers started), for commands that look
+/// at images: with a fake runtime every image and export would look unused.
+async fn runtime_hub(paths: Paths, runtime: Option<String>) -> anyhow::Result<Arc<Hub>> {
+    if !paths.repo().exists() {
+        bail!("{} is not initialised; run `botler init`", paths.root.display());
+    }
+    let rt = Runtime::detect(runtime.as_deref()).await.context("no container runtime")?;
+    let config = HubConfig::new(SocketAddr::from(([127, 0, 0, 1], 0)));
+    Ok(Hub::open(paths, config, Arc::new(rt)).await?)
+}
+
+async fn storage(hub: Arc<Hub>) -> anyhow::Result<()> {
+    let o = botler_hub::storage::overview(&hub, true).await?;
+    println!("total      {}", human_bytes(o.total_bytes));
+    for c in &o.chats {
+        let packed = if c.packed { " (packed)" } else { "" };
+        println!(
+            "chat       {:<28} {:<9} {:>10}  home {}{packed}, workspace {}, session {}",
+            c.instance,
+            c.state,
+            human_bytes(c.total_bytes),
+            human_bytes(c.home_bytes),
+            human_bytes(c.workspace_bytes),
+            human_bytes(c.session_bytes)
+        );
+    }
+    for i in &o.items {
+        let kind = serde_json::to_value(i.kind)?;
+        println!("{:<10} {:<28} {:>10}", kind.as_str().unwrap_or_default(), i.name, human_bytes(i.bytes));
+    }
+    Ok(())
+}
+
+fn human_bytes(n: u64) -> String {
+    let mut v = n as f64;
+    for unit in ["B", "KiB", "MiB", "GiB"] {
+        if v < 1024.0 {
+            return format!("{v:.1} {unit}");
+        }
+        v /= 1024.0;
+    }
+    format!("{v:.1} TiB")
 }
 
 async fn shutdown_signal() {

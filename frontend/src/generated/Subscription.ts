@@ -16,4 +16,8 @@ filter: { [key in string]: JsonValue },
 /**
  * `false`: delivered as a quiet note that rides along with whatever wakes the chat next.
  */
-wake: boolean, note: string | null, created_at: string, };
+wake: boolean, note: string | null, created_at: string, 
+/**
+ * Why it no longer applies (its event type is gone); stale subscriptions are not routed.
+ */
+stale: string | null, };

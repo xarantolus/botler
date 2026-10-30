@@ -26,6 +26,9 @@ pub struct Grant {
     pub revoked_at: Option<DateTime<Utc>>,
     /// The holder is archived: the grant applies again when it is restored.
     pub suspended: bool,
+    /// Why it no longer applies (its resource is gone or has no values); stale grants are kept
+    /// for the record but never applied.
+    pub stale: Option<String>,
 }
 
 impl Grant {
@@ -76,6 +79,7 @@ fn grant_row(r: &SqliteRow) -> Result<Grant> {
         created_at: parse_ts(T, r.get("created_at"))?,
         revoked_at: parse_opt_ts(T, r.get("revoked_at"))?,
         suspended: r.get("suspended"),
+        stale: r.get("stale"),
     })
 }
 
@@ -90,6 +94,7 @@ fn sub_row(r: &SqliteRow) -> Result<Subscription> {
         wake: r.get("wake"),
         note: r.get("note"),
         created_at: parse_ts(T, r.get("created_at"))?,
+        stale: r.get("stale"),
     })
 }
 
@@ -102,7 +107,9 @@ impl Store {
         mode: Option<MountMode>,
         granted_by: &str,
     ) -> Result<Grant> {
-        if let Some(g) = self.live_grants(holder).await?.into_iter().find(|g| g.resource() == *resource) {
+        if let Some(g) =
+            self.live_grants(holder).await?.into_iter().find(|g| g.stale.is_none() && g.resource() == *resource)
+        {
             return Ok(g);
         }
         let id = new_id();
@@ -190,11 +197,27 @@ impl Store {
     pub async fn active_subscriptions(&self) -> Result<Vec<Subscription>> {
         let rows = sqlx::query(
             "SELECT s.* FROM subscriptions s JOIN instances i ON i.name = s.instance
-             WHERE i.state != 'archived' ORDER BY s.id",
+             WHERE i.state != 'archived' AND s.stale IS NULL ORDER BY s.id",
         )
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(sub_row).collect()
+    }
+
+    /// Mark a grant as no longer applying, with the reason.
+    pub async fn mark_grant_stale(&self, id: &str, reason: &str) -> Result<()> {
+        sqlx::query("UPDATE grants SET stale = ? WHERE id = ?").bind(reason).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Mark a subscription as no longer applying, with the reason.
+    pub async fn mark_subscription_stale(&self, id: &str, reason: &str) -> Result<()> {
+        sqlx::query("UPDATE subscriptions SET stale = ? WHERE id = ?")
+            .bind(reason)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn delete_subscription(&self, id: &str) -> Result<bool> {
