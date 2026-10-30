@@ -283,6 +283,18 @@ pub const BUILTIN: &[BuiltinEvent] = &[
                    on. Carry on with what needed it, or stop using it.",
     },
     BuiltinEvent {
+        kind: kinds::CHAT_RESTORED,
+        summary: "This chat was archived and has been restored; the world may have changed meanwhile.",
+        fields: &[("archived_at", "when it was archived"), ("changes", "what no longer applies, one line each")],
+        follow_up: &[FollowUp {
+            tool: "list_connections",
+            args: &[],
+            why: "what this chat holds and is subscribed to now (stale edges are marked)",
+        }],
+        guidance: "Do not assume the access you had before archiving. If you still need something listed as \
+                   changed, ask again with `request_access` or `subscribe`; otherwise work without it.",
+    },
+    BuiltinEvent {
         kind: kinds::ENVIRONMENT_UPDATED,
         summary: "Your container was restarted with a changed environment (e.g. a merged change); this conversation goes on.",
         fields: &[("changes", "what changed: tools, image, instructions, pi resources, secrets, services")],
@@ -406,6 +418,7 @@ mod tests {
             kinds::AGENT_TURN_FAILED,
             kinds::REPLY_OVERDUE,
             kinds::ACCESS_CHANGED,
+            kinds::CHAT_RESTORED,
             kinds::ENVIRONMENT_UPDATED,
         ] {
             assert!(builtin(k).is_some(), "{k} missing from catalog");

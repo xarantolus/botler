@@ -85,12 +85,20 @@ impl Env {
     }
 
     pub async fn commit(&self, files: &[(&str, &str)]) {
+        self.commit_removing(files, &[]).await;
+    }
+
+    /// Like [`Env::commit`], also deleting `removed` paths.
+    pub async fn commit_removing(&self, files: &[(&str, &str)], removed: &[&str]) {
         let work = self._dir.path().join(format!("clone-{}", uuid::Uuid::now_v7()));
         git(self._dir.path(), &["clone", "-q", self.hub.repo.git_dir().to_str().unwrap(), work.to_str().unwrap()]);
         for (rel, body) in files {
             let p = work.join(rel);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, body).unwrap();
+        }
+        for rel in removed {
+            git(&work, &["rm", "-r", "-q", rel]);
         }
         git(&work, &["add", "-A"]);
         git(&work, &["commit", "-q", "-m", "test change"]);

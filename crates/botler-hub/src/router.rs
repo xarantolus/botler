@@ -93,9 +93,18 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
             };
             // Messaging an archived chat restores it: archiving hides, it never locks away. A
             // note or a held message does not.
+            let mut held = held;
             if instance.state == InstanceState::Archived && !quiet && held.is_none() {
                 tracing::info!(instance = %instance.name, "restoring archived chat for a new message");
-                hub.store.restore_instance(&instance.name).await?;
+                match crate::restore::restore(hub, &instance.name, false).await {
+                    Ok(_) => {}
+                    // Held until the user restores it as a generic chat (or deletes it).
+                    Err(e @ HubError::DefinitionGone { .. }) => {
+                        tracing::warn!(error = %e, "cannot restore for a new message; holding it");
+                        held = Some(crate::restore::held_subject(&instance.name));
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             if let Some(subject) = &held {
                 tracing::info!(event = %ev.id, %subject, "holding a message on a paused pair");

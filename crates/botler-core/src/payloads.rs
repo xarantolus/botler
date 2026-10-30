@@ -272,6 +272,17 @@ pub struct AccessChangedPayload {
     pub note: String,
 }
 
+/// `chat.restored`: this chat was archived and is back. Lists what changed meanwhile; a quiet
+/// note that rides along with the delivery that restored it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct ChatRestoredPayload {
+    /// When it was archived.
+    pub archived_at: Option<DateTime<Utc>>,
+    /// What changed, one line each (grants and subscriptions that no longer apply, a definition
+    /// that is gone).
+    pub changes: Vec<String>,
+}
+
 /// `environment.updated`: this chat was restarted (or woke) with a changed container, e.g. after
 /// a merge. Delivered as a quiet note ahead of whatever is delivered next.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -343,6 +354,8 @@ pub enum BuiltinPayload {
     Schedule(SchedulePayload),
     #[serde(rename = "access.changed")]
     AccessChanged(AccessChangedPayload),
+    #[serde(rename = "chat.restored")]
+    ChatRestored(ChatRestoredPayload),
     #[serde(rename = "environment.updated")]
     EnvironmentUpdated(EnvironmentUpdatedPayload),
 }
@@ -367,6 +380,7 @@ impl BuiltinPayload {
             Self::Timer(_) => kinds::TIMER,
             Self::Schedule(_) => kinds::SCHEDULE,
             Self::AccessChanged(_) => kinds::ACCESS_CHANGED,
+            Self::ChatRestored(_) => kinds::CHAT_RESTORED,
             Self::EnvironmentUpdated(_) => kinds::ENVIRONMENT_UPDATED,
         }
     }
@@ -389,6 +403,7 @@ impl BuiltinPayload {
             Self::Timer(p) => serde_json::to_value(p),
             Self::Schedule(p) => serde_json::to_value(p),
             Self::AccessChanged(p) => serde_json::to_value(p),
+            Self::ChatRestored(p) => serde_json::to_value(p),
             Self::EnvironmentUpdated(p) => serde_json::to_value(p),
         }
     }
@@ -422,6 +437,7 @@ pub fn builtin_schema(kind: &str) -> Option<serde_json::Value> {
         kinds::SCHEDULE => s::<SchedulePayload>(),
         kinds::TRIAL_FINISHED => s::<TrialFinishedPayload>(),
         kinds::ACCESS_CHANGED => s::<AccessChangedPayload>(),
+        kinds::CHAT_RESTORED => s::<ChatRestoredPayload>(),
         kinds::ENVIRONMENT_UPDATED => s::<EnvironmentUpdatedPayload>(),
         _ => None,
     }
@@ -472,6 +488,7 @@ mod tests {
             (kinds::TIMER, fields::<TimerPayload>()),
             (kinds::SCHEDULE, fields::<SchedulePayload>()),
             (kinds::ACCESS_CHANGED, fields::<AccessChangedPayload>()),
+            (kinds::CHAT_RESTORED, fields::<ChatRestoredPayload>()),
             (kinds::ENVIRONMENT_UPDATED, fields::<EnvironmentUpdatedPayload>()),
         ];
         for b in BUILTIN {

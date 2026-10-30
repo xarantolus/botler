@@ -41,6 +41,37 @@ impl Store {
         Ok(())
     }
 
+    /// Journal `e` as routed and queue it to `instance` as a quiet note, in one transaction (so
+    /// the router never sees it unrouted).
+    pub async fn append_note(&self, e: &Event, instance: &str) -> Result<()> {
+        let body =
+            serde_json::to_string(e).map_err(|err| Error::Corrupt { table: "events", detail: err.to_string() })?;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO events (id, kind, source, body, to_instance, correlation, at, routed) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+        )
+        .bind(e.id.to_string())
+        .bind(&e.kind)
+        .bind(e.source.key())
+        .bind(body)
+        .bind(&e.to)
+        .bind(e.correlation.map(|c| c.to_string()))
+        .bind(ts(e.at))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO deliveries (id, event_id, instance, status, created_at, quiet) VALUES (?, ?, ?, 'pending', ?, 1)",
+        )
+        .bind(crate::new_id())
+        .bind(e.id.to_string())
+        .bind(instance)
+        .bind(ts(Utc::now()))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn event(&self, id: &str) -> Result<Event> {
         let row = sqlx::query("SELECT body FROM events WHERE id = ?").bind(id).fetch_optional(&self.pool).await?;
         let row = row.ok_or_else(|| crate::not_found("event", id))?;
