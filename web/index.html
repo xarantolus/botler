@@ -147,7 +147,8 @@ const store = {
 // The always-on front-door chat (botler_core::FRONT_DOOR): pinned first, never archived.
 const FRONT_DOOR = "botler";
 let token = store.get("botler.token");
-let current = store.get("botler.chat") || FRONT_DOOR;
+// "main" was the front door's name before it was renamed.
+let current = [null, "main"].includes(store.get("botler.chat")) ? FRONT_DOOR : store.get("botler.chat");
 let tab = "events";
 let lastSessionKey = "";
 let flashDelivery = null;
