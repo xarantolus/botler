@@ -1,15 +1,16 @@
 <script setup lang="ts">
 // The command palette (Cmd/Ctrl+K): jump to a chat, a request or a section, or act.
 import type { CommandPaletteGroup, CommandPaletteItem } from "@nuxt/ui";
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { useRouter } from "vue-router";
 import { chatTitle } from "../../lib/events";
 import { sections } from "../../navigation";
 import { shell } from "../../shell";
+import { BUILTIN_SHORTCUTS, SHORTCUTS } from "../../shortcuts";
 import { frontDoorName, logout, state, waitingByInstance } from "../../store";
 
 const router = useRouter();
-const searchTerm = ref("");
+const searchTerm = computed({ get: () => shell.paletteTerm, set: (v: string) => (shell.paletteTerm = v) });
 
 const groups = computed((): CommandPaletteGroup<CommandPaletteItem>[] => {
   const door = frontDoorName.value;
@@ -69,10 +70,18 @@ const groups = computed((): CommandPaletteGroup<CommandPaletteItem>[] => {
         onSelect: () => void router.push({ name: s.name }),
       })),
     },
+    {
+      id: "shortcuts",
+      label: "Keyboard shortcuts",
+      items: [
+        ...SHORTCUTS.map((s) => ({ label: s.label, suffix: "shortcut", kbds: s.kbds, icon: "i-lucide-keyboard", onSelect: () => s.run(router) })),
+        ...BUILTIN_SHORTCUTS.map((s) => ({ label: s.label, suffix: "shortcut", kbds: s.kbds, icon: "i-lucide-keyboard", disabled: true })),
+      ],
+    },
   ];
 });
 </script>
 
 <template>
-  <UDashboardSearch v-model:search-term="searchTerm" :groups="groups" placeholder="Search chats, requests, sections, or everything…" />
+  <UDashboardSearch v-model:open="shell.palette" v-model:search-term="searchTerm" :groups="groups" placeholder="Search chats, requests, sections, or everything…" />
 </template>
