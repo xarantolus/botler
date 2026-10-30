@@ -5,14 +5,13 @@
 
 use botler_core::catalog::touches;
 use botler_core::defs::{AgentKind, Target};
-use botler_core::event::kinds;
+use botler_core::payloads::{BreakerKind, BreakerTrippedPayload, BuiltinPayload, DialogAbortedPayload, MessagePayload};
 use botler_core::routing::{Action, Dispatch, Routed, route};
-use botler_core::{Event, Provenance, Source};
+use botler_core::{Event, Source};
 use botler_store::{DialogStatus, InstanceState, NewInstance};
-use chrono::Utc;
-use serde_json::json;
 
-use crate::hub::{Hub, HubError, Result};
+use crate::hub::{Hub, HubError, Result, builtin};
+use crate::loops::AgentDelivery;
 
 /// Route every unrouted event. Returns how many were processed.
 pub async fn route_pending(hub: &Hub) -> Result<usize> {
@@ -62,12 +61,6 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
     match &d.action {
         Action::Deliver(name) => {
             let instance = match hub.store.resolve_instance(name).await? {
-                // Messaging an archived chat restores it: archiving hides, it never locks away.
-                Some(i) if i.state == InstanceState::Archived => {
-                    tracing::info!(instance = %i.name, "restoring archived chat for a new message");
-                    hub.store.restore_instance(&i.name).await?;
-                    i
-                }
                 Some(i) => i,
                 None => match applied.defs.agents.get(name) {
                     Some(def) if def.spec.kind == AgentKind::Persistent => {
@@ -79,6 +72,7 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
                                 session_file: format!("{name}.jsonl"),
                                 branch: None,
                                 parent: None,
+                                depth: 0,
                                 task: None,
                             })
                             .await?
@@ -86,8 +80,34 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
                     _ => return Err(HubError::Undefined { kind: "instance", name: name.clone() }),
                 },
             };
+            // Between agents, the loop defences decide: a note, a held message, or a normal one.
+            let (quiet, held) = match &ev.source {
+                Source::Agent(from) if *from != instance.name => {
+                    match crate::loops::agent_delivery(hub, ev, from, &instance.name).await? {
+                        AgentDelivery::Deliver { quiet } => (quiet, None),
+                        AgentDelivery::Hold { subject } => (false, Some(subject)),
+                    }
+                }
+                _ => (false, None),
+            };
+            // Messaging an archived chat restores it: archiving hides, it never locks away. A
+            // note or a held message does not.
+            if instance.state == InstanceState::Archived && !quiet && held.is_none() {
+                tracing::info!(instance = %instance.name, "restoring archived chat for a new message");
+                hub.store.restore_instance(&instance.name).await?;
+            }
+            if let Some(subject) = &held {
+                tracing::info!(event = %ev.id, %subject, "holding a message on a paused pair");
+            }
             hub.store
-                .enqueue_delivery(&ev.id.to_string(), &instance.name, d.trigger.as_deref(), d.prompt.as_deref())
+                .enqueue_delivery_with(
+                    &ev.id.to_string(),
+                    &instance.name,
+                    d.trigger.as_deref(),
+                    d.prompt.as_deref(),
+                    quiet,
+                    held.as_deref(),
+                )
                 .await?;
             hub.dispatch_notify.notify_one();
         }
@@ -113,6 +133,18 @@ pub async fn new_instance(hub: &Hub, definition: &str, parent: Option<&str>, tas
     if !applied.defs.agents.contains_key(definition) {
         return Err(HubError::Undefined { kind: "agent", name: definition.into() });
     }
+    let depth = match parent {
+        Some(p) => match hub.store.find_instance(p).await? {
+            Some(parent) => parent.depth + 1,
+            // A parent that is not an instance (e.g. a hub-side caller name) starts a new tree.
+            None => 0,
+        },
+        None => 0,
+    };
+    let max = applied.defs.instance.defaults.max_spawn_depth;
+    if depth > max {
+        return Err(HubError::SpawnTooDeep { parent: parent.unwrap_or_default().into(), depth: depth - 1 });
+    }
     let suffix = &uuid::Uuid::now_v7().simple().to_string()[20..];
     let name = format!("{definition}-{suffix}");
     hub.store
@@ -123,6 +155,7 @@ pub async fn new_instance(hub: &Hub, definition: &str, parent: Option<&str>, tas
             session_file: format!("{name}.jsonl"),
             branch: None,
             parent: parent.map(String::from),
+            depth,
             task: task.map(String::from),
         })
         .await?;
@@ -143,14 +176,8 @@ pub async fn spawn(
     let ev = match event {
         Some(e) => e.clone(),
         None => {
-            let e = Event::new(
-                kinds::MESSAGE,
-                parent.map_or(Source::Hub, |p| Source::Agent(p.into())),
-                Provenance::Trusted,
-                Utc::now(),
-            )
-            .to(name.clone())
-            .payload(json!({ "text": task.unwrap_or("") }));
+            let task = BuiltinPayload::Message(MessagePayload { text: task.unwrap_or("").into(), files: vec![] });
+            let e = builtin(task, parent.map_or(Source::Hub, |p| Source::Agent(p.into())))?.to(name.clone());
             hub.store.append_event(&e).await?;
             hub.store.mark_routed(&e.id.to_string()).await?;
             e
@@ -216,9 +243,12 @@ async fn abort_dialogs(hub: &Hub, ev: &Event) -> Result<()> {
         if let Some(hit) = d.about.iter().find(|a| targets.contains(a)) {
             let reason = format!("{} changed ({})", hit, ev.kind);
             if hub.store.close_dialog(&d.id, DialogStatus::Aborted, &reason).await? {
-                let abort = Event::new(kinds::DIALOG_ABORTED, Source::Hub, Provenance::Trusted, Utc::now())
-                    .to(d.instance.clone())
-                    .payload(json!({ "dialog_id": d.id, "question": d.question, "reason": reason }));
+                let payload = BuiltinPayload::DialogAborted(DialogAbortedPayload {
+                    dialog_id: d.id.clone(),
+                    question: d.question.clone(),
+                    reason,
+                });
+                let abort = builtin(payload, Source::Hub)?.to(d.instance.clone());
                 hub.emit(abort).await?;
             }
         }
@@ -232,12 +262,16 @@ async fn trip_cycle_breaker(hub: &Hub, ev: &Event, hops: u32) -> Result<()> {
     let reason = format!("conversation chain reached {hops} hops (last: {} from {})", ev.kind, ev.source.key());
     if hub.store.trip_breaker(&subject, "cycle", &reason).await? {
         tracing::warn!(%subject, %reason, "cycle breaker tripped");
-        let alarm = Event::new(kinds::BREAKER_TRIPPED, Source::Hub, Provenance::Trusted, Utc::now())
-            .to("main")
-            .urgent(true)
-            .payload(
-                json!({ "subject": subject, "breaker": "cycle", "reason": reason, "correlation": chain.to_string() }),
-            );
+        let payload = BreakerTrippedPayload {
+            subject: subject.clone(),
+            breaker: BreakerKind::Cycle,
+            reason,
+            correlation: Some(chain.to_string()),
+            pair: None,
+            recent: Vec::new(),
+        };
+        let alarm =
+            builtin(BuiltinPayload::BreakerTripped(payload), Source::Hub)?.to(botler_core::FRONT_DOOR).urgent(true);
         hub.emit(alarm).await?;
     }
     Ok(())
@@ -247,13 +281,12 @@ async fn trip_cycle_breaker(hub: &Hub, ev: &Event, hops: u32) -> Result<()> {
 async fn report_failure(hub: &Hub, ev: &Event, err: &HubError) -> Result<()> {
     let to = match &ev.source {
         Source::Agent(a) => a.clone(),
-        // Failures of hub-originated events go to main, unless main itself is the problem.
-        _ if ev.to.as_deref() != Some("main") => "main".into(),
+        // Failures of hub-originated events go to the front door, unless it is the problem.
+        _ if ev.to.as_deref() != Some(botler_core::FRONT_DOOR) => botler_core::FRONT_DOOR.into(),
         _ => return Ok(()),
     };
-    let note = Event::new(kinds::MESSAGE, Source::Hub, Provenance::Trusted, Utc::now())
-        .to(to)
-        .payload(json!({ "text": format!("Could not route event {} ({}): {err}", ev.id, ev.kind) }));
+    let text = format!("Could not route event {} ({}): {err}", ev.id, ev.kind);
+    let note = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![] }), Source::Hub)?.to(to);
     hub.emit(note).await?;
     Ok(())
 }

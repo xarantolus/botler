@@ -6,4 +6,8 @@ export type HubStatus = { version: string,
 /**
  * The monorepo commit whose definitions are applied.
  */
-commit: string, paused: boolean, runtime: RuntimeInfo, open_dialogs: number, open_incidents: number, breakers: Array<Breaker>, };
+commit: string, paused: boolean, 
+/**
+ * The front-door chat (the user's default conversation, pinned on top).
+ */
+front_door: string, runtime: RuntimeInfo, open_dialogs: number, open_incidents: number, breakers: Array<Breaker>, };

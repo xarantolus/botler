@@ -19,7 +19,7 @@ use crate::trigger::ScheduleSpec;
 /// A trigger with its owner and target resolved.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ResolvedTrigger {
-    /// Stable id: `<file path>#<name>`, e.g. `agents/main/agent.toml#morning`.
+    /// Stable id: `<file path>#<name>`, e.g. `agents/botler/agent.toml#morning`.
     pub id: String,
     pub spec: Trigger,
     pub kind: TriggerKind,
@@ -218,6 +218,19 @@ impl Loader<'_> {
     }
 }
 
+/// Whether the TOML file at `path` has the top-level key `key` (for keys that were renamed, so the
+/// error names the replacement instead of serde's generic "unknown field").
+fn renamed_key(tree: &dyn Tree, path: &str, key: &str) -> bool {
+    match tree.read(path) {
+        Ok(Some(bytes)) => String::from_utf8(bytes)
+            .ok()
+            .and_then(|text| toml::from_str::<toml::Table>(&text).ok())
+            .is_some_and(|t| t.contains_key(key)),
+        // Unreadable files are reported by the regular parse that follows.
+        _ => false,
+    }
+}
+
 /// Names of agents, jobs, triggers and instances.
 pub fn valid_name(name: &str) -> bool {
     let mut chars = name.chars();
@@ -350,6 +363,14 @@ pub fn load(tree: &dyn Tree) -> LoadReport {
         let name = entry.name;
         let path = format!("agents/{name}/agent.toml");
         l.check_name(&path, "agent", &name);
+        if renamed_key(tree, &path, "scratch") {
+            l.err(
+                &path,
+                "`scratch` was renamed to `home`: write `home = \"<name>\"` to share a home directory \
+                 (`/home/agent`) between agents, or remove the line for a home of its own",
+            );
+            continue;
+        }
         let Some(spec) = l.toml::<Agent>(&path) else {
             if matches!(tree.read(&path), Ok(None)) {
                 l.err(&format!("agents/{name}"), "agent directory has no agent.toml");
@@ -565,8 +586,8 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
         } else if !a.spec.tools.is_empty() && defs.tools_for(&a.spec).is_empty() {
             l.warn(&path, "tools globs match no tool in tools.manifest.json");
         }
-        if let Some(sc) = &a.spec.scratch {
-            l.check_name(&path, "scratch", sc);
+        if let Some(home) = &a.spec.home {
+            l.check_name(&path, "home", home);
         }
         if a.spec.always_on && a.spec.kind != AgentKind::Persistent {
             l.err(&path, "always_on only applies to persistent agents");

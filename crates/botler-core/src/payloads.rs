@@ -1,11 +1,10 @@
-//! Typed payloads of the built-in event types (see [`crate::catalog`] for what each means).
+//! Typed payloads of the built-in event types (see [`crate::catalog`] for what each means), and
+//! the delivery envelope the pi extension reads.
 //!
 //! Events travel as [`Event`] with a JSON payload, because agent-declared event types have
 //! payloads only their schemas know. Built-in types have a fixed shape, defined here once:
-//! the hub builds them through [`Event::builtin`], and the web app's TypeScript types are
-//! generated from them (`BuiltinPayload`).
-
-use std::collections::BTreeMap;
+//! the hub builds them through [`Event::builtin`] (never ad-hoc JSON), and the web app's
+//! TypeScript types are generated from them (`BuiltinPayload`).
 
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -103,15 +102,45 @@ pub struct ActionResultPayload {
     pub result: serde_json::Value,
 }
 
+/// Which breaker tripped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BreakerKind {
+    /// A correlation chain grew too long.
+    Cycle,
+    /// Two agents kept messaging each other without the user or the outside world in between.
+    Pair,
+}
+
+/// One recent message of a paused conversation, for the user deciding whether to resume.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct MessageExcerpt {
+    pub from: String,
+    pub to: String,
+    pub at: DateTime<Utc>,
+    /// The start of the message text.
+    pub text: String,
+}
+
+/// `breaker.tripped`: something was paused until the user clears it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct BreakerTrippedPayload {
+    /// The breaker's subject; clearing it resumes (`chain:<id>`, `pair:<a>|<b>`).
     pub subject: String,
-    /// `cycle`, `rate` or `wake`.
-    pub breaker: String,
+    pub breaker: BreakerKind,
     pub reason: String,
+    /// The correlation chain, for cycle breakers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub correlation: Option<String>,
+    /// The two agents, for pair breakers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pair: Option<[String; 2]>,
+    /// The last messages between them, oldest first (pair breakers).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<MessageExcerpt>>")]
+    pub recent: Vec<MessageExcerpt>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -119,25 +148,55 @@ pub struct ArchiveRequestedPayload {
     pub reason: Option<String>,
 }
 
+/// `agent.idle`: a spawned agent ended its turn without its last action being a message to
+/// its parent. Delivered to the parent like a message from the child.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct AgentIdlePayload {
     pub instance: String,
     pub title: Option<String>,
     pub slug: Option<String>,
+    /// The child's final answer of the turn (its last assistant text), clipped.
     pub last_reply: String,
 }
 
-/// A fired timer: the payload it was set with, plus its id.
+/// A fired one-off timer. What the woken agent is told is the delivery's prompt.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct TimerPayload {
     pub timer_id: String,
+    /// What it was set for, when the setter gave a note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub note: Option<String>,
-    /// Whatever else the timer was set with.
-    #[serde(flatten)]
-    #[ts(skip)]
-    pub data: BTreeMap<String, serde_json::Value>,
+}
+
+/// A schedule (cron or interval trigger) fired.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct SchedulePayload {
+    /// The trigger id.
+    pub trigger: String,
+    /// The fire time this run stands for.
+    pub scheduled_for: DateTime<Utc>,
+    /// Fires missed during downtime and folded into this one (`missed = run_once`).
+    pub skipped: u32,
+}
+
+/// What the hub sends pi for one delivery (`botler:delivery <json>`); the botler pi extension
+/// parses it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct DeliveryEnvelope {
+    /// Delivery id: the extension drops ids it has already seen.
+    pub id: String,
+    pub event: String,
+    pub kind: String,
+    pub from: String,
+    pub provenance: Provenance,
+    pub correlation: String,
+    /// The rendered text the agent reads.
+    pub body: String,
+    /// A note (e.g. an acknowledgement from another agent): added to the session without
+    /// starting a turn. The agent reads it with whatever wakes it next.
+    #[serde(default)]
+    pub quiet: bool,
 }
 
 /// Every built-in event type with its payload. Serialized as `{ "type": ..., "payload": ... }`,
@@ -167,6 +226,8 @@ pub enum BuiltinPayload {
     AgentIdle(AgentIdlePayload),
     #[serde(rename = "timer")]
     Timer(TimerPayload),
+    #[serde(rename = "schedule")]
+    Schedule(SchedulePayload),
 }
 
 impl BuiltinPayload {
@@ -184,6 +245,7 @@ impl BuiltinPayload {
             Self::ArchiveRequested(_) => kinds::ARCHIVE_REQUESTED,
             Self::AgentIdle(_) => kinds::AGENT_IDLE,
             Self::Timer(_) => kinds::TIMER,
+            Self::Schedule(_) => kinds::SCHEDULE,
         }
     }
 
@@ -200,6 +262,7 @@ impl BuiltinPayload {
             Self::ArchiveRequested(p) => serde_json::to_value(p),
             Self::AgentIdle(p) => serde_json::to_value(p),
             Self::Timer(p) => serde_json::to_value(p),
+            Self::Schedule(p) => serde_json::to_value(p),
         }
     }
 
@@ -250,6 +313,7 @@ mod tests {
             (kinds::ARCHIVE_REQUESTED, fields::<ArchiveRequestedPayload>()),
             (kinds::AGENT_IDLE, fields::<AgentIdlePayload>()),
             (kinds::TIMER, fields::<TimerPayload>()),
+            (kinds::SCHEDULE, fields::<SchedulePayload>()),
         ];
         assert_eq!(typed.len(), BUILTIN.len(), "every built-in event type has a payload type");
         for (kind, typed_fields) in typed {
@@ -262,14 +326,10 @@ mod tests {
 
     #[test]
     fn builtin_roundtrip() {
-        let p = BuiltinPayload::Timer(TimerPayload {
-            timer_id: "t1".into(),
-            note: Some("vacuum".into()),
-            data: BTreeMap::from([("room".into(), serde_json::json!("kitchen"))]),
-        });
+        let p = BuiltinPayload::Timer(TimerPayload { timer_id: "t1".into(), note: Some("vacuum".into()) });
         let ev = Event::builtin(p.clone(), Source::Hub, Provenance::Trusted, Utc::now()).unwrap();
         assert_eq!(ev.kind, "timer");
-        assert_eq!(ev.payload["room"], "kitchen");
+        assert_eq!(ev.payload["note"], "vacuum");
         assert_eq!(BuiltinPayload::of(&ev).unwrap().unwrap(), p);
         let custom = Event::new("mail.received", Source::Hub, Provenance::Trusted, Utc::now());
         assert!(BuiltinPayload::of(&custom).is_none());

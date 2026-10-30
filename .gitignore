@@ -12,6 +12,8 @@ dist/
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
 
 # local runtime data
 /.botler-data/
+.claude/worktrees/

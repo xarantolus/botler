@@ -10,7 +10,7 @@ fn template_loads_without_errors_or_warnings() {
     assert!(report.diagnostics.iter().all(|d| d.severity != Severity::Error), "{problems:#?}");
     assert!(problems.is_empty(), "template should not produce warnings either: {problems:#?}");
     let defs = report.definitions.expect("definitions");
-    assert!(defs.agents.contains_key("main"));
+    assert!(defs.agents.contains_key(botler_core::FRONT_DOOR));
     assert!(defs.agents.contains_key("triage"), "failures need a triage agent");
     assert_eq!(defs.persistent_agents().count(), 1);
 }

@@ -10,6 +10,8 @@ text_enum!(DeliveryStatus {
     Pending = "pending",
     Delivered = "delivered",
     Dropped = "dropped",
+    /// Waiting for the user to clear the breaker named in `note`.
+    Held = "held",
 });
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
@@ -24,6 +26,8 @@ pub struct Delivery {
     pub created_at: DateTime<Utc>,
     pub delivered_at: Option<DateTime<Utc>>,
     pub note: Option<String>,
+    /// Added to the session without starting a turn; never wakes a sleeping agent.
+    pub quiet: bool,
 }
 
 fn row(r: &SqliteRow) -> Result<Delivery> {
@@ -39,6 +43,7 @@ fn row(r: &SqliteRow) -> Result<Delivery> {
         created_at: parse_ts(T, r.get("created_at"))?,
         delivered_at: parse_opt_ts(T, r.get("delivered_at"))?,
         note: r.get("note"),
+        quiet: r.get::<i64, _>("quiet") != 0,
     })
 }
 
@@ -50,17 +55,35 @@ impl Store {
         trigger_id: Option<&str>,
         prompt: Option<&str>,
     ) -> Result<Delivery> {
+        self.enqueue_delivery_with(event_id, instance, trigger_id, prompt, false, None).await
+    }
+
+    /// Queue a delivery that is `quiet` (a note that starts no turn) and/or held until the user
+    /// clears the breaker `held_by`.
+    pub async fn enqueue_delivery_with(
+        &self,
+        event_id: &str,
+        instance: &str,
+        trigger_id: Option<&str>,
+        prompt: Option<&str>,
+        quiet: bool,
+        held_by: Option<&str>,
+    ) -> Result<Delivery> {
         let id = new_id();
+        let status = if held_by.is_some() { DeliveryStatus::Held } else { DeliveryStatus::Pending };
         sqlx::query(
-            "INSERT INTO deliveries (id, event_id, instance, trigger_id, prompt, status, created_at)
-             VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            "INSERT INTO deliveries (id, event_id, instance, trigger_id, prompt, status, created_at, note, quiet)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(event_id)
         .bind(instance)
         .bind(trigger_id)
         .bind(prompt)
+        .bind(status.as_str())
         .bind(ts(Utc::now()))
+        .bind(held_by)
+        .bind(i64::from(quiet))
         .execute(&self.pool)
         .await?;
         self.delivery(&id).await
@@ -81,12 +104,24 @@ impl Store {
         rows.iter().map(row).collect()
     }
 
-    /// Instances that have at least one pending delivery.
-    pub async fn instances_with_pending(&self) -> Result<Vec<String>> {
-        let rows = sqlx::query("SELECT DISTINCT instance FROM deliveries WHERE status = 'pending'")
-            .fetch_all(&self.pool)
+    /// Instances that have at least one pending delivery, and whether any of those should wake
+    /// the instance (false: only quiet notes, delivered when it is awake anyway).
+    pub async fn instances_with_pending(&self) -> Result<Vec<(String, bool)>> {
+        let rows = sqlx::query(
+            "SELECT instance, MAX(quiet = 0) AS wakes FROM deliveries WHERE status = 'pending' GROUP BY instance",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(|r| (r.get("instance"), r.get::<i64, _>("wakes") != 0)).collect())
+    }
+
+    /// Release the deliveries a breaker held back. Returns how many.
+    pub async fn release_held(&self, subject: &str) -> Result<u64> {
+        let r = sqlx::query("UPDATE deliveries SET status = 'pending', note = NULL WHERE status = 'held' AND note = ?")
+            .bind(subject)
+            .execute(&self.pool)
             .await?;
-        Ok(rows.iter().map(|r| r.get("instance")).collect())
+        Ok(r.rows_affected())
     }
 
     /// Every delivery an event caused (for tracing an event to the chats it reached).

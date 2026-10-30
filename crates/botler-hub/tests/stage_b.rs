@@ -18,36 +18,36 @@ async fn settle() {
 }
 
 #[tokio::test]
-async fn message_wakes_main_and_is_delivered_once() {
+async fn message_wakes_botler_and_is_delivered_once() {
     let e = env().await;
     with_key(&e).await;
     let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
-        .to("main")
+        .to("botler")
         .payload(json!({"text": "hello"}));
     e.hub.emit(ev).await.unwrap();
     e.route().await;
     agents::dispatch_pending(&e.hub).await.unwrap();
 
-    let name = agents::container_name("main");
+    let name = agents::container_name("botler");
     let c = &e.fake.containers()[&name];
     let cmd = c.spec.command.join(" ");
-    assert!(cmd.contains("--mode rpc") && cmd.contains("--session /botler/sessions/main.jsonl"), "{cmd}");
+    assert!(cmd.contains("--mode rpc") && cmd.contains("--session /botler/sessions/botler.jsonl"), "{cmd}");
     assert!(cmd.contains("--model openrouter/deepseek/deepseek-v4.1-flash"), "{cmd}");
     assert_eq!(c.spec.env["OPENROUTER_API_KEY"], "sk-test");
     assert_eq!(c.spec.env["PI_OFFLINE"], "1");
     assert!(
         c.spec.mounts.iter().any(|m| matches!(m, botler_runtime::Mount::Tmpfs { dst } if dst == "/botler/agent-dir"))
     );
-    let models = std::fs::read_to_string(e.hub.paths.agent_dir("main").join("models.json")).unwrap();
+    let models = std::fs::read_to_string(e.hub.paths.agent_dir("botler").join("models.json")).unwrap();
     assert!(models.contains("\"$OPENROUTER_API_KEY\"") && models.contains("16384"), "{models}");
     assert!(!models.contains("null"), "pi ignores models.json containing nulls: {models}");
     assert!(!models.contains("sk-test"), "secret values never land in rendered files");
-    assert!(e.hub.paths.workspace("main").join(".git").exists());
+    assert!(e.hub.paths.workspace("botler").join(".git").exists());
 
     let prompts = e.fake.prompts(&name);
     assert_eq!(prompts.len(), 1);
     assert!(prompts[0].starts_with("botler:delivery ") && prompts[0].contains("hello"));
-    assert!(e.hub.store.pending_deliveries("main").await.unwrap().is_empty());
+    assert!(e.hub.store.pending_deliveries("botler").await.unwrap().is_empty());
 
     // A redelivery of the same delivery id (crash between prompt and mark_delivered) is dropped
     // by the extension, so the agent sees it once.
@@ -64,23 +64,23 @@ async fn message_wakes_main_and_is_delivered_once() {
         .unwrap()
         .into();
     let delivery = e.hub.store.delivery(&first_id).await.unwrap();
-    let agent = e.hub.agents.get("main").await.unwrap();
-    let again = agent.pi.prompt(&agents::envelope(&delivery, &ev), &[], None).await.unwrap();
+    let agent = e.hub.agents.get("botler").await.unwrap();
+    let again = agent.pi.prompt(&agents::envelope(&delivery, &ev).unwrap(), &[], None).await.unwrap();
     assert_eq!(again, botler_runtime::Disposition::Handled);
     assert_eq!(e.fake.prompts(&name).len(), 1);
     settle().await;
-    assert_eq!(e.hub.store.instance("main").await.unwrap().state, InstanceState::Running);
+    assert_eq!(e.hub.store.instance("botler").await.unwrap().state, InstanceState::Running);
 }
 
 #[tokio::test]
-async fn idle_chats_sleep_and_always_on_main_stays() {
+async fn idle_chats_sleep_and_always_on_botler_stays() {
     let e = env().await;
     with_key(&e).await;
-    let child = router::spawn(&e.hub, "dev", Some("main"), Some("build a thing"), None, None).await.unwrap();
+    let child = router::spawn(&e.hub, "dev", Some("botler"), Some("build a thing"), None, None).await.unwrap();
     e.hub
         .emit(
             Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
-                .to("main")
+                .to("botler")
                 .payload(json!({"text": "hi"})),
         )
         .await
@@ -92,8 +92,8 @@ async fn idle_chats_sleep_and_always_on_main_stays() {
 
     agents::reap_idle(&e.hub, Utc::now() + Duration::hours(2)).await.unwrap();
     settle().await;
-    // `main` is always_on in the template, so it is never reaped.
-    assert_eq!(e.hub.store.instance("main").await.unwrap().state, InstanceState::Running);
+    // `botler` is always_on in the template, so it is never reaped.
+    assert_eq!(e.hub.store.instance("botler").await.unwrap().state, InstanceState::Running);
     assert_eq!(
         e.hub.store.instance(&child).await.unwrap().state,
         InstanceState::Dormant,
@@ -108,27 +108,27 @@ async fn missing_secret_defers_delivery() {
     e.hub
         .emit(
             Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
-                .to("main")
+                .to("botler")
                 .payload(json!({"text": "hi"})),
         )
         .await
         .unwrap();
     e.route().await;
     agents::dispatch_pending(&e.hub).await.unwrap();
-    assert_eq!(e.hub.store.pending_deliveries("main").await.unwrap().len(), 1, "waits until the key is entered");
+    assert_eq!(e.hub.store.pending_deliveries("botler").await.unwrap().len(), 1, "waits until the key is entered");
     with_key(&e).await;
     agents::dispatch_pending(&e.hub).await.unwrap();
-    assert!(e.hub.store.pending_deliveries("main").await.unwrap().is_empty());
+    assert!(e.hub.store.pending_deliveries("botler").await.unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn always_on_main_starts_without_a_message() {
+async fn always_on_botler_starts_without_a_message() {
     let e = env().await;
     with_key(&e).await;
     agents::keep_always_on(&e.hub).await.unwrap();
-    assert_eq!(e.hub.store.instance("main").await.unwrap().state, InstanceState::Running);
-    assert!(e.fake.containers().contains_key(&agents::container_name("main")));
-    assert!(e.fake.prompts(&agents::container_name("main")).is_empty(), "no prompt needed to be up");
+    assert_eq!(e.hub.store.instance("botler").await.unwrap().state, InstanceState::Running);
+    assert!(e.fake.containers().contains_key(&agents::container_name("botler")));
+    assert!(e.fake.prompts(&agents::container_name("botler")).is_empty(), "no prompt needed to be up");
 }
 
 #[tokio::test]
@@ -138,7 +138,7 @@ async fn crashing_always_on_agent_backs_off_and_opens_an_incident() {
     e.fake.set_crash_on_start(true);
     let mut starts = 0;
     for _ in 0..20 {
-        if agents::keep_always_on(&e.hub).await.is_ok() && e.hub.agents.get("main").await.is_some() {
+        if agents::keep_always_on(&e.hub).await.is_ok() && e.hub.agents.get("botler").await.is_some() {
             starts += 1;
         }
         settle().await;
@@ -179,7 +179,7 @@ async fn emit_event_validates_and_explains() {
 async fn sleeping_chat_is_woken_by_a_message_with_its_workspace() {
     let e = env().await;
     with_key(&e).await;
-    let chat = router::spawn(&e.hub, "dev", Some("main"), Some("start"), None, None).await.unwrap();
+    let chat = router::spawn(&e.hub, "dev", Some("botler"), Some("start"), None, None).await.unwrap();
     agents::dispatch_pending(&e.hub).await.unwrap();
     settle().await;
     let marker = e.hub.paths.workspace(&chat).join("notes.txt");
@@ -211,7 +211,7 @@ async fn archive_hands_over_and_messaging_restores() {
     use botler_hub::ops::{self, Caller, OpError};
     let e = env().await;
     with_key(&e).await;
-    let chat = router::spawn(&e.hub, "dev", Some("main"), Some("build x"), None, None).await.unwrap();
+    let chat = router::spawn(&e.hub, "dev", Some("botler"), Some("build x"), None, None).await.unwrap();
     agents::dispatch_pending(&e.hub).await.unwrap();
     settle().await;
     let wake = e.hub.agents.get(&chat).await.unwrap().wake.clone();
@@ -252,66 +252,154 @@ async fn archive_hands_over_and_messaging_restores() {
     assert_ne!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Archived, "messaging restores");
 }
 
-#[tokio::test]
-async fn secret_groups_and_scratch_reach_the_container() {
-    use botler_runtime::Mount;
-    let e = env().await;
-    with_key(&e).await;
-    let secrets = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template/secrets.toml")).unwrap()
-        + "\n[[group]]\nname = \"station\"\nclass = \"container\"\n[[group.secret]]\nname = \"STATION_KEY\"\nfile = \"/root/.ssh/id_ed25519\"\n[[group.secret]]\nname = \"STATION_HOST\"\n";
-    e.commit(&[
-        ("secrets.toml", secrets.as_str()),
-        ("agents/station/agent.toml", "kind = \"persistent\"\nsecrets = [\"station\"]\nscratch = \"groundstation\"\n"),
-        ("agents/station/AGENTS.md", "station agent"),
-    ])
-    .await;
-    e.hub.store.set_secret(&e.hub.secret_key, "STATION_KEY", "-----BEGIN KEY-----").await.unwrap();
-    e.hub.store.set_secret(&e.hub.secret_key, "STATION_HOST", "station.lan").await.unwrap();
+fn bind_src(c: &botler_runtime::fake::FakeContainer, dst: &str) -> Option<std::path::PathBuf> {
+    c.spec.mounts.iter().find_map(|m| match m {
+        botler_runtime::Mount::Bind { src, dst: d, .. } if d == dst => Some(src.clone()),
+        _ => None,
+    })
+}
+
+async fn message(e: &common::Env, to: &str, text: &str) {
     e.hub
         .emit(
             Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
-                .to("station")
-                .payload(json!({"text": "hi"})),
+                .to(to.to_string())
+                .payload(json!({"text": text})),
         )
         .await
         .unwrap();
     e.route().await;
     agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+}
+
+async fn sleep_all(e: &common::Env) {
+    for a in e.hub.agents.all().await {
+        e.hub.store.set_instance_state(&a.instance, InstanceState::Dormant, None).await.unwrap();
+    }
+    agents::stop_all(&e.hub).await;
+    settle().await;
+}
+
+#[tokio::test]
+async fn secret_groups_and_shared_homes_reach_the_container() {
+    use botler_runtime::Mount;
+    let e = env().await;
+    with_key(&e).await;
+    let secrets = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template/secrets.toml")).unwrap()
+        + "\n[[group]]\nname = \"station\"\nclass = \"container\"\n[[group.secret]]\nname = \"STATION_KEY\"\nfile = \"/home/agent/.ssh/id_ed25519\"\n[[group.secret]]\nname = \"STATION_HOST\"\n";
+    e.commit(&[
+        ("secrets.toml", secrets.as_str()),
+        ("agents/station/agent.toml", "kind = \"persistent\"\nsecrets = [\"station\"]\nhome = \"groundstation\"\n"),
+        ("agents/station/AGENTS.md", "station agent"),
+        ("agents/antenna/agent.toml", "workspace = \"none\"\nhome = \"groundstation\"\n"),
+        ("agents/antenna/AGENTS.md", "antenna agent"),
+    ])
+    .await;
+    e.hub.store.set_secret(&e.hub.secret_key, "STATION_KEY", "-----BEGIN KEY-----").await.unwrap();
+    e.hub.store.set_secret(&e.hub.secret_key, "STATION_HOST", "station.lan").await.unwrap();
+    message(&e, "station", "hi").await;
 
     let c = &e.fake.containers()[&agents::container_name("station")];
     assert_eq!(c.spec.env["STATION_HOST"], "station.lan");
     assert!(!c.spec.env.contains_key("STATION_KEY"), "file secrets are not env vars");
     let key_mount = c.spec.mounts.iter().find_map(|m| match m {
-        Mount::Bind { src, dst, read_only } if dst == "/root/.ssh/id_ed25519" => Some((src.clone(), *read_only)),
+        Mount::Bind { src, dst, read_only } if dst == "/home/agent/.ssh/id_ed25519" => Some((src.clone(), *read_only)),
         _ => None,
     });
     let (src, ro) = key_mount.expect("key mounted");
     assert!(ro);
     assert_eq!(std::fs::read_to_string(&src).unwrap(), "-----BEGIN KEY-----");
-    let scratch = c.spec.mounts.iter().find_map(|m| match m {
-        Mount::Bind { src, dst, .. } if dst == "/scratch" => Some(src.clone()),
-        _ => None,
-    });
-    assert_eq!(scratch.unwrap(), e.hub.paths.scratch_space("groundstation"));
-    let main_scratch = e
-        .fake
-        .containers()
-        .values()
-        .find(|c| c.spec.name == agents::container_name("main"))
-        .map(|c| c.spec.mounts.clone());
-    if let Some(m) = main_scratch {
-        assert!(
-            m.iter()
-                .any(|m| matches!(m, Mount::Bind { src, dst, .. } if dst == "/scratch" && src.ends_with("chat-main")))
-        );
+    let shared = e.hub.paths.shared_home("groundstation");
+    assert_eq!(bind_src(c, "/home/agent").unwrap(), shared);
+
+    // Two instances of another definition naming the same home share it too.
+    let a = router::spawn(&e.hub, "antenna", None, Some("align"), None, None).await.unwrap();
+    let b = router::spawn(&e.hub, "antenna", None, Some("align again"), None, None).await.unwrap();
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    for i in [&a, &b] {
+        let c = &e.fake.containers()[&agents::container_name(i)];
+        assert_eq!(bind_src(c, "/home/agent").unwrap(), shared, "{i}");
+        assert!(bind_src(c, "/home/agent/monorepo").is_none(), "workspace = none has no clone");
     }
+}
+
+#[tokio::test]
+async fn home_persists_across_wakes_and_archiving() {
+    let e = env().await;
+    with_key(&e).await;
+    let chat = router::spawn(&e.hub, "dev", Some("botler"), Some("clone the repo"), None, None).await.unwrap();
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    let name = agents::container_name(&chat);
+    let c = &e.fake.containers()[&name];
+    let home = e.hub.paths.home(&chat);
+    assert_eq!(bind_src(c, "/home/agent").unwrap(), home);
+    assert_eq!(bind_src(c, "/home/agent/monorepo").unwrap(), e.hub.paths.workspace(&chat));
+    assert_eq!(c.spec.env["HOME"], "/home/agent");
+    assert_eq!(c.spec.workdir.as_deref(), Some("/home/agent"));
+    assert!(
+        !c.spec
+            .mounts
+            .iter()
+            .any(|m| matches!(m, botler_runtime::Mount::Bind { dst, .. } if dst == "/scratch" || dst == "/workspace"))
+    );
+    std::fs::create_dir_all(home.join("groundstation")).unwrap();
+    std::fs::write(home.join("groundstation/README"), "cloned").unwrap();
+
+    // Sleep, wake: same host directory, contents intact.
+    sleep_all(&e).await;
+    message(&e, &chat, "continue").await;
+    let c = &e.fake.containers()[&name];
+    assert_eq!(bind_src(c, "/home/agent").unwrap(), home);
+    assert_eq!(std::fs::read_to_string(home.join("groundstation/README")).unwrap(), "cloned");
+
+    // Archive, then message it: restored with the same home.
+    sleep_all(&e).await;
+    let forced = botler_store::ArchiveRecord {
+        confirmed_by_agent: false,
+        forced: true,
+        reason: None,
+        report: None,
+        handed_to: None,
+        at: Utc::now(),
+    };
+    e.hub.store.archive_instance(&chat, &forced).await.unwrap();
+    message(&e, &chat, "one more thing").await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running);
+    let c = &e.fake.containers()[&name];
+    assert_eq!(bind_src(c, "/home/agent").unwrap(), home);
+    assert!(home.join("groundstation/README").exists());
+}
+
+#[tokio::test]
+async fn old_sessions_and_private_volumes_move_to_the_home() {
+    let e = env().await;
+    with_key(&e).await;
+    let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    // A chat from before homes: a private /workspace volume and a session started in /workspace.
+    let legacy = e.hub.paths.workspace(&chat);
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(legacy.join("draft.md"), "draft").unwrap();
+    let sessions = e.hub.paths.sessions(&chat);
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join(format!("{chat}.jsonl")),
+        "{\"type\":\"session\",\"version\":3,\"cwd\":\"/workspace\"}\n",
+    )
+    .unwrap();
+    message(&e, &chat, "hello again").await;
+    assert_eq!(std::fs::read_to_string(e.hub.paths.home(&chat).join("workspace/draft.md")).unwrap(), "draft");
+    assert!(!legacy.exists());
+    let header = std::fs::read_to_string(sessions.join(format!("{chat}.jsonl"))).unwrap();
+    assert!(header.contains("\"cwd\":\"/home/agent\""), "{header}");
 }
 
 #[tokio::test]
 async fn parent_hears_when_a_spawned_chat_finishes_its_turn() {
     let e = env().await;
     with_key(&e).await;
-    let child = router::spawn(&e.hub, "dev", Some("main"), Some("look into x"), None, None).await.unwrap();
+    let child = router::spawn(&e.hub, "dev", Some("botler"), Some("look into x"), None, None).await.unwrap();
     agents::dispatch_pending(&e.hub).await.unwrap();
     settle().await;
     e.route().await;
@@ -322,7 +410,7 @@ async fn parent_hears_when_a_spawned_chat_finishes_its_turn() {
         .await
         .unwrap();
     assert_eq!(idle.len(), 1, "one turn, one idle notice");
-    assert_eq!(idle[0].to.as_deref(), Some("main"));
+    assert_eq!(idle[0].to.as_deref(), Some("botler"));
     assert_eq!(idle[0].payload["instance"], child.as_str());
     assert_eq!(idle[0].payload["last_reply"], "fake reply");
     assert!(idle[0].correlation.is_some(), "chained to the delivery that started the turn");
@@ -339,24 +427,24 @@ async fn secret_requests_are_async_and_declare_on_submit() {
     e.hub
         .emit(
             Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
-                .to("main")
+                .to("botler")
                 .payload(json!({"text": "hi"})),
         )
         .await
         .unwrap();
     e.route().await;
     agents::dispatch_pending(&e.hub).await.unwrap();
-    let wake = e.hub.agents.get("main").await.unwrap().wake.clone();
-    let main = Caller::resolve(&e.hub, Principal::Agent { instance: "main".into(), wake }).await.unwrap();
+    let wake = e.hub.agents.get("botler").await.unwrap().wake.clone();
+    let front = Caller::resolve(&e.hub, Principal::Agent { instance: "botler".into(), wake }).await.unwrap();
 
     // Invalid requests are refused immediately with a reason.
     let bad =
-        ops::call(&e.hub, &main, "request_secrets", json!({"group": "gitlab", "reason": "x", "fill": ["NOPE"]})).await;
+        ops::call(&e.hub, &front, "request_secrets", json!({"group": "gitlab", "reason": "x", "fill": ["NOPE"]})).await;
     assert!(matches!(bad, Err(OpError::BadRequest(_))), "{bad:?}");
 
     let r = ops::call(
         &e.hub,
-        &main,
+        &front,
         "request_secrets",
         json!({
             "group": "gitlab", "reason": "Deploy the station repo", "description": "GitLab access",
@@ -367,7 +455,7 @@ async fn secret_requests_are_async_and_declare_on_submit() {
     .await
     .unwrap();
     let id = r["request_id"].as_str().unwrap().to_string();
-    let listed = ops::call(&e.hub, &main, "list_requests", json!({})).await.unwrap();
+    let listed = ops::call(&e.hub, &front, "list_requests", json!({})).await.unwrap();
     assert_eq!(listed["requests"][0]["id"], id.as_str());
     assert!(
         !e.hub.applied().await.defs.secret_groups.contains_key("gitlab"),
@@ -432,18 +520,18 @@ async fn secret_requests_are_async_and_declare_on_submit() {
     // Remove one field later; cancel works and blocks late answers.
     let r2 = ops::call(
         &e.hub,
-        &main,
+        &front,
         "request_secrets",
         json!({"group": "gitlab", "reason": "rotate", "remove": ["GITLAB_SSH_KEY"]}),
     )
     .await
     .unwrap();
     let id2 = r2["request_id"].as_str().unwrap().to_string();
-    ops::call(&e.hub, &main, "cancel_request", json!({"id": id2, "reason": "not needed"})).await.unwrap();
+    ops::call(&e.hub, &front, "cancel_request", json!({"id": id2, "reason": "not needed"})).await.unwrap();
     assert!(submit(&e.hub, &id2, Submission { values: Default::default(), decline: false }).await.is_err());
     let r3 = ops::call(
         &e.hub,
-        &main,
+        &front,
         "request_secrets",
         json!({"group": "gitlab", "reason": "drop key", "remove": ["GITLAB_SSH_KEY"]}),
     )
@@ -454,4 +542,92 @@ async fn secret_requests_are_async_and_declare_on_submit() {
         .unwrap();
     assert!(!e.hub.applied().await.defs.secrets.contains_key("GITLAB_SSH_KEY"));
     assert_eq!(e.hub.store.secret(&e.hub.secret_key, "GITLAB_SSH_KEY").await.unwrap(), None, "value deleted");
+}
+
+#[tokio::test]
+async fn waiting_on_the_user_sleeps_after_a_grace_and_the_answer_wakes_it() {
+    use botler_hub::auth::Principal;
+    use botler_hub::ops::{self, Caller};
+    let e = env().await;
+    with_key(&e).await;
+    let chat = router::spawn(&e.hub, "dev", Some("botler"), Some("ask the user"), None, None).await.unwrap();
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    let wake = e.hub.agents.get(&chat).await.unwrap().wake.clone();
+    let me = Caller::resolve(&e.hub, Principal::Agent { instance: chat.clone(), wake }).await.unwrap();
+    let asked = ops::call(&e.hub, &me, "ask_user", json!({"question": "Which colour?", "options": ["red", "blue"]}))
+        .await
+        .unwrap();
+    let dialog = asked["dialog_id"].as_str().unwrap().to_string();
+
+    // Well inside the idle timeout, but past the grace: it only waits for the user, so it sleeps.
+    agents::reap_idle(&e.hub, Utc::now() + Duration::seconds(30)).await.unwrap();
+    settle().await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running, "grace not over yet");
+    agents::reap_idle(&e.hub, Utc::now() + Duration::minutes(3)).await.unwrap();
+    settle().await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Dormant);
+
+    // The answer wakes it and is delivered.
+    let d = e.hub.store.answer_dialog(&dialog, "blue").await.unwrap();
+    e.hub
+        .emit(
+            Event::new(kinds::DIALOG_ANSWERED, Source::User, Provenance::Trusted, Utc::now())
+                .to(d.instance.clone())
+                .payload(json!({"dialog_id": d.id, "question": d.question, "answer": "blue"})),
+        )
+        .await
+        .unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running);
+    let prompts = e.fake.prompts(&agents::container_name(&chat));
+    assert!(prompts.last().unwrap().contains("dialog.answered") && prompts.last().unwrap().contains("blue"));
+
+    // Without anything to wait for, the same idle time does not stop it.
+    agents::reap_idle(&e.hub, Utc::now() + Duration::minutes(3)).await.unwrap();
+    settle().await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running);
+}
+
+#[tokio::test]
+async fn deep_agent_trees_report_up_without_tripping_and_depth_is_bounded() {
+    use botler_hub::HubError;
+    let e = env().await;
+    with_key(&e).await;
+    // Every agent may spawn: a 5-deep tree of dev agents under a chat.
+    let mut chain = vec![router::new_instance(&e.hub, "chat", None, None).await.unwrap()];
+    for level in 1..=5 {
+        let parent = chain.last().unwrap().clone();
+        let child = router::spawn(&e.hub, "dev", Some(&parent), Some(&format!("level {level} work")), None, None)
+            .await
+            .unwrap();
+        assert_eq!(e.hub.store.instance(&child).await.unwrap().depth, level);
+        chain.push(child);
+    }
+    // Each level ends its turn with a report, which reaches its parent and wakes it; the parent's
+    // turn then ends with its own report to its parent, up to the root.
+    for (level, name) in chain.iter().enumerate() {
+        e.fake.set_last_reply(&agents::container_name(name), &format!("level {level}: built the parser and its tests"));
+    }
+    for _ in 0..8 {
+        agents::dispatch_pending(&e.hub).await.unwrap();
+        settle().await;
+        e.route().await;
+    }
+    let root_prompts = e.fake.prompts(&agents::container_name(&chain[0]));
+    assert!(root_prompts.iter().any(|p| p.contains("level 1: built the parser")), "{root_prompts:?}");
+    assert!(e.hub.store.breakers().await.unwrap().is_empty(), "{:?}", e.hub.store.breakers().await.unwrap());
+
+    // Depth is bounded by max_spawn_depth (8 by default).
+    let mut parent = chain.last().unwrap().clone();
+    for _ in 6..=8 {
+        parent = router::new_instance(&e.hub, "dev", Some(&parent), None).await.unwrap();
+    }
+    assert_eq!(e.hub.store.instance(&parent).await.unwrap().depth, 8);
+    match router::spawn(&e.hub, "dev", Some(&parent), Some("go deeper"), None, None).await {
+        Err(e @ HubError::SpawnTooDeep { .. }) => assert!(e.to_string().contains("do the work yourself"), "{e}"),
+        other => panic!("{other:?}"),
+    }
 }

@@ -39,7 +39,7 @@ async fn fixture() -> Fixture {
     write(&tpl, "jobs/poll/job.toml", "command = [\"python\", \"-m\", \"poll\"]\n");
     write(&tpl, "jobs/poll/Dockerfile", "FROM x\n");
     write(&tpl, "jobs/poll/src/poll.py", "print('not a definition')\n");
-    let repo = Repo::new(dir.path().join("repo.git"), dir.path().join("scratch"));
+    let repo = Repo::new(dir.path().join("repo.git"), dir.path().join("worktrees"));
     repo.init_from(&tpl).await.unwrap();
     let root = dir.path().to_path_buf();
     Fixture { _dir: dir, repo, root }
@@ -102,8 +102,8 @@ async fn rebase_and_conflict() {
     let c2 = agent_commit(&f, "b", "agents/b/c2", "botler.toml", "timezone = \"Asia/Tokyo\"\n");
     f.repo.advance_main(&rebased, &c1).await.unwrap();
     assert!(matches!(f.repo.rebase_onto_main(&c2, "c2").await, Err(Error::Conflict { .. })));
-    // scratch worktrees are cleaned up even on conflict
-    assert_eq!(std::fs::read_dir(f.root.join("scratch")).unwrap().count(), 0);
+    // temporary worktrees are cleaned up even on conflict
+    assert_eq!(std::fs::read_dir(f.root.join("worktrees")).unwrap().count(), 0);
 }
 
 #[tokio::test]
@@ -120,6 +120,31 @@ async fn revert_and_export() {
     let out = f.root.join("export");
     f.repo.export(&rev, &out).await.unwrap();
     assert!(out.join("jobs/poll/src/poll.py").exists());
+
+    let part = f.root.join("partial");
+    f.repo.export_paths(&rev, &["jobs/poll", "botler.toml"], &part).await.unwrap();
+    assert!(part.join("jobs/poll/src/poll.py").exists() && part.join("botler.toml").exists());
+    assert!(!part.join("agents").exists());
+}
+
+#[tokio::test]
+async fn path_ids_are_tree_hashes() {
+    let f = fixture().await;
+    let base = f.repo.main().await.unwrap();
+    let ids = f.repo.path_ids(&base, &["jobs/poll", "botler.toml", "missing", "agents/main"]).await.unwrap();
+    assert_eq!(ids.keys().collect::<Vec<_>>(), ["agents/main", "botler.toml", "jobs/poll"]);
+    let head = agent_commit(&f, "a", "agents/main/x", "agents/main/AGENTS.md", "changed\n");
+    let after = f.repo.path_ids(&head, &["jobs/poll", "botler.toml", "agents/main"]).await.unwrap();
+    assert_eq!(after["jobs/poll"], ids["jobs/poll"]);
+    assert_ne!(after["agents/main"], ids["agents/main"]);
+}
+
+#[tokio::test]
+async fn failed_init_leaves_no_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new(dir.path().join("repo.git"), dir.path().join("worktrees"));
+    assert!(repo.init_from(&dir.path().join("no-such-template")).await.is_err());
+    assert!(!dir.path().join("repo.git").exists());
 }
 
 #[tokio::test]

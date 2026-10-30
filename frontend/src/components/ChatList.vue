@@ -83,7 +83,7 @@ async function create() {
         >
           <div style="display: flex; align-items: center; gap: 6px">
             <span class="chat-title" :title="i.name">
-              <template v-if="i.name === frontDoorName">&#9733; </template>{{ chatTitle(i) }}
+              <template v-if="i.name === frontDoorName">&#9733; </template>{{ chatTitle(i, frontDoorName) }}
             </span>
             <PhaseTag :badge="badge(i)" />
           </div>

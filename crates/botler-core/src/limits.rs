@@ -91,8 +91,10 @@ impl Limiter {
     }
 }
 
-/// Correlation chains longer than this are treated as agent ping-pong.
-pub const MAX_CHAIN_HOPS: u32 = 12;
+/// Correlation chains longer than this trip the cycle breaker. A coarse backstop only: it must
+/// not punish deep agent trees (8 levels reporting up and down take ~32 hops), and real
+/// ping-pong is caught earlier by the per-pair conversation breaker and acknowledgement notes.
+pub const MAX_CHAIN_HOPS: u32 = 64;
 
 #[cfg(test)]
 mod tests {

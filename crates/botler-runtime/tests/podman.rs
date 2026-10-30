@@ -80,3 +80,39 @@ async fn attached_stdio_roundtrip() {
     let code = tokio::time::timeout(Duration::from_secs(30), att.exited).await.unwrap().unwrap();
     assert_eq!(code, Some(0));
 }
+
+#[tokio::test]
+async fn build_labels_list_and_remove_images() {
+    if !enabled() {
+        return;
+    }
+    let rt = Cli::detect(None).await.unwrap();
+    let ctx = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(ctx.path().join("images/x")).unwrap();
+    std::fs::write(ctx.path().join("images/x/Dockerfile"), format!("FROM {IMAGE}\nCOPY images/x/Dockerfile /d\n"))
+        .unwrap();
+    let tag = format!("localhost/{}:1", name("image"));
+    let labels = BTreeMap::from([("botler.data".to_string(), name("owner"))]);
+    assert_eq!(rt.image_id(&tag).await.unwrap(), None);
+    rt.build(ctx.path(), "images/x/Dockerfile", &tag, &labels).await.unwrap();
+    assert!(rt.image_id(&tag).await.unwrap().is_some());
+    assert_eq!(rt.images(&labels).await.unwrap(), vec![tag.clone()]);
+
+    let n = name("img-user");
+    let spec = ContainerSpec {
+        name: n.clone(),
+        image: tag.clone(),
+        command: vec!["true".into()],
+        mounts: vec![botler_runtime::Mount::Bind { src: ctx.path().into(), dst: "/ctx".into(), read_only: true }],
+        ..Default::default()
+    };
+    rt.run_detached(&spec).await.unwrap();
+    let info = rt.inspect(&n).await.unwrap().unwrap();
+    assert_eq!(info.image, tag);
+    assert!(info.mounts.contains(&ctx.path().to_path_buf()), "{:?}", info.mounts);
+    rt.remove(&n).await.unwrap();
+
+    rt.remove_image(&tag).await.unwrap();
+    assert_eq!(rt.image_id(&tag).await.unwrap(), None);
+    assert!(rt.images(&labels).await.unwrap().is_empty());
+}

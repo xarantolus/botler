@@ -5,11 +5,10 @@
 
 use std::collections::BTreeMap;
 
+use botler_core::Source;
 use botler_core::defs::{Definitions, SecretClass};
 use botler_core::payloads::{BuiltinPayload, DialogAnsweredPayload, SecretsOutcome};
-use botler_core::{Event, Provenance, Source};
 use botler_store::{Dialog, DialogKind, DialogStatus};
-use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +20,7 @@ pub struct NewField {
     pub name: String,
     /// What the user should paste and where to get it.
     pub description: String,
-    /// Deliver as a file at this absolute path instead (e.g. `/root/.ssh/id_ed25519`).
+    /// Deliver as a file at this absolute path instead (e.g. `/home/agent/.ssh/id_ed25519`).
     #[serde(default)]
     pub file: Option<String>,
 }
@@ -402,9 +401,7 @@ async fn emit_answer(hub: &Hub, d: &Dialog, req: &SecretRequest, outcome: Secret
         outcome: Some(outcome),
         note: Some("Values are stored by the hub and never shown to agents. To use the group in a container, grant it in an agent or job definition (`secrets = [\"<group>\"]`) and propose the change.".into()),
     });
-    let ev = Event::builtin(payload, Source::User, Provenance::Trusted, Utc::now())
-        .map_err(|e| HubError::Io(std::io::Error::other(e)))?
-        .to(d.instance.clone());
+    let ev = crate::hub::builtin(payload, Source::User)?.to(d.instance.clone());
     hub.emit(ev).await?;
     Ok(())
 }
@@ -445,10 +442,10 @@ mod tests {
         r.group = "station".into();
         r.description = Some("Ground station".into());
         r.remove.clear();
-        r.add[0].file = Some("/root/.ssh/id_ed25519".into());
+        r.add[0].file = Some("/home/agent/.ssh/id_ed25519".into());
         let out = edit_secrets_toml("version = 1\n", &r, true).unwrap();
         let parsed: botler_core::defs::SecretsFile = toml::from_str(&out).unwrap();
         assert_eq!(parsed.groups[0].name, "station");
-        assert_eq!(parsed.groups[0].secrets[0].file.as_deref(), Some("/root/.ssh/id_ed25519"));
+        assert_eq!(parsed.groups[0].secrets[0].file.as_deref(), Some("/home/agent/.ssh/id_ed25519"));
     }
 }

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # Tests use git (repo, smart HTTP), tar and zstd/gzip (backup); all ship with ubuntu-latest.
+      - run: git --version && tar --version && zstd --version
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Real-container tests skip unless BOTLER_PODMAN_TESTS=1.
+      - run: cargo test --workspace
+
+  pi-extension:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pi-extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: pi-extension/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # dist/ is committed (the hub embeds it): it must match the sources...
+      - run: npm run check-dist
+      # ...and rebuilding must reproduce it exactly.
+      - run: npm run build && git diff --exit-code -- dist
+
+  python-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --python 3.12 pytest
+        working-directory: python/botler-sdk
+      # botler/_ops.py is generated from the hub's OPS specs; this fails when it is stale.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p botler --test sdk

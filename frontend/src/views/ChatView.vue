@@ -8,10 +8,12 @@ import EnvelopeCard from "../components/EnvelopeCard.vue";
 import MarkdownText from "../components/MarkdownText.vue";
 import PhaseTag from "../components/PhaseTag.vue";
 import ToolCallView from "../components/ToolCallView.vue";
+import BreakerResume from "../components/BreakerResume.vue";
 import WakeProgress from "../components/WakeProgress.vue";
 import type { Dialog, SessionItem } from "../generated";
 import { envelopeOf, isUserMessage } from "../lib/envelope";
-import { chatTitle, linkedDialog } from "../lib/events";
+import { heldFor } from "../lib/breakers";
+import { chatTitle, linkedDialog, redirectChat } from "../lib/events";
 import { currentStatus, phaseBadge } from "../lib/phase";
 import { ago, usd } from "../lib/time";
 import { watch as watchLive } from "../live";
@@ -35,14 +37,16 @@ const name = computed(() => props.instance ?? frontDoorName.value);
 const session = computed(() => (state.session?.instance.name === name.value ? state.session : null));
 const inst = computed(() => session.value?.instance ?? null);
 
-// Open the front door when no chat is named.
+// Open the front door when no chat is named, and for a remembered `main`.
 watch(
-  frontDoorName,
-  (door) => {
-    if (!props.instance && door) void router.replace(`/chat/${encodeURIComponent(door)}`);
+  [frontDoorName, () => props.instance, () => state.instances.length],
+  ([door]) => {
+    const to = props.instance ? redirectChat(props.instance, state.instances, door) : door;
+    if (to && to !== props.instance) void router.replace(`/chat/${encodeURIComponent(to)}`);
   },
   { immediate: true },
 );
+const held = computed(() => (name.value ? heldFor(name.value, state.status?.breakers ?? []) : []));
 
 watch(
   name,
@@ -225,7 +229,7 @@ const isFrontDoor = computed(() => name.value === frontDoorName.value);
       <div class="chat-head">
         <div style="min-width: 0; flex: 1">
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
-            <strong style="font-size: 16px">{{ inst ? chatTitle(inst) : name }}</strong>
+            <strong style="font-size: 16px">{{ inst ? chatTitle(inst, frontDoorName) : name }}</strong>
             <PhaseTag v-if="badge" :badge="badge" size="medium" />
           </div>
           <NText depth="3" style="font-size: 12px">
@@ -267,6 +271,11 @@ const isFrontDoor = computed(() => name.value === frontDoorName.value);
       </NAlert>
       <NAlert v-else-if="inst?.archive_requested_at" type="warning" class="banner" :show-icon="true">
         Waiting for the agent to hand over before archiving (asked {{ ago(inst.archive_requested_at) }}).
+      </NAlert>
+
+      <NAlert v-for="h in held" :key="h.breaker.subject" type="warning" class="banner" title="Messages are held">
+        Messages between this chat and <strong>{{ h.other }}</strong> are held by a breaker: {{ h.breaker.reason }}
+        <div style="margin-top: 6px"><BreakerResume :subject="h.breaker.subject" /></div>
       </NAlert>
 
       <WakeProgress
@@ -312,6 +321,11 @@ const isFrontDoor = computed(() => name.value === frontDoorName.value);
 
           <div v-else-if="it.kind === 'tool_result' && !paired.has(it.id)" class="msg">
             <ToolCallView :result="it" />
+          </div>
+
+          <div v-else-if="it.kind === 'note'" class="msg note" :data-delivery="it.delivery">
+            <span class="note-label">note from {{ it.from }}<template v-if="it.event_kind !== 'message'"> · {{ it.event_kind }}</template> · {{ ago(it.at) }}</span>
+            <MarkdownText :source="it.text.trim()" />
           </div>
 
           <div v-else-if="it.kind === 'compaction'" class="msg">
@@ -392,6 +406,17 @@ const isFrontDoor = computed(() => name.value === frontDoorName.value);
   font-size: 12px;
   opacity: 0.55;
   margin-top: 3px;
+}
+.note {
+  font-size: 13px;
+  opacity: 0.6;
+  border-left: 2px dashed rgba(127, 127, 127, 0.45);
+  padding-left: 10px;
+}
+.note-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 .queued {
   opacity: 0.6;

@@ -15,7 +15,7 @@ use serde::Serialize;
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::api::{Answer, ArchiveRequest, EventsQuery, NewChat, RevertRequest, SecretValue, UserMessage};
+use crate::api::{Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, RevertRequest, SecretValue, UserMessage};
 use crate::ops::{GetRunLogs, IdArg, ProposalDetail, RunLogs};
 use crate::phase::WakePhase;
 use crate::secret_requests::{NewField, Submission};
@@ -40,6 +40,8 @@ pub struct HubStatus {
     /// The monorepo commit whose definitions are applied.
     pub commit: String,
     pub paused: bool,
+    /// The front-door chat (the user's default conversation, pinned on top).
+    pub front_door: String,
     pub runtime: RuntimeInfo,
     pub open_dialogs: usize,
     pub open_incidents: usize,
@@ -174,6 +176,14 @@ pub struct Reverted {
 }
 
 #[derive(Debug, Serialize, TS)]
+pub struct BreakerCleared {
+    /// Whether the breaker was tripped.
+    pub cleared: bool,
+    /// Held messages released for delivery (pair breakers).
+    pub released: u64,
+}
+
+#[derive(Debug, Serialize, TS)]
 pub struct PauseState {
     pub paused: bool,
 }
@@ -266,6 +276,7 @@ routes! {
     revert: POST "/api/v1/revert", body: RevertRequest => Reverted;
     pause: POST "/api/v1/pause" => PauseState;
     resume: POST "/api/v1/resume" => PauseState;
+    clear_breaker: POST "/api/v1/breakers/clear", body: ClearBreaker => BreakerCleared;
     run_logs: POST "/api/v1/ops/get_run_logs", body: GetRunLogs => RunLogs;
     proposal: POST "/api/v1/ops/get_proposal", body: IdArg => ProposalDetail;
 }

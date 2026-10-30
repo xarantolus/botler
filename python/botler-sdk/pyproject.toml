@@ -1,0 +1,23 @@
+# The botler SDK. The hub embeds this directory and mounts it at /opt/botler/sdk in every container,
+# so the importable package always matches the running hub. The runtime (`import botler`) is
+# standard library only; `botler.Event` and `botler.tool` need pydantic (authoring and the gate).
+# Monorepos do not depend on this package (it is on PYTHONPATH); this file is for its own tests.
+[project]
+name = "botler"
+version = "1.0.0"
+description = "Reach the botler hub from jobs, services, tools and agent scripts."
+requires-python = ">=3.10"
+dependencies = ["pydantic>=2.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["botler"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+addopts = "-q"

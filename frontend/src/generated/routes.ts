@@ -4,8 +4,10 @@ import type { Answer } from "./Answer";
 import type { ArchiveOutcome } from "./ArchiveOutcome";
 import type { ArchiveRequest } from "./ArchiveRequest";
 import type { BotlerEvent } from "./BotlerEvent";
+import type { BreakerCleared } from "./BreakerCleared";
 import type { ChatCreated } from "./ChatCreated";
 import type { ChatRestored } from "./ChatRestored";
+import type { ClearBreaker } from "./ClearBreaker";
 import type { DialogAnswer } from "./DialogAnswer";
 import type { Dialogs } from "./Dialogs";
 import type { EventPosted } from "./EventPosted";
@@ -56,6 +58,7 @@ export interface Routes {
   revert: { method: "POST"; path: "/api/v1/revert"; params: Record<string, never>; query: never; body: RevertRequest; response: Reverted };
   pause: { method: "POST"; path: "/api/v1/pause"; params: Record<string, never>; query: never; body: never; response: PauseState };
   resume: { method: "POST"; path: "/api/v1/resume"; params: Record<string, never>; query: never; body: never; response: PauseState };
+  clear_breaker: { method: "POST"; path: "/api/v1/breakers/clear"; params: Record<string, never>; query: never; body: ClearBreaker; response: BreakerCleared };
   run_logs: { method: "POST"; path: "/api/v1/ops/get_run_logs"; params: Record<string, never>; query: never; body: GetRunLogs; response: RunLogs };
   proposal: { method: "POST"; path: "/api/v1/ops/get_proposal"; params: Record<string, never>; query: never; body: IdArg; response: ProposalDetail };
 }
@@ -82,6 +85,7 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   revert: { method: "POST", path: "/api/v1/revert" },
   pause: { method: "POST", path: "/api/v1/pause" },
   resume: { method: "POST", path: "/api/v1/resume" },
+  clear_breaker: { method: "POST", path: "/api/v1/breakers/clear" },
   run_logs: { method: "POST", path: "/api/v1/ops/get_run_logs" },
   proposal: { method: "POST", path: "/api/v1/ops/get_proposal" },
 };

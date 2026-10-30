@@ -8,8 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use botler_core::catalog;
 use botler_core::defs::{AgentDef, Budget, Network, Workspace};
-use botler_core::event::kinds;
-use botler_core::{Event, Provenance, Source};
+use botler_core::loops::TurnLog;
+use botler_core::payloads::{AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, MessagePayload};
+use botler_core::{Event, Source};
 use botler_runtime::{ContainerSpec, Mount, NetworkMode, PiClient, PiError, PiEvent, PiEventKind, Streaming};
 use botler_store::{Delivery, Instance, InstanceState};
 use chrono::{DateTime, Duration, Utc};
@@ -17,7 +18,7 @@ use serde_json::json;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::auth::Principal;
-use crate::hub::{Hub, HubError, Live, Result};
+use crate::hub::{Hub, HubError, Live, Result, builtin};
 use crate::phase::{AgentStatus, WakePhase, WakeStep};
 use crate::{images, plumbing, prompt};
 
@@ -25,6 +26,10 @@ use crate::{images, plumbing, prompt};
 const MAX_ATTEMPTS: i64 = 5;
 /// Upper bound only: agent tokens die with their wake (see `Agents::wakes`).
 const AGENT_TOKEN_TTL_HOURS: i64 = 24 * 7;
+/// Every agent's persistent home: `$HOME` and the working directory.
+pub const HOME: &str = "/home/agent";
+/// Where a `workspace = "monorepo"` agent's own clone is mounted, inside its home.
+pub const MONOREPO: &str = "/home/agent/monorepo";
 
 pub struct LiveAgent {
     pub instance: String,
@@ -35,6 +40,8 @@ pub struct LiveAgent {
     last_active: std::sync::Mutex<DateTime<Utc>>,
     /// Set when the hub stops the agent on purpose (idle, kill switch), so the exit is not a crash.
     stopping: AtomicBool,
+    /// What it did this turn: decides whether its parent hears about the end of the turn.
+    turn: std::sync::Mutex<TurnLog>,
     kill: Mutex<Option<oneshot::Sender<()>>>,
 }
 
@@ -45,6 +52,15 @@ impl LiveAgent {
 
     fn touch(&self) {
         *self.last_active.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Utc::now();
+    }
+
+    /// The agent sent `to` a message through the hub during its current turn.
+    pub fn record_message(&self, to: &str) {
+        self.turn.lock().unwrap_or_else(std::sync::PoisonError::into_inner).messaged(to);
+    }
+
+    fn turn(&self) -> std::sync::MutexGuard<'_, TurnLog> {
+        self.turn.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn last_active(&self) -> DateTime<Utc> {
@@ -116,7 +132,11 @@ pub async fn dispatch_pending(hub: &Arc<Hub>) -> Result<()> {
     if hub.paused().await? {
         return Ok(());
     }
-    for name in hub.store.instances_with_pending().await? {
+    for (name, wakes) in hub.store.instances_with_pending().await? {
+        // Notes alone never wake an agent; they ride along with whatever wakes it next.
+        if !wakes && hub.agents.get(&name).await.is_none() {
+            continue;
+        }
         if let Err(e) = deliver_to(hub, &name).await {
             tracing::warn!(instance = %name, error = %e, "delivery deferred");
         }
@@ -142,27 +162,24 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
 
 /// The text pi receives for one delivery. The botler extension recognises the prefix, drops
 /// duplicate ids, and renders the header.
-pub fn envelope(d: &Delivery, ev: &Event) -> String {
-    let provenance = match ev.provenance {
-        Provenance::Trusted => "trusted",
-        Provenance::External => "external",
-        Provenance::Untrusted => "untrusted",
+pub fn envelope(d: &Delivery, ev: &Event) -> Result<String> {
+    let body = DeliveryEnvelope {
+        id: d.id.clone(),
+        event: ev.id.to_string(),
+        kind: ev.kind.clone(),
+        from: ev.source.key(),
+        provenance: ev.provenance,
+        correlation: ev.correlation.unwrap_or(ev.id).to_string(),
+        body: catalog::render(ev, d.prompt.as_deref()),
+        quiet: d.quiet,
     };
-    let body = json!({
-        "id": d.id,
-        "event": ev.id,
-        "kind": ev.kind,
-        "from": ev.source.key(),
-        "provenance": provenance,
-        "correlation": ev.correlation.unwrap_or(ev.id),
-        "body": catalog::render(ev, d.prompt.as_deref()),
-    });
-    format!("botler:delivery {body}")
+    let json = serde_json::to_string(&body).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+    Ok(format!("botler:delivery {json}"))
 }
 
 async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
     let ev = hub.store.event(&d.event_id).await?;
-    let text = envelope(d, &ev);
+    let text = envelope(d, &ev)?;
     let streaming = if agent.pi.is_busy().await? {
         // The user and urgent events interrupt at the next turn boundary; everything else waits.
         Some(if ev.urgent || ev.source == Source::User { Streaming::Steer } else { Streaming::FollowUp })
@@ -246,6 +263,12 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     let image = images::ensure_agent_image(hub, &def.spec.image, &applied.commit).await?;
     set_phase(hub, &instance.name, WakeStep::PreparingWorkspace).await;
     let branch = prepare_workspace(hub, instance, def).await?;
+    prepare_home(hub, instance, def).await?;
+    // pi resumes a session in the working directory recorded in its header, not its own.
+    let session = hub.paths.sessions(&instance.name).join(&instance.session_file);
+    if crate::sessions::retarget_cwd(&session, HOME).await? {
+        tracing::info!(instance = %instance.name, cwd = HOME, "moved the session's working directory");
+    }
     set_phase(hub, &instance.name, WakeStep::StartingContainer).await;
     let wake = uuid::Uuid::now_v7().simple().to_string();
     let spec = container_spec(hub, instance, def, &applied, image, branch.as_deref(), &wake).await?;
@@ -267,6 +290,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         busy: AtomicBool::new(false),
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
+        turn: std::sync::Mutex::default(),
         kill: Mutex::new(Some(attached.kill)),
     });
     hub.agents.live.lock().await.insert(instance.name.clone(), agent.clone());
@@ -277,15 +301,37 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     Ok(agent)
 }
 
+/// The host directory mounted as an instance's home: its own, or the shared one its definition
+/// names. Created on first use and never deleted (sleeping and archiving keep it).
+pub fn home_dir(hub: &Hub, instance: &Instance, def: &AgentDef) -> std::path::PathBuf {
+    match &def.spec.home {
+        Some(name) => hub.paths.shared_home(name),
+        None => hub.paths.home(&instance.name),
+    }
+}
+
+async fn prepare_home(hub: &Hub, instance: &Instance, def: &AgentDef) -> Result<()> {
+    let home = home_dir(hub, instance, def);
+    tokio::fs::create_dir_all(&home).await?;
+    // Before homes, `workspace = "volume"` agents had a private directory at `/workspace`. The
+    // home replaces it; its contents move into the home once so nothing is lost.
+    let legacy = hub.paths.workspace(&instance.name);
+    if def.spec.workspace != Workspace::Monorepo && legacy.exists() {
+        let mut to = home.join("workspace");
+        if to.exists() {
+            to = home.join(format!("workspace-{}", instance.name));
+        }
+        tracing::info!(instance = %instance.name, from = %legacy.display(), to = %to.display(), "moving the old private workspace into the home");
+        tokio::fs::rename(&legacy, &to).await?;
+    }
+    Ok(())
+}
+
 /// Clone the monorepo into a new workspace (never touching an existing one: agents own it).
 async fn prepare_workspace(hub: &Hub, instance: &Instance, def: &AgentDef) -> Result<Option<String>> {
     let dir = hub.paths.workspace(&instance.name);
     match def.spec.workspace {
-        Workspace::None => Ok(None),
-        Workspace::Volume => {
-            tokio::fs::create_dir_all(&dir).await?;
-            Ok(None)
-        }
+        Workspace::None | Workspace::Volume => Ok(None),
         Workspace::Monorepo => {
             let branch = branch_for(&instance.name);
             if !dir.join(".git").exists() {
@@ -354,6 +400,8 @@ async fn container_spec(
     let mut env = p.env;
     env.insert("PI_OFFLINE".into(), "1".into());
     env.insert("BOTLER_INSTANCE".into(), instance.name.clone());
+    // Set here as well as in the base image, so images built before homes existed get it too.
+    env.insert("HOME".into(), HOME.into());
     // Lets git in the workspace push to the hub without storing the token in .git/config.
     env.insert("GIT_CONFIG_COUNT".into(), "1".into());
     env.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
@@ -391,8 +439,11 @@ async fn container_spec(
             }),
         );
     }
+    // Python tools this agent is granted (`tools` globs); the extension registers them.
+    let tools = applied.defs.tools_for(&def.spec);
     let files: Vec<(&str, String)> = vec![
         ("models.json", to_json(&models)?),
+        ("tools.json", to_json(&json!(tools))?),
         ("mcp.json", to_json(&json!({ "mcpServers": servers }))?),
         ("botler.md", prompt::render(instance, def, branch)),
         ("AGENTS.md", def.prompt.clone().unwrap_or_default()),
@@ -412,19 +463,22 @@ async fn container_spec(
         dst: "/botler/extension".into(),
         read_only: true,
     });
-    if def.spec.workspace != Workspace::None {
-        mounts.push(Mount::Bind {
-            src: hub.paths.workspace(&instance.name),
-            dst: "/workspace".into(),
-            read_only: false,
-        });
+    // The home first: the monorepo clone and file secrets may be mounted inside it.
+    mounts.insert(0, Mount::Bind { src: home_dir(hub, instance, def), dst: HOME.into(), read_only: false });
+    if def.spec.workspace == Workspace::Monorepo {
+        // Per instance even when the home is shared: each instance works on its own branch.
+        mounts.insert(
+            1,
+            Mount::Bind { src: hub.paths.workspace(&instance.name), dst: MONOREPO.into(), read_only: false },
+        );
     }
-    // Shared scratch names are validated definition names; per-chat ones are prefixed so they
-    // can never collide with a project name.
-    let scratch =
-        hub.paths.scratch_space(&def.spec.scratch.clone().unwrap_or_else(|| format!("chat-{}", instance.name)));
-    tokio::fs::create_dir_all(&scratch).await?;
-    mounts.push(Mount::Bind { src: scratch, dst: "/scratch".into(), read_only: false });
+
+    if !tools.is_empty() {
+        // Tool code runs from the applied main commit (not the agent's own checkout), like
+        // agent-authored pi resources below.
+        let export = images::applied_tree(hub, &applied.commit).await?;
+        mounts.push(Mount::Bind { src: export, dst: "/botler/applied".into(), read_only: true });
+    }
 
     let mut command = vec![
         "pi".to_string(),
@@ -445,8 +499,7 @@ async fn container_spec(
     }
     // Agent-authored pi resources come from the applied main commit, never from the agent's own
     // branch, so an agent cannot load unreviewed code into itself.
-    let pi_res = hub.paths.exports().join(&applied.commit).join("pi");
-    if pi_res.exists() {
+    if let Some(pi_res) = crate::images::pi_resources(hub, &applied.commit).await? {
         mounts.push(Mount::Bind { src: pi_res.clone(), dst: "/botler/pi".into(), read_only: true });
         for (flag, sub) in [("--skill", "skills"), ("--prompt-template", "prompts")] {
             if has_entries(&pi_res.join(sub)) {
@@ -472,7 +525,7 @@ async fn container_spec(
             Network::Default => NetworkMode::Default,
             Network::None => NetworkMode::None,
         },
-        workdir: Some(if def.spec.workspace == Workspace::None { "/".into() } else { "/workspace".into() }),
+        workdir: Some(HOME.into()),
         remove_on_exit: true,
         ..Default::default()
     })
@@ -506,6 +559,7 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
         match &ev.kind {
             PiEventKind::AgentStart => {
                 agent.busy.store(true, Ordering::SeqCst);
+                agent.turn().reset();
                 // pi is up and working: the instance is healthy again.
                 hub.agents.crashes.lock().await.remove(&agent.instance);
             }
@@ -531,6 +585,7 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                     tracing::error!(instance = %agent.instance, error = %e, "usage metering failed");
                 }
             }
+            PiEventKind::ToolStart { tool } => agent.turn().tool_started(tool),
             _ => {}
         }
     }
@@ -560,11 +615,18 @@ async fn on_provider_error(hub: &Hub, agent: &LiveAgent, err: &str) -> Result<()
     Ok(())
 }
 
-/// Tell the chat that spawned this one that it finished its turn, with its last reply. Chained
-/// to the delivery that started the turn so the cycle breaker bounds parent/child ping-pong.
+/// Tell the agent that spawned this one that it ended its turn, with its final answer, unless
+/// the last thing it did was messaging the parent (which already has the news). Routed like a
+/// message from the child: it counts for the pair breaker, and an acknowledgement ("Done,
+/// thanks.") arrives as a note that does not wake the parent. Chained to the delivery that
+/// started the turn so the hop limit still bounds runaway chains.
 async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
     let instance = hub.store.instance(&agent.instance).await?;
     let Some(parent) = instance.parent.clone() else { return Ok(()) };
+    if agent.turn().ended_by_messaging(&parent) {
+        tracing::debug!(instance = %agent.instance, %parent, "turn ended by messaging the parent; no notice");
+        return Ok(());
+    }
     let last_reply = match agent.pi.command(json!({ "type": "get_last_assistant_text" })).await {
         Ok(d) => d.get("text").and_then(|t| t.as_str()).unwrap_or("").chars().take(4000).collect::<String>(),
         Err(e) => {
@@ -572,9 +634,13 @@ async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
             String::new()
         }
     };
-    let mut ev = Event::new(kinds::AGENT_IDLE, Source::Agent(instance.name.clone()), Provenance::Trusted, Utc::now())
-        .to(parent)
-        .payload(json!({ "instance": instance.name, "title": instance.title, "slug": instance.slug, "last_reply": last_reply }));
+    let idle = BuiltinPayload::AgentIdle(AgentIdlePayload {
+        instance: instance.name.clone(),
+        title: instance.title.clone(),
+        slug: instance.slug.clone(),
+        last_reply,
+    });
+    let mut ev = builtin(idle, Source::Agent(instance.name.clone()))?.to(parent);
     if let Some(d) = hub.store.last_delivered(&instance.name).await? {
         let started = hub.store.event(&d.event_id).await?;
         ev = ev.in_reply_to(&started);
@@ -704,7 +770,20 @@ async fn record_crash(hub: &Hub, instance: &str, code: Option<i32>, stderr: Stri
     Ok(())
 }
 
-/// Put idle agents to sleep (they wake on their next message).
+/// How long an idle agent stays up when all it waits for is the user (or a proposal). The answer
+/// arrives as an event and wakes it with its session and home, so waiting asleep loses nothing.
+const WAITING_GRACE_SECS: i64 = 120;
+
+/// Whether everything `instance` still waits for is outside it: open questions, credential
+/// requests or approvals it created, or unfinished proposals (and nothing queued for it).
+async fn waiting_on_user(hub: &Hub, instance: &str) -> Result<bool> {
+    let dialogs = hub.store.open_dialogs().await?.into_iter().any(|d| d.instance == instance);
+    let proposals = hub.store.unfinished_proposals().await?.into_iter().any(|p| p.instance == instance);
+    Ok(dialogs || proposals)
+}
+
+/// Put idle agents to sleep (they wake on their next message). Agents that only wait for the
+/// user sleep after a short grace period instead of their full idle timeout.
 pub async fn reap_idle(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
     let applied = hub.applied().await;
     for agent in hub.agents.all().await {
@@ -721,10 +800,15 @@ pub async fn reap_idle(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
             .get(&instance.definition)
             .and_then(|d| d.spec.idle_timeout)
             .unwrap_or(applied.defs.instance.defaults.idle_timeout);
-        if now - agent.last_active() > idle.as_chrono()
-            && hub.store.pending_deliveries(&agent.instance).await?.is_empty()
-        {
+        if !hub.store.pending_deliveries(&agent.instance).await?.is_empty() {
+            continue;
+        }
+        let idle_for = now - agent.last_active();
+        if idle_for > idle.as_chrono() {
             tracing::info!(instance = %agent.instance, "idle; stopping");
+            agent.stop().await;
+        } else if idle_for > Duration::seconds(WAITING_GRACE_SECS) && waiting_on_user(hub, &agent.instance).await? {
+            tracing::info!(instance = %agent.instance, "waiting on the user; sleeping until the answer arrives");
             agent.stop().await;
         }
     }
@@ -772,12 +856,11 @@ fn broadcast_state(hub: &Hub, instance: &str, status: AgentStatus) {
     }
 }
 
-/// An urgent note to `main` from the hub.
+/// An urgent note to the front door (`botler`) from the hub.
 pub async fn alarm(hub: &Hub, text: &str) -> Result<()> {
-    let ev = Event::new(kinds::MESSAGE, Source::Hub, Provenance::Trusted, Utc::now())
-        .to("main")
-        .urgent(true)
-        .payload(json!({ "text": text }));
+    let ev = builtin(BuiltinPayload::Message(MessagePayload { text: text.into(), files: vec![] }), Source::Hub)?
+        .to(botler_core::FRONT_DOOR)
+        .urgent(true);
     hub.emit(ev).await?;
     Ok(())
 }
@@ -803,6 +886,7 @@ pub async fn keep_always_on(hub: &Arc<Hub>) -> Result<()> {
                         session_file: format!("{}.jsonl", def.name),
                         branch: None,
                         parent: None,
+                        depth: 0,
                         task: None,
                     })
                     .await?

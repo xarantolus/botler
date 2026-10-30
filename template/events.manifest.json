@@ -1,0 +1,20 @@
+[
+  {
+    "description": "An example event: someone was greeted. Replace it with real event types.",
+    "schema": {
+      "description": "An example event: someone was greeted. Replace it with real event types.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ExampleGreeting",
+      "type": "object"
+    },
+    "type": "example.greeting"
+  }
+]

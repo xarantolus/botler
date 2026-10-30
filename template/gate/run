@@ -1,13 +1,17 @@
 #!/bin/sh
-# The deterministic gate. The hub runs this on every proposal in a hermetic container with no
-# network; agents run it themselves before proposing. Protected path: only the user can change it.
+# The deterministic gate. The hub runs this on every proposal in the dev image, after it has
+# validated the definitions; agents run it themselves before proposing. Protected path: only the
+# user can change it. The botler SDK comes from /opt/botler/sdk, which the hub mounts.
 set -eu
 cd "$(dirname "$0")/.."
 
-echo "== botler validate";      botler-validate .
-echo "== tools manifest";       python -m botler.tools manifest --check .
-echo "== ruff format";          uv run --offline ruff format --check .
-echo "== ruff lint";            uv run --offline ruff check .
-echo "== pyright";              uv run --offline pyright
-echo "== pytest";               uv run --offline pytest
+run() { uv run --no-sync "$@"; }
+
+echo "== uv sync";          uv sync --locked --all-packages
+echo "== events manifest";  run python -m botler.events manifest --check
+echo "== tools manifest";   run python -m botler.tools manifest --check
+echo "== ruff format";      run ruff format --check .
+echo "== ruff lint";        run ruff check .
+echo "== pyright";          run pyright
+echo "== pytest";           run pytest
 echo "gate: ok"

@@ -18,4 +18,4 @@ dialog_id: string | null,
 /**
  * The proposal a `propose_change` call started (its approval is shown in place).
  */
-proposal_id: string | null, } | { "kind": "compaction", id: string, at: string | null, summary: string, };
+proposal_id: string | null, } | { "kind": "note", id: string, at: string | null, text: string, from: string, provenance: string, event_kind: string, delivery: string, event: string, } | { "kind": "compaction", id: string, at: string | null, summary: string, };

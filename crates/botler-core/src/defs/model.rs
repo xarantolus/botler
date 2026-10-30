@@ -122,6 +122,9 @@ pub struct Defaults {
     /// Default per-instance budget for agents that do not declare one.
     #[serde(default)]
     pub budget: Budget,
+    /// How deep agent trees may grow: an agent at this depth cannot spawn further.
+    #[serde(default = "Defaults::max_spawn_depth")]
+    pub max_spawn_depth: u32,
 }
 
 impl Defaults {
@@ -131,11 +134,19 @@ impl Defaults {
     fn job_timeout() -> HumanDuration {
         HumanDuration::from_secs(10 * 60)
     }
+    fn max_spawn_depth() -> u32 {
+        8
+    }
 }
 
 impl Default for Defaults {
     fn default() -> Self {
-        Self { idle_timeout: Self::idle(), job_timeout: Self::job_timeout(), budget: Budget::default() }
+        Self {
+            idle_timeout: Self::idle(),
+            job_timeout: Self::job_timeout(),
+            budget: Budget::default(),
+            max_spawn_depth: Self::max_spawn_depth(),
+        }
     }
 }
 
@@ -190,13 +201,14 @@ pub struct Agent {
     pub model: Option<String>,
     #[serde(default)]
     pub workspace: Workspace,
-    /// Persistent scratch space mounted at `/scratch`, never committed. Defaults to one per
-    /// chat; naming one (e.g. `"groundstation"`) shares it between every chat that names it.
+    /// The persistent home directory mounted at `/home/agent` (`$HOME`, the working directory).
+    /// Defaults to one per instance; naming one (e.g. `"groundstation"`) shares it between every
+    /// instance of every definition that names it.
     #[serde(default)]
-    pub scratch: Option<String>,
+    pub home: Option<String>,
     #[serde(default)]
     pub idle_timeout: Option<HumanDuration>,
-    /// Keep this agent's pi session running at all times (persistent agents only), e.g. `main`.
+    /// Keep this agent's pi session running at all times (persistent agents only), e.g. `botler`.
     #[serde(default)]
     pub always_on: bool,
     /// Secret groups (from `secrets.toml`) delivered into this agent's container.
@@ -235,16 +247,16 @@ pub enum AgentKind {
     Ephemeral,
 }
 
-/// What filesystem an agent works in.
+/// What an agent gets besides its home (`/home/agent`, which every agent has).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Workspace {
-    /// A git worktree of the monorepo on its own branch, plus a scratch volume.
+    /// Its own clone of the monorepo on its own branch, at `/home/agent/monorepo`.
     #[default]
     Monorepo,
-    /// Only a persistent private volume.
+    /// Only the home. Kept for existing definitions: the home is the private persistent volume.
     Volume,
-    /// Pure reasoning: no mounts at all.
+    /// Only the home.
     None,
 }
 
@@ -262,7 +274,8 @@ pub enum Network {
 pub enum Capability {
     /// Read other instances' sessions.
     ReadSessions,
-    /// Spawn other agents.
+    /// Spawn other agents. Every agent may spawn now (trees are bounded by `max_spawn_depth`);
+    /// kept so definitions that list it still load.
     Spawn,
     /// Submit review verdicts on proposals (the reviewer).
     Review,

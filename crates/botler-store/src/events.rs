@@ -61,6 +61,52 @@ impl Store {
         Ok(())
     }
 
+    /// Messages and end-of-turn notices between agents `a` and `b` (either direction) since
+    /// `since`, oldest first: what the pair breaker counts.
+    pub async fn agent_exchanges(&self, a: &str, b: &str, since: DateTime<Utc>) -> Result<Vec<Event>> {
+        let rows = sqlx::query(
+            "SELECT body FROM events
+             WHERE kind IN ('message', 'agent.idle') AND at >= ?
+               AND ((source = ? AND to_instance = ?) OR (source = ? AND to_instance = ?))
+             ORDER BY at, id",
+        )
+        .bind(ts(since))
+        .bind(format!("agent:{a}"))
+        .bind(b)
+        .bind(format!("agent:{b}"))
+        .bind(a)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(|r| decode(r.get::<&str, _>("body"))).collect()
+    }
+
+    /// When the user, or anything not fully trusted (the outside world), last addressed any of
+    /// `instances`. New outside input resets the pair breaker's count.
+    pub async fn last_outside_event_to(&self, instances: &[&str]) -> Result<Option<DateTime<Utc>>> {
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT MAX(at) AS at FROM events WHERE (source = 'user' OR json_extract(body, '$.provenance') != 'trusted') AND to_instance IN (",
+        );
+        let mut list = qb.separated(", ");
+        for i in instances {
+            list.push_bind(i.to_string());
+        }
+        qb.push(")");
+        let row = qb.build().fetch_one(&self.pool).await?;
+        crate::parse_opt_ts("events", row.get("at"))
+    }
+
+    /// The most recent message `from` sent to `to`.
+    pub async fn last_message(&self, from: &str, to: &str) -> Result<Option<Event>> {
+        let row = sqlx::query(
+            "SELECT body FROM events WHERE kind = 'message' AND source = ? AND to_instance = ? ORDER BY at DESC, id DESC LIMIT 1",
+        )
+        .bind(format!("agent:{from}"))
+        .bind(to)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| decode(r.get::<&str, _>("body"))).transpose()
+    }
+
     /// Newest-first query over the journal.
     pub async fn events(&self, q: &EventQuery) -> Result<Vec<Event>> {
         let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new("SELECT body FROM events WHERE 1 = 1");

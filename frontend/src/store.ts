@@ -12,7 +12,6 @@ import type {
   SessionView,
   Usage,
 } from "./generated";
-import { frontDoor } from "./lib/events";
 import { currentStatus } from "./lib/phase";
 import { notifyError } from "./notify";
 
@@ -61,7 +60,8 @@ export const state = plainReactive<AppState>({
 
 const MAX_EVENTS = 500;
 
-export const frontDoorName = computed(() => frontDoor(state.instances));
+/** The front-door chat, as the hub names it. */
+export const frontDoorName = computed(() => state.status?.front_door ?? null);
 
 /** Open dialogs per chat. */
 export const waitingByInstance = computed(() => {

@@ -13,6 +13,7 @@ const BUILTIN = {
   "archive.requested": true,
   "agent.idle": true,
   timer: true,
+  schedule: true,
 } as const satisfies Record<BuiltinPayload["type"], true>;
 
 /** The typed payload of a built-in event, or null for agent-defined event types. */
@@ -58,17 +59,25 @@ export function eventSummary(ev: BotlerEvent): string {
       return `${b.payload.title ?? b.payload.instance} is idle`;
     case "timer":
       return `timer ${b.payload.timer_id}${b.payload.note ? `: ${b.payload.note}` : ""}`;
+    case "schedule":
+      return `schedule ${b.payload.trigger}${b.payload.skipped ? ` (${b.payload.skipped} missed)` : ""}`;
   }
 }
 
-/** The pinned front door chat: `botler` once renamed, `main` before. */
-export function frontDoor(instances: Pick<Instance, "name">[]): string | null {
-  for (const n of ["botler", "main"]) if (instances.some((i) => i.name === n)) return n;
-  return null;
+export function chatTitle(i: Pick<Instance, "name" | "title" | "slug">, frontDoor?: string | null): string {
+  if (i.name === frontDoor && !i.title) return i.name.charAt(0).toUpperCase() + i.name.slice(1);
+  return i.title || i.slug || i.name;
 }
 
-export function chatTitle(i: Pick<Instance, "name" | "title" | "slug">): string {
-  return i.title || i.slug || i.name;
+/**
+ * Where a chat link should go: the front door used to be called `main`, so a remembered
+ * `main` (bookmark, history) opens the front door unless a chat by that name exists.
+ */
+export function redirectChat(name: string, instances: Pick<Instance, "name">[], frontDoor: string | null): string | null {
+  if (name === "main" && frontDoor && frontDoor !== "main" && !instances.some((i) => i.name === "main")) {
+    return frontDoor;
+  }
+  return null;
 }
 
 /** The dialog a tool result opened, directly or through its proposal's approval. */

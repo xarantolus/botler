@@ -10,6 +10,6 @@ name: string,
  */
 description: string, 
 /**
- * Deliver as a file at this absolute path instead (e.g. `/root/.ssh/id_ed25519`).
+ * Deliver as a file at this absolute path instead (e.g. `/home/agent/.ssh/id_ed25519`).
  */
 file: string | null, };

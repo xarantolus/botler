@@ -4,7 +4,6 @@
 
 use botler_core::defs::{Capability, Target};
 use botler_core::duration::HumanDuration;
-use botler_core::event::kinds;
 use botler_core::limits::{RateLimit, default_limit};
 use botler_core::{Event, Provenance, Source};
 use botler_store::{DialogKind, EventQuery, NewDialog, NewTimer, Priority};
@@ -111,7 +110,8 @@ impl Caller {
     }
 }
 
-/// One operation as advertised to agents.
+/// One operation as advertised to agents. The Python SDK's `botler/_ops.py` is generated from
+/// these; `tests/sdk.rs` fails until it is regenerated.
 pub struct OpSpec {
     pub name: &'static str,
     pub description: &'static str,
@@ -131,9 +131,6 @@ fn everyone(_: &Caller) -> bool {
 fn agents(c: &Caller) -> bool {
     !matches!(c.principal, Principal::Run { .. })
 }
-fn spawners(c: &Caller) -> bool {
-    c.may(Capability::Spawn)
-}
 fn session_readers(c: &Caller) -> bool {
     c.may(Capability::ReadSessions)
 }
@@ -150,7 +147,7 @@ fn runs(c: &Caller) -> bool {
 pub const OPS: &[OpSpec] = &[
     OpSpec {
         name: "send_message",
-        description: "Send a message to an agent instance (e.g. `main`). Replies come back to you as messages. Set `reply_to` to the event you are answering to keep the thread.",
+        description: "Send a message to an agent instance (e.g. `botler`). Replies come back to you as messages. Set `reply_to` to the event you are answering to keep the thread.",
         schema: schema::<SendMessage>,
         visible: everyone,
     },
@@ -188,7 +185,7 @@ pub const OPS: &[OpSpec] = &[
         name: "spawn_agent",
         description: "Start a new instance of an agent definition with a task. It reports back to you by message.",
         schema: schema::<SpawnAgent>,
-        visible: spawners,
+        visible: agents,
     },
     OpSpec {
         name: "list_chats",
@@ -359,7 +356,7 @@ pub struct SetChatTitle {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ProposeChange {
-    /// Your pushed branch, e.g. `agents/main/work`.
+    /// Your pushed branch, e.g. `agents/botler/work`.
     pub branch: String,
     /// One line saying what the change does.
     pub title: String,
@@ -698,17 +695,34 @@ async fn send_message(hub: &Hub, caller: &Caller, a: SendMessage) -> OpResult {
         None if hub.applied().await.defs.agents.contains_key(&a.to) => a.to.clone(),
         None => return Err(OpError::BadRequest(format!("no agent instance or chat named {}", a.to))),
     };
+    if caller.instance() == Some(to.as_str()) {
+        return Err(OpError::BadRequest(
+            "that is you: a message to yourself would only wake you again. To remember something, write it to a \
+             file in your home; to come back to it later, use set_timer."
+                .into(),
+        ));
+    }
     // Messages between agents are trusted as messages; content an agent relays from outside is
     // marked by the event it came from (replies inherit the lower provenance of their parent).
-    let mut ev = Event::new(kinds::MESSAGE, caller.source(), Provenance::Trusted, Utc::now())
-        .to(to.clone())
-        .urgent(a.urgent)
-        .payload(json!({ "text": a.text }));
+    let mut ev = crate::hub::builtin(
+        botler_core::payloads::BuiltinPayload::Message(botler_core::payloads::MessagePayload {
+            text: a.text,
+            files: vec![],
+        }),
+        caller.source(),
+    )?
+    .to(to.clone())
+    .urgent(a.urgent);
     if let Some(parent) = &a.reply_to {
         let parent = hub.store.event(parent).await?;
         ev = ev.in_reply_to(&parent);
     }
     let ev = hub.emit(ev).await?;
+    if let Some(me) = caller.instance()
+        && let Some(live) = hub.agents.get(me).await
+    {
+        live.record_message(&to);
+    }
     Ok(json!({ "event_id": ev.id, "to": to }))
 }
 

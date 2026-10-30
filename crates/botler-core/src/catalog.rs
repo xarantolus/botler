@@ -141,17 +141,20 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         kind: kinds::BREAKER_TRIPPED,
         summary: "A circuit breaker paused something that was running away (message ping-pong, event storm, or wake churn).",
         fields: &[
-            ("subject", "what was paused"),
-            ("breaker", "cycle | rate | wake"),
+            ("subject", "what was paused (`chain:<id>` or `pair:<a>|<b>`)"),
+            ("breaker", "cycle | pair"),
             ("reason", "what triggered it"),
-            ("correlation", "the conversation chain, for cycles"),
+            ("correlation", "the conversation chain, for a cycle breaker"),
+            ("pair", "the two agents, for a pair breaker; their messages are held until the user resumes"),
+            ("recent", "their last messages"),
         ],
         follow_up: &[FollowUp {
             tool: "get_events",
             args: &[("correlation", "correlation")],
             why: "the chain that tripped it",
         }],
-        guidance: "Find out why the loop happened and fix its cause. Only the user can clear a breaker.",
+        guidance: "Tell the user what was paused and why, in one or two sentences. Only the user can resume it \
+                   (web app). If an agent's instructions caused the loop, fix them.",
     },
     BuiltinEvent {
         kind: kinds::ARCHIVE_REQUESTED,
@@ -166,20 +169,31 @@ pub const BUILTIN: &[BuiltinEvent] = &[
     },
     BuiltinEvent {
         kind: kinds::AGENT_IDLE,
-        summary: "A chat you started finished its turn and is waiting.",
+        summary: "An agent you started ended its turn; this is its final answer.",
         fields: &[
-            ("instance", "the chat"),
+            ("instance", "the agent"),
             ("title", "its title, if it named itself"),
             ("slug", "its alias, if it has one"),
-            ("last_reply", "its last answer"),
+            ("last_reply", "its final answer of the turn"),
         ],
         follow_up: &[FollowUp {
             tool: "read_session",
             args: &[("instance", "instance")],
             why: "everything it did this turn",
         }],
-        guidance: "Reply with `send_message` only if it asked you something or its result needs action from you. \
-                   Otherwise do nothing: it sleeps until messaged.",
+        guidance: "Reply with `send_message` only if it asked you something or its result needs more work from \
+                   it. Otherwise do not answer (no thanks needed): it sleeps until messaged.",
+    },
+    BuiltinEvent {
+        kind: kinds::SCHEDULE,
+        summary: "A schedule (cron or interval trigger) fired.",
+        fields: &[
+            ("trigger", "the trigger id"),
+            ("scheduled_for", "the fire time this run stands for"),
+            ("skipped", "fires missed during downtime and folded into this one"),
+        ],
+        follow_up: &[],
+        guidance: "Do what the trigger's prompt says.",
     },
     BuiltinEvent {
         kind: kinds::TIMER,

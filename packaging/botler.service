@@ -1,0 +1,22 @@
+# botler hub as a systemd user service. Install:
+#   cp packaging/botler.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now botler
+# Needs `loginctl enable-linger $USER` to keep running while you are logged out.
+[Unit]
+Description=botler hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/botler serve --data %h/.local/share/botler
+# SIGTERM goes to the hub only; it stops its agent containers, then exits. Anything left after
+# the timeout is killed.
+KillMode=mixed
+TimeoutStopSec=90
+Restart=always
+RestartSec=5
+# Podman and git must be on PATH.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

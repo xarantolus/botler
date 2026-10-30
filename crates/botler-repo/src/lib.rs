@@ -6,6 +6,7 @@
 //! namespace. The hub never runs git inside an agent-owned checkout: repo-local config there
 //! (`core.fsmonitor`, hooks) would execute as the hub.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -66,13 +67,13 @@ fn is_definition_path(path: &str) -> bool {
 #[derive(Clone, Debug)]
 pub struct Repo {
     git_dir: PathBuf,
-    /// Scratch directory for the hub's own short-lived worktrees.
-    scratch: PathBuf,
+    /// Directory for the hub's own short-lived worktrees.
+    worktrees: PathBuf,
 }
 
 impl Repo {
-    pub fn new(git_dir: impl Into<PathBuf>, scratch: impl Into<PathBuf>) -> Self {
-        Self { git_dir: git_dir.into(), scratch: scratch.into() }
+    pub fn new(git_dir: impl Into<PathBuf>, worktrees: impl Into<PathBuf>) -> Self {
+        Self { git_dir: git_dir.into(), worktrees: worktrees.into() }
     }
 
     pub fn git_dir(&self) -> &Path {
@@ -110,7 +111,7 @@ impl Repo {
         self.run(self.cmd(), args).await
     }
 
-    /// Run git inside one of the hub's own scratch worktrees.
+    /// Run git inside one of the hub's own short-lived worktrees.
     async fn git_in(&self, worktree: &Path, args: &[&str]) -> Result<String> {
         let mut c = Self::base_cmd();
         c.arg("-C").arg(worktree);
@@ -127,11 +128,23 @@ impl Repo {
             return Err(Error::AlreadyExists(self.git_dir.clone()));
         }
         tokio::fs::create_dir_all(&self.git_dir).await?;
+        let result = self.populate_from(template).await;
+        if result.is_err()
+            && let Err(e) = tokio::fs::remove_dir_all(&self.git_dir).await
+        {
+            tracing::warn!(dir = %self.git_dir.display(), error = %e, "could not remove the half-made monorepo");
+        }
+        result
+    }
+
+    async fn populate_from(&self, template: &Path) -> Result<String> {
         self.git(&["init", "--bare", "--initial-branch", MAIN]).await?;
         self.git(&["config", "receive.denyDeletes", "true"]).await?;
         self.git(&["config", "http.receivepack", "true"]).await?;
         self.install_hooks().await?;
-        let mut c = self.cmd();
+        // This git runs in `template`, so a relative git dir would resolve against it.
+        let mut c = Self::base_cmd();
+        c.arg("--git-dir").arg(std::path::absolute(&self.git_dir)?);
         c.arg("--work-tree").arg(template).current_dir(template);
         self.run(c, &["add", "--all", "--force", "."]).await?;
         let tree = self.git(&["write-tree"]).await?;
@@ -208,6 +221,25 @@ impl Repo {
         Ok(out.lines().map(String::from).collect())
     }
 
+    /// Object ids (tree or blob hashes) of `paths` at `commit`. Absent paths are left out.
+    pub async fn path_ids(&self, commit: &str, paths: &[&str]) -> Result<BTreeMap<String, String>> {
+        if paths.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut args = vec!["ls-tree", "-z", "--full-tree", commit, "--"];
+        args.extend_from_slice(paths);
+        let listing = self.git(&args).await?;
+        let mut ids = BTreeMap::new();
+        for entry in listing.split('\0').filter(|s| !s.is_empty()) {
+            // "<mode> <type> <object>\t<path>"
+            let malformed = || Error::Malformed(format!("ls-tree entry {entry:?}"));
+            let (meta, path) = entry.split_once('\t').ok_or_else(malformed)?;
+            let object = meta.split(' ').nth(2).ok_or_else(malformed)?;
+            ids.insert(path.to_string(), object.to_string());
+        }
+        Ok(ids)
+    }
+
     /// Load the files definitions are made of at `commit` into memory.
     pub async fn definition_tree(&self, commit: &str) -> Result<MemTree> {
         let listing = self.git(&["ls-tree", "-r", "-z", "--full-tree", commit]).await?;
@@ -274,7 +306,7 @@ impl Repo {
         if self.is_ancestor(&main, branch_commit).await? {
             return Ok(branch_commit.to_string());
         }
-        let wt = self.scratch_worktree(branch_commit).await?;
+        let wt = self.temp_worktree(branch_commit).await?;
         let result = match self.git_in(&wt, &["rebase", "--no-autostash", &main]).await {
             Ok(_) => self.git_in(&wt, &["rev-parse", "HEAD"]).await,
             Err(Error::Git { stderr, .. }) => {
@@ -296,7 +328,7 @@ impl Repo {
             args.extend(["-m", "1"]);
         }
         args.push(commit);
-        let wt = self.scratch_worktree(&main).await?;
+        let wt = self.temp_worktree(&main).await?;
         let result = match self.git_in(&wt, &args).await {
             Ok(_) => self.git_in(&wt, &["rev-parse", "HEAD"]).await,
             Err(Error::Git { stderr, .. }) => {
@@ -312,8 +344,26 @@ impl Repo {
     /// A commit on top of `base` that writes (`Some`) or deletes (`None`) files. Used by the hub
     /// for changes the user approved directly (e.g. declaring secrets from a filled form).
     pub async fn commit_files(&self, base: &str, files: &[(&str, Option<&str>)], message: &str) -> Result<String> {
-        let wt = self.scratch_worktree(base).await?;
+        self.commit_changes(base, &[], files, message).await
+    }
+
+    /// A commit on top of `base` that first renames paths (files or directories, `git mv`, so
+    /// history follows them), then writes or deletes files as [`Repo::commit_files`] does.
+    pub async fn commit_changes(
+        &self,
+        base: &str,
+        moves: &[(&str, &str)],
+        files: &[(&str, Option<&str>)],
+        message: &str,
+    ) -> Result<String> {
+        let wt = self.temp_worktree(base).await?;
         let result = async {
+            for (from, to) in moves {
+                if let Some(dir) = wt.join(to).parent() {
+                    tokio::fs::create_dir_all(dir).await?;
+                }
+                self.git_in(&wt, &["mv", "--", from, to]).await?;
+            }
             for (rel, body) in files {
                 let path = wt.join(rel);
                 match body {
@@ -374,12 +424,20 @@ impl Repo {
             .collect()
     }
 
-    /// Export a commit's full tree to `dest` (for image builds and gate runs).
+    /// Export a commit's full tree to `dest` (for gate runs).
     pub async fn export(&self, commit: &str, dest: &Path) -> Result<()> {
+        self.export_paths(commit, &[], dest).await
+    }
+
+    /// Export only `paths` (files or directories, kept at their repo paths) of a commit to
+    /// `dest`; the whole tree when `paths` is empty. Every path must exist at `commit`.
+    pub async fn export_paths(&self, commit: &str, paths: &[&str], dest: &Path) -> Result<()> {
         tokio::fs::create_dir_all(dest).await?;
         let tar = dest.with_extension("tar");
         let t = tar.to_string_lossy().to_string();
-        self.git(&["archive", "--format=tar", "-o", &t, commit]).await?;
+        let mut args = vec!["archive", "--format=tar", "-o", &t, commit, "--"];
+        args.extend_from_slice(paths);
+        self.git(&args).await?;
         let out = Command::new("tar").arg("-xf").arg(&tar).arg("-C").arg(dest).output().await?;
         remove_file_if_exists(&tar).await?;
         if !out.status.success() {
@@ -388,14 +446,19 @@ impl Repo {
         Ok(())
     }
 
+    /// Forget worktrees whose directories are gone.
+    pub async fn prune_worktrees(&self) -> Result<()> {
+        self.git(&["worktree", "prune"]).await.map(|_| ())
+    }
+
     /// Push main to a mirror remote.
     pub async fn push_mirror(&self, url: &str) -> Result<()> {
         self.git(&["push", "--force", url, &format!("refs/heads/{MAIN}:refs/heads/{MAIN}")]).await.map(|_| ())
     }
 
-    async fn scratch_worktree(&self, commit: &str) -> Result<PathBuf> {
-        tokio::fs::create_dir_all(&self.scratch).await?;
-        let path = self.scratch.join(uuid::Uuid::now_v7().to_string());
+    async fn temp_worktree(&self, commit: &str) -> Result<PathBuf> {
+        tokio::fs::create_dir_all(&self.worktrees).await?;
+        let path = self.worktrees.join(uuid::Uuid::now_v7().to_string());
         let p = path.to_string_lossy().to_string();
         self.git(&["worktree", "add", "--detach", "--force", &p, commit]).await?;
         Ok(path)
@@ -409,7 +472,7 @@ impl Repo {
         }
     }
 
-    /// Remove a scratch worktree. Failures are logged, not returned: cleanup must not turn a
+    /// Remove a short-lived worktree. Failures are logged, not returned: cleanup must not turn a
     /// completed operation into a failed one, and leftovers are pruned on the next removal.
     async fn remove_worktree(&self, path: &Path) {
         let p = path.to_string_lossy().to_string();
@@ -418,7 +481,7 @@ impl Repo {
         if let Err(e) = tokio::fs::remove_dir_all(path).await
             && e.kind() != std::io::ErrorKind::NotFound
         {
-            tracing::error!(path = %p, error = %e, "could not delete scratch worktree");
+            tracing::error!(path = %p, error = %e, "could not delete temporary worktree");
         }
         if let Err(e) = self.git(&["worktree", "prune"]).await {
             tracing::error!(error = %e, "git worktree prune failed");

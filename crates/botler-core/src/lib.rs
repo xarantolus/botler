@@ -8,9 +8,15 @@ pub mod duration;
 pub mod event;
 pub mod event_check;
 pub mod limits;
+pub mod loops;
 pub mod payloads;
 pub mod routing;
 pub mod trigger;
 
 pub use defs::{Definitions, Diagnostic, load};
 pub use event::{Event, Provenance, Source};
+
+/// The always-on chat the user talks to by default (instance and definition name): it receives
+/// alarms, breaker notices and failures nobody else handles. Not called `main`, which agents
+/// already use for the monorepo's main branch.
+pub const FRONT_DOOR: &str = "botler";

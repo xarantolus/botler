@@ -8,9 +8,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use botler_core::Source;
 use botler_core::change::{ChangeSummary, Decision, Verdict, decide, preview};
 use botler_core::payloads::{BuiltinPayload, ProposalUpdatedPayload};
-use botler_core::{Event, Provenance, Source};
 use botler_runtime::{ContainerSpec, Mount, NetworkMode};
 use botler_store::{DialogKind, NewDialog, NewProposal, Priority, Proposal, ProposalKind, ProposalStatus};
 use chrono::Utc;
@@ -112,20 +112,16 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
         return fail(hub, id, &format!("the gate failed; fix and propose again:\n```\n{report}\n```")).await;
     }
 
+    // The reviewer is spawned while the proposal is still `gating`; it cannot submit before the
+    // update below, since it first has to start and read the task.
     let reviewer = start_review(hub, id, &base, &head, &md, &report).await?;
     match reviewer {
         Some(name) => {
-            // Record the reviewer before the status says "reviewing", so readers never see one
-            // without the other. The reviewer only acts once it wakes, well after this.
-            hub.store.set_proposal_reviewer(id, &name).await?;
-            hub.store.set_proposal_status(id, ProposalStatus::Reviewing).await?;
+            hub.store.set_proposal_reviewing(id, &name).await?;
             update(hub, id, "reviewing", &format!("Gate passed. Reviewer `{name}` is looking at it.")).await
         }
         // No reviewer agent defined: the user decides.
-        None => {
-            hub.store.set_proposal_status(id, ProposalStatus::Reviewing).await?;
-            decide_and_act(hub, id, Verdict::Escalate, "no reviewer agent is defined").await
-        }
+        None => decide_and_act(hub, id, Verdict::Escalate, "no reviewer agent is defined").await,
     }
 }
 
@@ -147,13 +143,19 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
         Mount::Bind { src: dir.clone(), dst: "/workspace".into(), read_only: false },
         Mount::Bind { src: hub.paths.assets().join("sdk"), dst: plumbing::SDK_DIR.into(), read_only: true },
         // Dependency downloads are cached across gate runs.
-        Mount::Volume { name: "botler-gate-uv-cache".into(), dst: "/root/.cache/uv".into() },
+        Mount::Volume { name: "botler-gate-uv-cache".into(), dst: "/home/agent/.cache/uv".into() },
     ];
     let spec = ContainerSpec {
         name: format!("botler-gate-{id}"),
         image,
         command: vec!["sh".into(), "-c".into(), "cd /workspace && sh gate/run 2>&1".into()],
-        env: [("PYTHONPATH".to_string(), plumbing::SDK_DIR.to_string()), ("CI".into(), "1".into())].into(),
+        env: [
+            ("PYTHONPATH".to_string(), plumbing::SDK_DIR.to_string()),
+            ("CI".into(), "1".into()),
+            // Explicit, so images built before the base image moved HOME still use the cache.
+            ("HOME".into(), crate::agents::HOME.into()),
+        ]
+        .into(),
         mounts,
         labels: [(crate::jobs::ROLE_LABEL.to_string(), "gate".to_string())].into(),
         network: NetworkMode::Default,
@@ -349,9 +351,7 @@ async fn update(hub: &Hub, id: &str, status: &str, detail: &str) -> Result<()> {
         detail: detail.into(),
         summary: None,
     });
-    let ev = Event::builtin(payload, Source::Hub, Provenance::Trusted, Utc::now())
-        .map_err(|e| HubError::Io(std::io::Error::other(e)))?
-        .to(p.instance.clone());
+    let ev = crate::hub::builtin(payload, Source::Hub)?.to(p.instance.clone());
     hub.emit(ev).await?;
     Ok(())
 }

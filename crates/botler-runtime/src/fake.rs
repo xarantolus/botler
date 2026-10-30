@@ -1,6 +1,6 @@
 //! In-memory container runtime with a scripted pi, for testing hub logic without Podman.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -23,10 +23,20 @@ pub struct FakeContainer {
 #[derive(Default)]
 struct State {
     containers: BTreeMap<String, FakeContainer>,
-    images: BTreeSet<String>,
+    /// Tag -> (image id, labels).
+    images: BTreeMap<String, (String, BTreeMap<String, String>)>,
     builds: Vec<String>,
-    /// Prompts received by each attached pi, in order (after delivery dedup).
+    /// Prompt texts received by each attached pi, in order (after delivery dedup).
     prompts: BTreeMap<String, Vec<String>>,
+    /// Quiet deliveries (notes) each pi added to its session without starting a turn.
+    notes: BTreeMap<String, Vec<String>>,
+    /// What `get_last_assistant_text` answers, per container (default "fake reply").
+    last_reply: BTreeMap<String, String>,
+    /// When set, a prompt starts a turn but does not end it: the test ends it with
+    /// [`Fake::pi_event`] (`agent_settled`), after doing things "during" the turn.
+    hold_turns: bool,
+    /// Extra pi events to write to an attached pi's stdout, per container.
+    inject: BTreeMap<String, mpsc::UnboundedSender<Value>>,
     /// Delivery ids each pi has seen, persisted per session file like the real extension.
     seen: BTreeMap<String, HashSet<String>>,
     events: Vec<mpsc::Sender<ContainerEvent>>,
@@ -73,6 +83,26 @@ impl Fake {
     /// Prompt texts the pi in container `name` accepted (duplicates already dropped).
     pub fn prompts(&self, name: &str) -> Vec<String> {
         self.lock().prompts.get(name).cloned().unwrap_or_default()
+    }
+
+    /// Notes (quiet deliveries) the pi in container `name` added without starting a turn.
+    pub fn notes(&self, name: &str) -> Vec<String> {
+        self.lock().notes.get(name).cloned().unwrap_or_default()
+    }
+
+    /// The final assistant text the pi in container `name` reports.
+    pub fn set_last_reply(&self, name: &str, text: &str) {
+        self.lock().last_reply.insert(name.into(), text.into());
+    }
+
+    /// Keep turns open until the test sends `agent_settled` with [`Fake::pi_event`].
+    pub fn set_hold_turns(&self, hold: bool) {
+        self.lock().hold_turns = hold;
+    }
+
+    /// Make the pi in container `name` emit `event` (e.g. a tool start, or the end of a turn).
+    pub fn pi_event(&self, name: &str, event: Value) -> bool {
+        self.lock().inject.get(name).is_some_and(|tx| tx.send(event).is_ok())
     }
 
     pub fn set_fail_builds(&self, fail: bool) {
@@ -130,13 +160,20 @@ impl Containers for Fake {
         &self.info
     }
 
-    async fn image_exists(&self, image: &str) -> Result<bool> {
-        Ok(self.lock().images.contains(image))
+    async fn image_id(&self, image: &str) -> Result<Option<String>> {
+        Ok(self.lock().images.get(image).map(|(id, _)| id.clone()))
     }
 
-    async fn build(&self, context: &Path, dockerfile: &str, tag: &str) -> Result<()> {
+    async fn build(
+        &self,
+        context: &Path,
+        dockerfile: &str,
+        tag: &str,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<()> {
         let mut st = self.lock();
-        if st.fail_builds {
+        // Like podman, the Dockerfile must be inside the context.
+        if st.fail_builds || !context.join(dockerfile).is_file() {
             return Err(ContainerError::Command {
                 binary: "fake".into(),
                 args: format!("build {tag}"),
@@ -144,8 +181,26 @@ impl Containers for Fake {
             });
         }
         st.builds.push(format!("{tag} <- {}:{dockerfile}", context.display()));
-        st.images.insert(tag.to_string());
+        let id = format!("fake-image-{}", st.builds.len());
+        st.images.insert(tag.to_string(), (id, labels.clone()));
         Ok(())
+    }
+
+    async fn images(&self, labels: &BTreeMap<String, String>) -> Result<Vec<String>> {
+        Ok(self
+            .lock()
+            .images
+            .iter()
+            .filter(|(_, (_, l))| labels.iter().all(|(k, v)| l.get(k) == Some(v)))
+            .map(|(t, _)| t.clone())
+            .collect())
+    }
+
+    async fn remove_image(&self, tag: &str) -> Result<()> {
+        match self.lock().images.remove(tag) {
+            Some(_) => Ok(()),
+            None => Err(ContainerError::NotFound(tag.into())),
+        }
     }
 
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {
@@ -209,6 +264,8 @@ impl Containers for Fake {
         let (mut pi_w, hub_r) = tokio::io::duplex(1 << 16);
         let (exit_tx, exited) = oneshot::channel();
         let (kill, mut kill_rx) = oneshot::channel::<()>();
+        let (inject_tx, mut inject_rx) = mpsc::unbounded_channel::<Value>();
+        self.lock().inject.insert(spec.name.clone(), inject_tx);
         let me = self.clone();
         let name = spec.name.clone();
         // Dedup state is keyed by the session file, as the real extension stores it in the session.
@@ -219,6 +276,12 @@ impl Containers for Fake {
             loop {
                 let line = tokio::select! {
                     l = lines.next_line() => l,
+                    Some(ev) = inject_rx.recv() => {
+                        if pi_w.write_all(format!("{ev}\n").as_bytes()).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                     _ = &mut kill_rx => break,
                 };
                 let Ok(Some(line)) = line else { break };
@@ -258,6 +321,16 @@ impl Containers for Fake {
             exit_code: c.exit_code,
             oom_killed: false,
             labels: c.spec.labels.clone(),
+            image: c.spec.image.clone(),
+            mounts: c
+                .spec
+                .mounts
+                .iter()
+                .filter_map(|m| match m {
+                    crate::container::Mount::Bind { src, .. } => Some(src.clone()),
+                    _ => None,
+                })
+                .collect(),
         }))
     }
 
@@ -314,23 +387,39 @@ impl Fake {
         match kind {
             "prompt" => {
                 let text = cmd.get("message").and_then(Value::as_str).unwrap_or("").to_string();
-                if let Some(env) = text.strip_prefix("botler:delivery ")
-                    && let Ok(env) = serde_json::from_str::<Value>(env)
+                let envelope =
+                    text.strip_prefix("botler:delivery ").and_then(|env| serde_json::from_str::<Value>(env).ok());
+                if let Some(env) = &envelope
                     && let Some(did) = env.get("id").and_then(Value::as_str)
                     && !self.lock().seen.entry(session.into()).or_default().insert(did.to_string())
                 {
                     return vec![ok(json!({"disposition": "handled"}))];
                 }
-                self.lock().prompts.entry(name.into()).or_default().push(text);
-                vec![
+                // Like the extension: a quiet delivery is appended to the session, no turn.
+                if envelope.as_ref().and_then(|e| e.get("quiet")).and_then(Value::as_bool) == Some(true) {
+                    self.lock().notes.entry(name.into()).or_default().push(text);
+                    return vec![ok(json!({"disposition": "handled"}))];
+                }
+                let hold = {
+                    let mut st = self.lock();
+                    st.prompts.entry(name.into()).or_default().push(text);
+                    st.hold_turns
+                };
+                let mut out = vec![
                     ok(json!({"disposition": "started"})),
                     json!({"type": "agent_start"}),
                     json!({"type": "message_end", "message": {"role": "assistant", "model": "fake/model", "usage": {"totalTokens": 100, "cost": {"total": 0.001}}}}),
-                    json!({"type": "agent_settled"}),
-                ]
+                ];
+                if !hold {
+                    out.push(json!({"type": "agent_settled"}));
+                }
+                out
             }
             "get_state" => vec![ok(json!({"isStreaming": false, "isCompacting": false}))],
-            "get_last_assistant_text" => vec![ok(json!({"text": "fake reply"}))],
+            "get_last_assistant_text" => {
+                let text = self.lock().last_reply.get(name).cloned().unwrap_or_else(|| "fake reply".into());
+                vec![ok(json!({"text": text}))]
+            }
             "abort" => vec![ok(Value::Null)],
             _ => vec![
                 json!({"type": "response", "id": id, "command": kind, "success": false, "error": format!("fake pi: unsupported {kind}")}),

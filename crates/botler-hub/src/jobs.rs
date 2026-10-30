@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use botler_core::defs::{Lifetime, Overlap};
 use botler_core::payloads::{BuiltinPayload, RunnableFinishedPayload};
-use botler_core::{Event, Provenance, Source};
+use botler_core::{Event, Source};
 use botler_runtime::{ContainerSpec, Mount, NetworkMode};
 use botler_store::{NewRun, Run, RunKind, RunStatus};
 use chrono::{Duration, Utc};
@@ -184,8 +184,7 @@ pub async fn on_exit(hub: &Hub, run_id: &str, exit_code: Option<i64>, oom: bool)
             run_id: run.id.clone(),
             output,
         });
-        let ev = Event::builtin(payload, Source::Runnable(run.runnable.clone()), Provenance::Trusted, Utc::now())
-            .map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+        let ev = crate::hub::builtin(payload, Source::Runnable(run.runnable.clone()))?;
         crate::router::dispatch(hub, ev, vec![]).await?;
     } else {
         let kind = if oom { "oom" } else { "exit" };

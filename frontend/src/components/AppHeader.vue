@@ -5,6 +5,7 @@ import { call } from "../api/client";
 import { dialog, notifyError } from "../notify";
 import { logout, refreshStatus, state } from "../store";
 import { usd } from "../lib/time";
+import BreakerResume from "./BreakerResume.vue";
 
 const toggling = ref(false);
 const s = computed(() => state.status);
@@ -61,8 +62,9 @@ function togglePause() {
         <template #trigger>
           <NTag size="small" type="error">{{ s.breakers.length }} breaker(s)</NTag>
         </template>
-        <div v-for="b in s.breakers" :key="b.subject" style="max-width: 420px">
-          <strong>{{ b.subject }}</strong> ({{ b.kind }}): {{ b.reason }}
+        <div v-for="b in s.breakers" :key="b.subject" style="max-width: 460px; display: flex; gap: 8px; align-items: center; margin: 4px 0">
+          <span style="flex: 1"><strong>{{ b.subject }}</strong> ({{ b.kind }}): {{ b.reason }}</span>
+          <BreakerResume :subject="b.subject" size="tiny" />
         </div>
       </NPopover>
       <NTooltip v-if="spend">

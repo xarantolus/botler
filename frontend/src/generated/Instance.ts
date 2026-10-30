@@ -6,7 +6,11 @@ export type Instance = { name: string, definition: string, persistent: boolean, 
 /**
  * Session file path relative to the data directory's `sessions/`.
  */
-session_file: string, branch: string | null, container_id: string | null, parent: string | null, task: string | null, title: string | null, 
+session_file: string, branch: string | null, container_id: string | null, parent: string | null, 
+/**
+ * Spawn depth: 0 for chats not spawned by an agent, the parent's depth + 1 otherwise.
+ */
+depth: number, task: string | null, title: string | null, 
 /**
  * Unique human-friendly alias, e.g. `groundstation-antenna-fix`.
  */

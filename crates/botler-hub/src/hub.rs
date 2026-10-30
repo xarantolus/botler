@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use botler_core::payloads::{BuiltinPayload, MessagePayload};
 use botler_core::{Definitions, Diagnostic, Event, Provenance, Source};
 use botler_repo::Repo;
 use botler_runtime::Containers;
@@ -36,6 +37,12 @@ pub enum HubError {
     Paused,
     #[error("secret {0} has no value; enter it in the web app")]
     MissingSecret(String),
+    #[error(
+        "{parent} is {depth} spawns deep, the most allowed (max_spawn_depth); do the work yourself or report back to whoever started you"
+    )]
+    SpawnTooDeep { parent: String, depth: u32 },
+    #[error("migrating the data directory: {0}")]
+    Migration(String),
     #[error("{instance} keeps crashing; next start allowed at {until}")]
     Backoff { instance: String, until: chrono::DateTime<chrono::Utc> },
 }
@@ -90,11 +97,16 @@ impl std::fmt::Debug for Hub {
 impl Hub {
     /// Assemble a hub over an existing data directory whose repo already has a main branch.
     pub async fn open(paths: Paths, config: HubConfig, containers: Arc<dyn Containers>) -> Result<Arc<Self>> {
+        let stale_worktrees = crate::migrate::layout(&paths)?;
         paths.ensure()?;
         let store = Store::open(&paths.db()).await?;
         let secret_key = SecretKey::load_or_create(&paths.secret_key())?;
         let tokens = Tokens::from_secret_key(&secret_key);
-        let repo = Repo::new(paths.repo(), paths.scratch());
+        let repo = Repo::new(paths.repo(), paths.worktrees());
+        if stale_worktrees {
+            repo.prune_worktrees().await?;
+        }
+        crate::migrate::front_door(&paths, &store, &repo).await?;
         let applied = Self::load_bootable(&store, &repo).await?;
         let (live, _) = broadcast::channel(1024);
         Ok(Arc::new(Self {
@@ -127,15 +139,13 @@ impl Hub {
                     return Err(HubError::InvalidDefinitions { commit, diagnostics });
                 };
                 tracing::error!(%commit, fallback = %last, problems = diagnostics.len(), "main does not load; staying on last applied commit");
-                let ev = Event::new(botler_core::event::kinds::MESSAGE, Source::Hub, Provenance::Trusted, Utc::now())
-                    .to("main")
-                    .urgent(true)
-                    .payload(serde_json::json!({
-                        "text": format!(
-                            "The monorepo's main ({commit}) does not load, so botler is still running {last}. Problems:\n{}",
-                            diagnostics.iter().map(|d| format!("- {d}")).collect::<Vec<_>>().join("\n")
-                        )
-                    }));
+                let text = format!(
+                    "The monorepo's main ({commit}) does not load, so botler is still running {last}. Problems:\n{}",
+                    diagnostics.iter().map(|d| format!("- {d}")).collect::<Vec<_>>().join("\n")
+                );
+                let ev = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![] }), Source::Hub)?
+                    .to(botler_core::FRONT_DOOR)
+                    .urgent(true);
                 store.append_event(&ev).await?;
                 load_at(repo, &last).await
             }
@@ -183,6 +193,11 @@ impl Hub {
     pub async fn paused(&self) -> Result<bool> {
         Ok(self.store.paused().await?)
     }
+}
+
+/// A built-in event from `source` with its typed payload (the only way the hub builds one).
+pub fn builtin(payload: BuiltinPayload, source: Source) -> Result<Event> {
+    Event::builtin(payload, source, Provenance::Trusted, Utc::now()).map_err(|e| HubError::Io(std::io::Error::other(e)))
 }
 
 /// Load and validate definitions at `commit`.

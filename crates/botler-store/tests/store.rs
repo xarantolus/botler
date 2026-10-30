@@ -1,7 +1,7 @@
 use botler_core::defs::Target;
 use botler_core::{Event, Provenance, Source};
 use botler_store::*;
-use chrono::{Duration, Utc};
+use chrono::{Duration, SubsecRound, Utc};
 use serde_json::json;
 
 async fn store() -> Store {
@@ -54,6 +54,7 @@ async fn instance_and_delivery_flow() {
             session_file: "main/session.jsonl".into(),
             branch: None,
             parent: None,
+            depth: 0,
             task: None,
         })
         .await
@@ -67,6 +68,7 @@ async fn instance_and_delivery_flow() {
             session_file: "x".into(),
             branch: None,
             parent: None,
+            depth: 0,
             task: None
         })
         .await,
@@ -77,7 +79,7 @@ async fn instance_and_delivery_flow() {
     s.append_event(&e).await.unwrap();
     let d1 = s.enqueue_delivery(&e.id.to_string(), "main", None, None).await.unwrap();
     let d2 = s.enqueue_delivery(&e.id.to_string(), "main", Some("t#x"), Some("hi")).await.unwrap();
-    assert_eq!(s.instances_with_pending().await.unwrap(), vec!["main".to_string()]);
+    assert_eq!(s.instances_with_pending().await.unwrap(), vec![("main".to_string(), true)]);
     let pending = s.pending_deliveries("main").await.unwrap();
     assert_eq!(pending.iter().map(|d| &d.id).collect::<Vec<_>>(), vec![&d1.id, &d2.id]);
 
@@ -299,6 +301,7 @@ async fn slugs_are_unique_aliases() {
             session_file: format!("{n}.jsonl"),
             branch: None,
             parent: None,
+            depth: 0,
             task: None,
         })
         .await
@@ -313,4 +316,94 @@ async fn slugs_are_unique_aliases() {
     ));
     // a slug may not shadow another instance's id
     assert!(matches!(s.set_instance_title("chat-a1", "x", "chat-b2").await, Err(Error::SlugTaken(_))));
+}
+
+#[tokio::test]
+async fn renaming_an_instance_moves_its_live_references() {
+    let s = store().await;
+    let new = |name: &str, parent: Option<&str>| NewInstance {
+        name: name.into(),
+        definition: if parent.is_some() { "dev".into() } else { name.into() },
+        persistent: parent.is_none(),
+        session_file: format!("{name}.jsonl"),
+        branch: None,
+        parent: parent.map(String::from),
+        depth: 0,
+        task: None,
+    };
+    s.create_instance(&new("main", None)).await.unwrap();
+    s.create_instance(&new("dev-1", Some("main"))).await.unwrap();
+    let routed = ev("message").to("main");
+    s.append_event(&routed).await.unwrap();
+    s.mark_routed(&routed.id.to_string()).await.unwrap();
+    s.enqueue_delivery(&routed.id.to_string(), "main", None, None).await.unwrap();
+    let waiting = ev("message").to("main");
+    s.append_event(&waiting).await.unwrap();
+    s.create_timer(&NewTimer {
+        fire_at: Utc::now() + Duration::hours(1),
+        target: Target::Resume("main".into()),
+        prompt: None,
+        payload: json!({}),
+        created_by: "agent:main".into(),
+    })
+    .await
+    .unwrap();
+    s.kv_set("agent:main", "k", "v").await.unwrap();
+    s.trip_breaker("instance:main", "budget", "spent").await.unwrap();
+    s.schedule_state("agents/main/agent.toml#digest", Utc::now()).await.unwrap();
+    s.schedule_state("agents/mainframe/agent.toml#x", Utc::now()).await.unwrap();
+
+    assert!(s.rename_instance("main", "botler").await.unwrap());
+    let i = s.instance("botler").await.unwrap();
+    assert_eq!((i.definition.as_str(), i.session_file.as_str()), ("botler", "main.jsonl"), "file name kept");
+    assert!(s.find_instance("main").await.unwrap().is_none());
+    assert_eq!(s.instance("dev-1").await.unwrap().parent.as_deref(), Some("botler"));
+    assert_eq!(s.last_delivered("botler").await.unwrap(), None);
+    assert_eq!(s.deliveries_for_event(&routed.id.to_string()).await.unwrap()[0].instance, "botler");
+    assert_eq!(s.event(&waiting.id.to_string()).await.unwrap().to.as_deref(), Some("botler"), "unrouted follows");
+    assert_eq!(s.event(&routed.id.to_string()).await.unwrap().to.as_deref(), Some("main"), "history kept");
+    let timers = s.pending_timers(Some("agent:botler")).await.unwrap();
+    assert_eq!(timers[0].target, Target::Resume("botler".into()));
+    assert_eq!(s.kv_get("agent:botler", "k").await.unwrap().as_deref(), Some("v"));
+    assert!(s.breaker("instance:botler").await.unwrap().is_some());
+    assert_eq!(
+        s.prune_schedules(&["agents/botler/agent.toml#digest".into(), "agents/mainframe/agent.toml#x".into()])
+            .await
+            .unwrap(),
+        0
+    );
+
+    // Idempotent: nothing to rename the second time, and an existing target is never clobbered.
+    assert!(!s.rename_instance("main", "botler").await.unwrap());
+    s.create_instance(&new("main", None)).await.unwrap();
+    assert!(!s.rename_instance("main", "botler").await.unwrap());
+}
+
+#[tokio::test]
+async fn quiet_and_held_deliveries_and_pair_queries() {
+    let s = store().await;
+    let at = |secs: i64| Utc::now() - Duration::seconds(secs);
+    let msg = |from: &str, to: &str, secs: i64| {
+        Event { at: at(secs), ..Event::new("message", Source::Agent(from.into()), Provenance::Trusted, Utc::now()) }
+            .to(to)
+            .payload(json!({"text": format!("{from} to {to}")}))
+    };
+    let (ab, ba, ac) = (msg("a", "b", 30), msg("b", "a", 20), msg("a", "c", 10));
+    for e in [&ab, &ba, &ac] {
+        s.append_event(e).await.unwrap();
+    }
+    let user = Event { at: at(25), ..Event::new("message", Source::User, Provenance::Trusted, Utc::now()) }.to("a");
+    s.append_event(&user).await.unwrap();
+    let pair = s.agent_exchanges("b", "a", at(60)).await.unwrap();
+    assert_eq!(pair.iter().map(|e| e.id).collect::<Vec<_>>(), vec![ab.id, ba.id]);
+    assert_eq!(s.last_outside_event_to(&["a", "b"]).await.unwrap(), Some(user.at.trunc_subsecs(3)));
+    assert_eq!(s.last_outside_event_to(&["c"]).await.unwrap(), None);
+    assert_eq!(s.last_message("b", "a").await.unwrap().unwrap().id, ba.id);
+
+    s.enqueue_delivery_with(&ab.id.to_string(), "b", None, None, true, None).await.unwrap();
+    assert_eq!(s.instances_with_pending().await.unwrap(), vec![("b".to_string(), false)], "only a note");
+    s.enqueue_delivery_with(&ba.id.to_string(), "a", None, None, false, Some("pair:a|b")).await.unwrap();
+    assert!(s.pending_deliveries("a").await.unwrap().is_empty(), "held");
+    assert_eq!(s.release_held("pair:a|b").await.unwrap(), 1);
+    assert_eq!(s.pending_deliveries("a").await.unwrap().len(), 1);
 }

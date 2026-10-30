@@ -25,6 +25,8 @@ pub struct Instance {
     pub branch: Option<String>,
     pub container_id: Option<String>,
     pub parent: Option<String>,
+    /// Spawn depth: 0 for chats not spawned by an agent, the parent's depth + 1 otherwise.
+    pub depth: u32,
     pub task: Option<String>,
     pub title: Option<String>,
     /// Unique human-friendly alias, e.g. `groundstation-antenna-fix`.
@@ -85,6 +87,7 @@ pub struct NewInstance {
     pub session_file: String,
     pub branch: Option<String>,
     pub parent: Option<String>,
+    pub depth: u32,
     pub task: Option<String>,
 }
 
@@ -99,6 +102,8 @@ fn row(r: &SqliteRow) -> Result<Instance> {
         branch: r.get("branch"),
         container_id: r.get("container_id"),
         parent: r.get("parent"),
+        depth: u32::try_from(r.get::<i64, _>("depth"))
+            .map_err(|e| Error::Corrupt { table: T, detail: format!("bad depth: {e}") })?,
         task: r.get("task"),
         title: r.get("title"),
         slug: r.get("slug"),
@@ -116,8 +121,8 @@ impl Store {
     pub async fn create_instance(&self, n: &NewInstance) -> Result<Instance> {
         let now = ts(Utc::now());
         let res = sqlx::query(
-            "INSERT INTO instances (name, definition, persistent, state, session_file, branch, parent, task, created_at, last_active)
-             VALUES (?, ?, ?, 'dormant', ?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO NOTHING",
+            "INSERT INTO instances (name, definition, persistent, state, session_file, branch, parent, depth, task, created_at, last_active)
+             VALUES (?, ?, ?, 'dormant', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO NOTHING",
         )
         .bind(&n.name)
         .bind(&n.definition)
@@ -125,6 +130,7 @@ impl Store {
         .bind(&n.session_file)
         .bind(&n.branch)
         .bind(&n.parent)
+        .bind(n.depth)
         .bind(&n.task)
         .bind(&now)
         .bind(&now)
@@ -248,6 +254,60 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Rename instance `old` (and a definition of the same name) to `new` everywhere the hub
+    /// refers to it as a live target: the instance row, children's parent, the delivery queue,
+    /// dialogs, proposals, usage, timers (creator and `resume` target), state, breakers,
+    /// incidents, schedule state of the definition's own triggers, and events not yet routed.
+    /// The routed event journal is history and keeps the old name. One transaction; returns
+    /// false (and changes nothing) if `old` does not exist or `new` already does.
+    pub async fn rename_instance(&self, old: &str, new: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let names: Vec<String> = sqlx::query_scalar("SELECT name FROM instances WHERE name IN (?, ?)")
+            .bind(old)
+            .bind(new)
+            .fetch_all(&mut *tx)
+            .await?;
+        if names != [old] {
+            return Ok(false);
+        }
+        let (old_agent, new_agent) = (format!("agent:{old}"), format!("agent:{new}"));
+        let (old_inst, new_inst) = (format!("instance:{old}"), format!("instance:{new}"));
+        let (old_target, new_target) = (
+            crate::encode("timer target", &serde_json::json!({ "resume": old }))?,
+            crate::encode("timer target", &serde_json::json!({ "resume": new }))?,
+        );
+        let (old_prefix, new_prefix) = (format!("agents/{old}/"), format!("agents/{new}/"));
+        let renames: [(&str, &str, &str); 14] = [
+            ("UPDATE instances SET name = ? WHERE name = ?", new, old),
+            ("UPDATE instances SET definition = ? WHERE definition = ?", new, old),
+            ("UPDATE instances SET parent = ? WHERE parent = ?", new, old),
+            ("UPDATE deliveries SET instance = ? WHERE instance = ?", new, old),
+            ("UPDATE dialogs SET instance = ? WHERE instance = ?", new, old),
+            ("UPDATE proposals SET instance = ? WHERE instance = ?", new, old),
+            ("UPDATE usage SET instance = ? WHERE instance = ?", new, old),
+            ("UPDATE timers SET created_by = ? WHERE created_by = ?", &new_agent, &old_agent),
+            ("UPDATE timers SET target = ? WHERE target = ?", &new_target, &old_target),
+            ("UPDATE kv SET owner = ? WHERE owner = ?", &new_agent, &old_agent),
+            ("UPDATE breakers SET subject = ? WHERE subject = ?", &new_inst, &old_inst),
+            ("UPDATE incidents SET runnable = ? WHERE runnable = ?", &new_agent, &old_agent),
+            (
+                "UPDATE events SET to_instance = ?1, body = json_set(body, '$.to', ?1) WHERE routed = 0 AND to_instance = ?2",
+                new,
+                old,
+            ),
+            (
+                "UPDATE schedule_state SET trigger_id = ?1 || substr(trigger_id, length(?2) + 1) WHERE substr(trigger_id, 1, length(?2)) = ?2",
+                &new_prefix,
+                &old_prefix,
+            ),
+        ];
+        for (sql, to, from) in renames {
+            sqlx::query(sql).bind(to).bind(from).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// Crash recovery: no container survives the hub's view of it, so everything not ended is

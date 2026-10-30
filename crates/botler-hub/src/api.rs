@@ -13,7 +13,7 @@ use axum::{Extension, Json, Router};
 use botler_core::payloads::{
     ArchiveRequestedPayload, BuiltinPayload, DialogAnsweredPayload, MessagePayload, SecretsOutcome,
 };
-use botler_core::{Event, Provenance, Source};
+use botler_core::{Event, Source};
 use botler_store::{ArchiveRecord, DialogStatus, EventQuery, Incident, Instance, Proposal, Run};
 use chrono::Utc;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
@@ -25,9 +25,9 @@ use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
 use crate::ops::{self, Caller, OpError};
 use crate::wire::{
-    ApiErrorBody, ArchiveOutcome, BudgetView, ChatCreated, ChatRestored, DialogAnswer, DialogView, Dialogs,
-    EventPosted, HubStatus, PauseState, ReachedChat, Reverted, RuntimeInfo, Saved, SecretFieldView, SecretGroupView,
-    SessionAnchor, SessionView, Trace, Usage,
+    ApiErrorBody, ArchiveOutcome, BreakerCleared, BudgetView, ChatCreated, ChatRestored, DialogAnswer, DialogView,
+    Dialogs, EventPosted, HubStatus, PauseState, ReachedChat, Reverted, RuntimeInfo, Saved, SecretFieldView,
+    SecretGroupView, SessionAnchor, SessionView, Trace, Usage,
 };
 
 type AppState = Arc<Hub>;
@@ -72,6 +72,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/revert", post(revert))
         .route("/api/v1/pause", post(pause))
         .route("/api/v1/resume", post(resume))
+        .route("/api/v1/breakers/clear", post(clear_breaker))
         .route("/git/monorepo.git/{*rest}", any(git))
         .layer(middleware::from_fn_with_state(hub.clone(), authenticate));
     Router::new()
@@ -193,6 +194,7 @@ async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
         version: env!("CARGO_PKG_VERSION").into(),
         commit: applied.commit.clone(),
         paused: hub.paused().await?,
+        front_door: botler_core::FRONT_DOOR.into(),
         runtime: RuntimeInfo { binary: info.binary.clone(), version: info.version.clone(), rootless: info.rootless },
         open_dialogs: hub.store.open_dialogs().await?.len(),
         open_incidents: hub.store.open_incidents().await?.len(),
@@ -233,7 +235,7 @@ pub struct UserMessage {
 }
 
 fn main_instance() -> String {
-    "main".into()
+    botler_core::FRONT_DOOR.into()
 }
 
 async fn user_message(
@@ -249,8 +251,7 @@ async fn user_message(
 
 /// An event from the user.
 fn user_event(payload: BuiltinPayload) -> Result<Event, ApiError> {
-    Event::builtin(payload, Source::User, Provenance::Trusted, Utc::now())
-        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("encoding the event: {e}")))
+    Ok(crate::hub::builtin(payload, Source::User)?)
 }
 
 async fn dialogs(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Dialogs>> {
@@ -614,6 +615,23 @@ async fn resume(State(hub): State<AppState>, Extension(p): Extension<Principal>)
     user_only(&p)?;
     crate::control::resume(&hub).await?;
     Ok(Json(PauseState { paused: false }))
+}
+
+#[derive(Deserialize, ts_rs::TS)]
+pub struct ClearBreaker {
+    /// The breaker's subject, as in `HubStatus.breakers` (`chain:<id>`, `pair:<a>|<b>`).
+    subject: String,
+}
+
+/// Resume what a breaker paused (a pair's held messages are delivered).
+async fn clear_breaker(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Json(c): Json<ClearBreaker>,
+) -> ApiResult<Json<BreakerCleared>> {
+    user_only(&p)?;
+    let (cleared, released) = crate::loops::clear_breaker(&hub, &c.subject).await?;
+    Ok(Json(BreakerCleared { cleared, released }))
 }
 
 /// git smart-HTTP through `git http-backend`. Agents authenticate with their token; the

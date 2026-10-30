@@ -4,6 +4,7 @@ import { NCard, NSpace, NTag, NText } from "naive-ui";
 import { computed } from "vue";
 import { prettyJsonBody, type Envelope } from "../lib/envelope";
 import { ago } from "../lib/time";
+import BreakerNotice from "./BreakerNotice.vue";
 import MarkdownText from "./MarkdownText.vue";
 
 const props = defineProps<{ env: Envelope; at: string | null }>();
@@ -26,6 +27,7 @@ const provType = computed(() =>
         trace
       </RouterLink>
     </NSpace>
+    <BreakerNotice v-if="env.kind === 'breaker.tripped' && env.event" :event-id="env.event" style="margin-bottom: 6px" />
     <pre v-if="json" class="mono">{{ json }}</pre>
     <MarkdownText v-else-if="env.body.trim()" :source="env.body.trim()" />
   </NCard>

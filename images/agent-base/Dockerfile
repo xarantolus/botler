@@ -16,21 +16,25 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION
 RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
 # Fixed paths the hub mounts into every agent container.
-#   /botler/agent-dir   rendered pi config (models.json, mcp.json, settings.json, AGENTS.md)  ro
+#   /botler/agent-dir   rendered pi config (models.json, mcp.json, tools.json, AGENTS.md)  ro
 #   /botler/extension   botler pi extension                                                    ro
+#   /botler/applied     applied main commit, when the agent is granted Python tools            ro
 #   /opt/botler/sdk     botler Python SDK                                                      ro
 #   /botler/sessions    this instance's pi session files                                       rw
-#   /workspace          monorepo worktree or private volume                                    rw
+#   /home/agent         the agent's persistent home ($HOME, working directory)                 rw
+#   /home/agent/monorepo  the agent's monorepo clone (workspace = "monorepo")                  rw
 #   /inbox/files        uploads delivered to this instance                                     ro
+# Everything else (including /tmp) is wiped when the agent sleeps: containers are removed.
 ENV PI_CODING_AGENT_DIR=/botler/agent-dir \
     PI_TELEMETRY=0 \
     PI_SKIP_VERSION_CHECK=1 \
     PYTHONPATH=/opt/botler/sdk \
-    HOME=/root
+    HOME=/home/agent
 
 # Agents run as container root. Under rootless Podman that is the unprivileged host user, so bind-
-# mounted session files and worktrees stay owned by the user who runs the hub (no keep-id needed).
-RUN mkdir -p /botler /workspace /inbox
-WORKDIR /workspace
+# mounted session files and homes stay owned by the user who runs the hub (no keep-id needed).
+# HOME is not /root: it is an ordinary directory the hub mounts and keeps per agent.
+RUN mkdir -p /botler /home/agent /inbox
+WORKDIR /home/agent
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["pi", "--mode", "rpc"]

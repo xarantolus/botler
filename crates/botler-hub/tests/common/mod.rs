@@ -16,7 +16,7 @@ pub struct Env {
     pub fake: Fake,
 }
 
-fn copy_dir(src: &Path, dst: &Path) {
+pub fn copy_dir(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for e in std::fs::read_dir(src).unwrap() {
         let e = e.unwrap();
@@ -31,16 +31,20 @@ fn copy_dir(src: &Path, dst: &Path) {
 
 /// A hub over a fresh monorepo made from the real template, with the fake runtime.
 pub async fn env() -> Env {
+    let fake = Fake::new();
+    env_on(Arc::new(fake.clone()), fake).await
+}
+
+/// Like [`env`], but on `runtime` (`fake` is then unused).
+pub async fn env_on(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::new(dir.path().join("data"));
     paths.ensure().unwrap();
     let tpl = dir.path().join("template");
     copy_dir(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template")), &tpl);
-    botler_repo::Repo::new(paths.repo(), paths.scratch()).init_from(&tpl).await.unwrap();
+    botler_repo::Repo::new(paths.repo(), paths.worktrees()).init_from(&tpl).await.unwrap();
     assets::unpack(&paths).unwrap();
-    let fake = Fake::new();
-    let hub =
-        Hub::open(paths, HubConfig::new(SocketAddr::from(([127, 0, 0, 1], 0))), Arc::new(fake.clone())).await.unwrap();
+    let hub = Hub::open(paths, HubConfig::new(SocketAddr::from(([127, 0, 0, 1], 0))), runtime).await.unwrap();
     Env { _dir: dir, hub, fake }
 }
 

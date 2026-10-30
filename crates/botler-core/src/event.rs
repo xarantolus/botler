@@ -38,7 +38,7 @@ pub enum Source {
 }
 
 impl Source {
-    /// Stable string form used for rate limiting and storage, e.g. `agent:main`.
+    /// Stable string form used for rate limiting and storage, e.g. `agent:botler`.
     pub fn key(&self) -> String {
         match self {
             Self::User => "user".into(),
@@ -137,6 +137,7 @@ pub mod kinds {
     pub const TIMER: &str = "timer";
     pub const ARCHIVE_REQUESTED: &str = "archive.requested";
     pub const AGENT_IDLE: &str = "agent.idle";
+    pub const SCHEDULE: &str = "schedule";
 }
 
 #[cfg(test)]

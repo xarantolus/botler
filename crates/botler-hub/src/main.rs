@@ -57,6 +57,14 @@ enum Command {
     Resume,
     /// Show what the hub is doing.
     Status,
+    /// Write a consistent archive of the data directory (safe while the hub runs).
+    Backup {
+        /// Archive to create (zstd-compressed if `zstd` is installed, else gzip).
+        dest: PathBuf,
+        /// Leave out `secrets.key`; secret values in the archive then cannot be decrypted.
+        #[arg(long)]
+        no_key: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -83,7 +91,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let args = Args::parse();
-    let paths = Paths::new(&args.data);
+    // Absolute, so nothing depends on the working directory of the git or podman it runs.
+    let paths = Paths::new(std::path::absolute(&args.data).context("resolving the data directory")?);
     match args.command {
         Command::Init => init(&paths).await,
         Command::Serve { listen, container_url, runtime } => {
@@ -147,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Status => status(paths).await,
+        Command::Backup { dest, no_key } => backup(&paths, &dest, !no_key).await,
     }
 }
 
@@ -169,7 +179,7 @@ async fn init(paths: &Paths) -> anyhow::Result<()> {
         std::fs::remove_dir_all(&tmp)?;
     }
     template::write_to(&tmp)?;
-    let commit = botler_repo::Repo::new(paths.repo(), paths.scratch()).init_from(&tmp).await?;
+    let commit = botler_repo::Repo::new(paths.repo(), paths.worktrees()).init_from(&tmp).await?;
     std::fs::remove_dir_all(&tmp)?;
     let hub = offline_hub(paths.clone()).await?;
     let token = hub.tokens.issue(&Principal::User, chrono::Duration::days(90), chrono::Utc::now());
@@ -217,6 +227,75 @@ async fn status(paths: Paths) -> anyhow::Result<()> {
         println!("breaker    {} ({}): {}", b.subject, b.kind, b.reason);
     }
     Ok(())
+}
+
+/// Data directory entries that are facts. Everything else (exports, worktrees, logs, agent-dirs,
+/// assets, images) is derived and rebuilt by the hub.
+const BACKUP_DIRS: &[&str] = &["repo.git", "memory.git", "sessions", "workspaces", "homes", "shared-homes", "uploads"];
+
+async fn backup(paths: &Paths, dest: &std::path::Path, with_key: bool) -> anyhow::Result<()> {
+    if !paths.db().exists() {
+        bail!("{} is not initialised; run `botler init`", paths.root.display());
+    }
+    // Created up front: refuses to overwrite, and is private from the start (it may hold the key).
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let file = opts.open(dest).with_context(|| format!("creating {}", dest.display()))?;
+    let staging = dest.with_extension("staging");
+    let result = write_backup(paths, file, &staging, with_key).await;
+    let cleanup = match std::fs::remove_dir_all(&staging) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    };
+    if let Err(e) = result {
+        for (what, r) in [("staging dir", cleanup), ("incomplete archive", std::fs::remove_file(dest))] {
+            if let Err(c) = r {
+                eprintln!("warning: could not remove the {what}: {c}");
+            }
+        }
+        return Err(e);
+    }
+    cleanup.with_context(|| format!("removing {}", staging.display()))?;
+    println!("backup written to {}", dest.display());
+    if with_key {
+        eprintln!(
+            "warning: the archive holds secrets.key and hub.db; together they decrypt every secret. Keep it private."
+        );
+    }
+    Ok(())
+}
+
+async fn write_backup(
+    paths: &Paths,
+    file: std::fs::File,
+    staging: &std::path::Path,
+    with_key: bool,
+) -> anyhow::Result<()> {
+    std::fs::create_dir(staging).with_context(|| format!("creating {}", staging.display()))?;
+    let store = botler_store::Store::open(&paths.db()).await?;
+    store.backup(&staging.join("hub.db")).await.context("snapshotting hub.db")?;
+    let zstd = tokio::process::Command::new("zstd").arg("--version").output().await.is_ok_and(|o| o.status.success());
+    let mut tar = tokio::process::Command::new("tar");
+    tar.arg("-c").arg(if zstd { "--zstd" } else { "--gzip" }).arg("-f").arg("-");
+    // Absolute, because each `-C` is relative to the previous one.
+    tar.arg("-C").arg(std::path::absolute(staging)?).arg("hub.db").arg("-C").arg(std::path::absolute(&paths.root)?);
+    tar.args(BACKUP_DIRS.iter().filter(|d| paths.root.join(d).exists()));
+    if with_key {
+        tar.arg("secrets.key");
+    }
+    let status = tar.stdout(file).status().await.context("running tar")?;
+    // GNU tar exits 1 when a file changed while being read (a live session log); the archive is
+    // still complete, and tar has printed which file.
+    match status.code() {
+        Some(0) => Ok(()),
+        Some(1) => {
+            eprintln!("warning: some files changed while being archived (see above)");
+            Ok(())
+        }
+        _ => bail!("tar failed ({status})"),
+    }
 }
 
 async fn shutdown_signal() {

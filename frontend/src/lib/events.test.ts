@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BotlerEvent, Dialog } from "../generated";
-import { asBuiltin, eventSummary, frontDoor, linkedDialog } from "./events";
+import { asBuiltin, chatTitle, eventSummary, linkedDialog, redirectChat } from "./events";
 
 const ev = (type: string, payload: unknown): BotlerEvent => ({
   id: "e",
@@ -23,10 +23,23 @@ describe("events", () => {
     expect(eventSummary(ev("mail.received", { text: "hi" }))).toBe("hi");
   });
 
-  it("pins botler over main", () => {
-    expect(frontDoor([{ name: "main" }, { name: "x" }])).toBe("main");
-    expect(frontDoor([{ name: "main" }, { name: "botler" }])).toBe("botler");
-    expect(frontDoor([{ name: "x" }])).toBeNull();
+  it("sends a remembered main chat to the front door", () => {
+    expect(redirectChat("main", [{ name: "botler" }], "botler")).toBe("botler");
+    expect(redirectChat("main", [{ name: "main" }, { name: "botler" }], "botler")).toBeNull();
+    expect(redirectChat("x", [{ name: "botler" }], "botler")).toBeNull();
+    expect(redirectChat("main", [], null)).toBeNull();
+  });
+
+  it("names the front door", () => {
+    expect(chatTitle({ name: "botler", title: null, slug: null }, "botler")).toBe("Botler");
+    expect(chatTitle({ name: "x", title: null, slug: "my-x" }, "botler")).toBe("my-x");
+  });
+
+  it("summarises breakers and schedules", () => {
+    expect(eventSummary(ev("breaker.tripped", { subject: "pair:a|b", breaker: "pair", reason: "ping-pong" }))).toBe(
+      "pair breaker on pair:a|b: ping-pong",
+    );
+    expect(eventSummary(ev("schedule", { trigger: "digest", scheduled_for: "x", skipped: 0 }))).toBe("schedule digest");
   });
 
   it("links tool results to dialogs directly or by proposal", () => {
