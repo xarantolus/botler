@@ -43,6 +43,43 @@ pub struct RunnableFinishedPayload {
     pub output: String,
 }
 
+/// How a trial run ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TrialOutcome {
+    /// Exited with code 0.
+    Succeeded,
+    /// Exited non-zero, could not start, or reported itself unhealthy.
+    Failed,
+    /// Still running when its minutes were up, and stopped (what a healthy service does).
+    TimeUp,
+}
+
+/// Something a trial run did that the hub recorded instead of carrying out.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct TrialEffect {
+    /// `emit_event`, `send_message` or `set_timer`.
+    pub op: String,
+    /// What it would have done: the event (emit_event, send_message) or the timer (set_timer).
+    pub detail: serde_json::Value,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct TrialFinishedPayload {
+    pub run_id: String,
+    pub job: String,
+    pub branch: String,
+    pub outcome: TrialOutcome,
+    pub exit_code: Option<i64>,
+    pub reason: Option<String>,
+    pub logs_tail: String,
+    /// The events, messages and timers it would have produced, in order.
+    pub effects: Vec<TrialEffect>,
+    /// Secret groups the job declares that it did not get, because you do not hold them.
+    pub withheld_secrets: Vec<String>,
+}
+
 /// What a credentials request did when the user answered it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct SecretsOutcome {
@@ -223,6 +260,8 @@ pub enum BuiltinPayload {
     DialogAborted(DialogAbortedPayload),
     #[serde(rename = "proposal.updated")]
     ProposalUpdated(ProposalUpdatedPayload),
+    #[serde(rename = "trial.finished")]
+    TrialFinished(TrialFinishedPayload),
     #[serde(rename = "action.result")]
     ActionResult(ActionResultPayload),
     #[serde(rename = "breaker.tripped")]
@@ -247,6 +286,7 @@ impl BuiltinPayload {
             Self::DialogAnswered(_) => kinds::DIALOG_ANSWERED,
             Self::DialogAborted(_) => kinds::DIALOG_ABORTED,
             Self::ProposalUpdated(_) => kinds::PROPOSAL_UPDATED,
+            Self::TrialFinished(_) => kinds::TRIAL_FINISHED,
             Self::ActionResult(_) => kinds::ACTION_RESULT,
             Self::BreakerTripped(_) => kinds::BREAKER_TRIPPED,
             Self::ArchiveRequested(_) => kinds::ARCHIVE_REQUESTED,
@@ -264,6 +304,7 @@ impl BuiltinPayload {
             Self::DialogAnswered(p) => serde_json::to_value(p),
             Self::DialogAborted(p) => serde_json::to_value(p),
             Self::ProposalUpdated(p) => serde_json::to_value(p),
+            Self::TrialFinished(p) => serde_json::to_value(p),
             Self::ActionResult(p) => serde_json::to_value(p),
             Self::BreakerTripped(p) => serde_json::to_value(p),
             Self::ArchiveRequested(p) => serde_json::to_value(p),
@@ -315,6 +356,7 @@ mod tests {
             (kinds::DIALOG_ANSWERED, fields::<DialogAnsweredPayload>()),
             (kinds::DIALOG_ABORTED, fields::<DialogAbortedPayload>()),
             (kinds::PROPOSAL_UPDATED, fields::<ProposalUpdatedPayload>()),
+            (kinds::TRIAL_FINISHED, fields::<TrialFinishedPayload>()),
             (kinds::ACTION_RESULT, fields::<ActionResultPayload>()),
             (kinds::BREAKER_TRIPPED, fields::<BreakerTrippedPayload>()),
             (kinds::ARCHIVE_REQUESTED, fields::<ArchiveRequestedPayload>()),

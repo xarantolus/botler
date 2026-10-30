@@ -1,0 +1,9 @@
+version = 1
+description = "Example watcher: emits example.tick every 30 seconds, counting in state. A template for real watchers (see pi/skills/background-service); disabled, so it never runs unless enabled."
+lifetime = "service"
+# Not deployed: `trial_run` still runs it. Enabling a service asks the user once.
+enabled = false
+command = ["/app/.venv/bin/python", "-m", "example_watcher"]
+
+[health]
+heartbeat = "2m"

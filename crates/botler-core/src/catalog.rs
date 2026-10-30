@@ -124,6 +124,24 @@ pub const BUILTIN: &[BuiltinEvent] = &[
                    If it was rejected, read the reason before trying anything else.",
     },
     BuiltinEvent {
+        kind: kinds::TRIAL_FINISHED,
+        summary: "A `trial_run` you started ended. Nothing it emitted, sent or scheduled took effect.",
+        fields: &[
+            ("run_id", "the trial run"),
+            ("job", "the job or service tried"),
+            ("branch", "the branch it ran from"),
+            ("outcome", "succeeded | failed | time_up (a service still running when its minutes were up)"),
+            ("exit_code", "process exit code, if it exited"),
+            ("reason", "why it ended, if not a clean exit"),
+            ("logs_tail", "the last lines of output"),
+            ("effects", "the events, messages and timers it would have produced"),
+            ("withheld_secrets", "secret groups it declares that you do not hold, so it ran without them"),
+        ],
+        follow_up: &[FollowUp { tool: "get_run_logs", args: &[("run_id", "run_id")], why: "full output" }],
+        guidance: "Check the effects are the events you expect, with sensible payloads, and the logs are clean. \
+                   Fix and `trial_run` again, or `propose_change` once it behaves.",
+    },
+    BuiltinEvent {
         kind: kinds::ACTION_RESULT,
         summary: "An approval-gated action you requested ran (or was declined).",
         fields: &[

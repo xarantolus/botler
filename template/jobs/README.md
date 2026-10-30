@@ -18,6 +18,11 @@ makes it reachable from the user's network at `<host>:8080`; that needs the user
 host ports must be 1024 or above. Agents can also run stdio MCP servers in their own container:
 `[mcp_stdio.<name>] command = [...]` in `agent.toml`.
 
+Before proposing a job or service, `trial_run(job, branch, minutes)` runs it from your branch with
+its effects recorded instead of carried out (skill `background-service`). The first deployment of
+a service needs the user's approval; `enabled = false` keeps a job defined but never run
+(`jobs/example-watcher/` is such a template).
+
 A job's image is built from the repo root, but the build context holds only `jobs/<name>/`,
 `packages/`, `tools/`, `connectors/`, `pyproject.toml` and `uv.lock` (at their repo paths, e.g.
 `COPY jobs/<name>/ ...`). The image is rebuilt only when one of those changes.

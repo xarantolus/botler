@@ -276,11 +276,13 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
     }
     for j in new.jobs.values() {
         let prev = old.jobs.get(&j.name);
-        if j.spec.lifetime == Lifetime::Service && !prev.is_some_and(|p| p.spec.lifetime == Lifetime::Service) {
+        // Ask once per service: when it first runs (new, enabled, or turned from a oneshot). Later
+        // code-only changes do not ask; new secrets, ports and network still do.
+        if j.spec.is_service() && !prev.is_some_and(|p| p.spec.is_service()) {
             esc.insert(Escalation::ServiceAdded { job: j.name.clone() });
         }
-        if j.spec.lifetime == Lifetime::Service {
-            let before = prev.filter(|o| o.spec.lifetime == Lifetime::Service).map_or(&none, |o| &o.spec.env);
+        if j.spec.is_service() {
+            let before = prev.filter(|o| o.spec.is_service()).map_or(&none, |o| &o.spec.env);
             for e in before.escalations(&j.spec.env) {
                 if let EnvEscalation::Port(p) = e {
                     esc.insert(Escalation::PortPublished { job: j.name.clone(), reach: p.reach() });
@@ -436,7 +438,7 @@ fn likely_mistakes(old: &Definitions, new: &Definitions, now: DateTime<Utc>) -> 
             out.push(format!("`{}` listens for `{pattern}`, which matches no declared event type.", t.id));
         }
     }
-    for j in new.jobs.values().filter(|j| j.spec.lifetime == crate::defs::Lifetime::Oneshot) {
+    for j in new.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Oneshot) {
         let ran_before = old.triggers.values().any(|t| t.target == crate::defs::Target::Run(j.name.clone()));
         let runs_now = new.triggers.values().any(|t| t.target == crate::defs::Target::Run(j.name.clone()))
             || new.jobs.values().any(|o| o.spec.on_failure == Some(crate::defs::Target::Run(j.name.clone())));
@@ -746,6 +748,34 @@ mod tests {
         assert_eq!(s.escalations.len(), 1, "{:?}", s.escalations);
         assert!(s.to_markdown(chrono_tz::Europe::Berlin).contains("**Will change:**\n- service `app`"));
         assert!(preview(&new, &defs(&with_svc(8080)), &[], Utc::now()).escalations.is_empty());
+    }
+
+    #[test]
+    fn a_service_asks_once() {
+        let svc = |toml: &str| defs(&base().with("jobs/w/job.toml", toml).with("jobs/w/Dockerfile", "FROM x"));
+        let added = Escalation::ServiceAdded { job: "w".into() };
+        let paths = ["jobs/w/src/w/__main__.py".to_string()];
+        let esc = |old: &Definitions, new: &Definitions| preview(old, new, &paths, Utc::now()).escalations;
+        let v1 = svc("lifetime = \"service\"\ncommand = [\"w\"]\n");
+        assert_eq!(esc(&defs(&base()), &v1), std::slice::from_ref(&added), "the first deployment asks");
+        let v2 = svc("lifetime = \"service\"\ncommand = [\"w\", \"--fast\"]\n");
+        let s = preview(&v1, &v2, &paths, Utc::now());
+        assert!(s.escalations.is_empty(), "code-only changes do not: {:?}", s.escalations);
+        assert_eq!(decide(&s, Verdict::Approve), Decision::Merge);
+        let v3 = svc("lifetime = \"service\"\ncommand = [\"w\"]\nsecrets = [\"gitlab\"]\n");
+        assert_eq!(
+            esc(&v2, &v3),
+            [Escalation::SecretGranted { secret: "GITLAB_TOKEN".into(), group: "gitlab".into(), to: "job `w`".into() }],
+            "new secrets still do"
+        );
+
+        // Turning a oneshot into a service asks; a disabled service asks when it is enabled.
+        let oneshot = svc("command = [\"w\"]\n");
+        assert_eq!(esc(&oneshot, &v1), std::slice::from_ref(&added));
+        let disabled = svc("lifetime = \"service\"\nenabled = false\ncommand = [\"w\"]\n");
+        assert!(esc(&defs(&base()), &disabled).is_empty());
+        assert!(disabled.services().next().is_none(), "a disabled service does not run");
+        assert_eq!(esc(&disabled, &v1), [added]);
     }
 
     #[test]
