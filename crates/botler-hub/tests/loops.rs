@@ -142,7 +142,13 @@ async fn acknowledgements_do_not_wake_and_ride_along_with_the_next_message() {
 
     // Sleeping recipient: the note waits; nothing starts the container.
     agents::stop_all(&e.hub).await;
-    settle().await;
+    // The exit is recorded by the agent's watcher task in its own time.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while e.hub.store.instance(&b).await.unwrap().state != InstanceState::Dormant
+        && std::time::Instant::now() < deadline
+    {
+        settle().await;
+    }
     assert_eq!(e.hub.store.instance(&b).await.unwrap().state, InstanceState::Dormant);
     let ca = {
         user_says(&e, &a, "wake up").await;

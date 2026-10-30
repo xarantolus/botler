@@ -49,6 +49,9 @@ pub async fn container_spec(
     let mut mounts = vec![Mount::Bind { src: hub.paths.assets().join("sdk"), dst: SDK_DIR.into(), read_only: true }];
     let mut spec = ContainerSpec { image, command, ..Default::default() };
     let mut service = false;
+    // Action runs exist only once the user approved their arguments (`actions.rs`): the one
+    // place hub-class secrets enter a container.
+    let hub_class = matches!(what, Runnable::Run { run, .. } if run.kind == RunKind::Action);
     let mut agent_home = None;
     let token = match what {
         Runnable::Agent { instance, wake } => {
@@ -113,7 +116,7 @@ pub async fn container_spec(
         vars.insert("BOTLER_SOCKET".into(), format!("{CONTAINER_RUN_DIR}/{SOCKET_NAME}"));
         vars.insert("BOTLER_URL".into(), hub.config.container_url.clone());
         vars.insert("BOTLER_TOKEN".into(), hub.tokens.issue(&who, ttl, Utc::now()));
-        secrets(hub, env, extra_secrets, &secret_dir, &mut vars, &mut mounts).await?;
+        secrets(hub, env, extra_secrets, hub_class, &secret_dir, &mut vars, &mut mounts).await?;
     }
     if let Some(home) = agent_home {
         ssh_dir(&home, &mounts).await?;
@@ -148,6 +151,7 @@ async fn secrets(
     hub: &Hub,
     env: &Environment,
     extra: &[String],
+    hub_class: bool,
     secret_dir: &Path,
     vars: &mut BTreeMap<String, String>,
     mounts: &mut Vec<Mount>,
@@ -167,7 +171,7 @@ async fn secrets(
         let name = &decl.name;
         // Definitions validation already forbids this; checked again because it is the line
         // that keeps the approval guarantee.
-        if decl.class != SecretClass::Container {
+        if decl.class != SecretClass::Container && !hub_class {
             return Err(HubError::Forbidden(format!("hub-class secret {name} cannot enter a container")));
         }
         let missing = || HubError::MissingSecret(name.clone());

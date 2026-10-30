@@ -20,7 +20,35 @@ if TYPE_CHECKING:
     from .events import Event
     from .tools import tool
 
-__all__ = ["BotlerError", "Event", "emit", "health", "log", "ops", "send_message", "set_timer", "state", "tool"]
+__all__ = [
+    "BotlerError",
+    "Event",
+    "action_args",
+    "emit",
+    "health",
+    "log",
+    "ops",
+    "send_message",
+    "set_timer",
+    "state",
+    "tool",
+]
+
+
+def action_args() -> dict[str, Any]:
+    """Actions: the arguments the user approved for this run. Print the result as the last line of
+    stdout (JSON when it is structured); it reaches the invoking agent as `action.result`."""
+    import json
+    import os
+
+    path = os.environ.get("BOTLER_ACTION_ARGS")
+    if not path:
+        raise BotlerError("action_args", "not_configured", "BOTLER_ACTION_ARGS is not set; this is not an action run")
+    with open(path, encoding="utf-8") as f:
+        args = json.load(f)
+    if not isinstance(args, dict):
+        raise BotlerError("action_args", "bad_request", f"the approved arguments are not an object: {args!r}")
+    return args
 
 
 def emit(event: Any, payload: dict[str, Any] | None = None, *, provenance: str | None = None) -> Any:

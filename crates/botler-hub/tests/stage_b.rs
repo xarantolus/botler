@@ -57,7 +57,8 @@ async fn message_wakes_botler_and_is_delivered_once() {
             "request_access",
             "archive_ready",
             "ask_user",
-            "request_visit"
+            "request_visit",
+            "invoke_action"
         ],
         "botler is no reviewer"
     );

@@ -2,6 +2,7 @@
 
 import type { AccessRequested } from "./AccessRequested";
 import type { AccessRevoked } from "./AccessRevoked";
+import type { ActionRequested } from "./ActionRequested";
 import type { AgentSpawned } from "./AgentSpawned";
 import type { ArchiveReady } from "./ArchiveReady";
 import type { Archived } from "./Archived";
@@ -26,6 +27,7 @@ import type { Health } from "./Health";
 import type { HealthRecorded } from "./HealthRecorded";
 import type { Incident } from "./Incident";
 import type { IncidentResolved } from "./IncidentResolved";
+import type { InvokeAction } from "./InvokeAction";
 import type { ListChats } from "./ListChats";
 import type { ListConnections } from "./ListConnections";
 import type { ListEventTypes } from "./ListEventTypes";
@@ -119,6 +121,7 @@ export interface Ops {
   get_events: { input: GetEvents; output: Array<BotlerEvent> };
   ask_user: { input: AskUser; output: Asked };
   request_visit: { input: RequestVisit; output: Asked };
+  invoke_action: { input: InvokeAction; output: ActionRequested };
   get_run_logs: { input: GetRunLogs; output: RunLogs };
   get_incident: { input: GetIncident; output: Incident };
   get_incident_history: { input: GetIncidentHistory; output: Array<Incident> };

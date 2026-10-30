@@ -4,6 +4,7 @@
 //! once in [`OPS`].
 
 mod access;
+mod actions;
 mod chats;
 mod incidents;
 mod messages;
@@ -29,6 +30,7 @@ use serde_json::{Value, json};
 use ts_rs::TS;
 
 pub use access::*;
+pub use actions::*;
 pub use chats::*;
 pub use incidents::*;
 pub use messages::*;
@@ -265,6 +267,7 @@ pub static OPS: &[OpSpec] = &[
     op::<GetEvents>(),
     op::<AskUser>(),
     op::<RequestVisit>(),
+    op::<InvokeAction>(),
     op::<GetRunLogs>(),
     op::<GetIncident>(),
     op::<GetIncidentHistory>(),

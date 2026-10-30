@@ -330,6 +330,9 @@ pub struct Job {
     /// Declared event types this job or service emits (listed as their producer).
     #[serde(default)]
     pub emits: Vec<String>,
+    /// Actions: JSON Schema of the arguments object `invoke_action` must pass.
+    #[serde(default)]
+    pub args: Option<serde_json::Value>,
 }
 
 fn enabled_default() -> bool {
@@ -377,6 +380,9 @@ pub enum Lifetime {
     Oneshot,
     /// Long-lived; supervised and restarted by the hub.
     Service,
+    /// Run only through `invoke_action`, once per approval of its arguments (`args`). The only
+    /// runnable that may hold hub-class secrets.
+    Action,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

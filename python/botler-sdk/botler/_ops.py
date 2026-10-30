@@ -320,6 +320,16 @@ def request_visit(*, host_port: int, instructions: str, title: str, expires_in: 
     return call("request_visit", {"host_port": host_port, "instructions": instructions, "title": title, "expires_in": expires_in, "path": path})
 
 
+def invoke_action(*, args: Any, name: str) -> dict[str, Any]:
+    """Run an approval-gated action (something that reaches other people or uses hub-held secrets) with arguments. The user approves exactly these arguments; the outcome arrives as an `action.result` event.
+
+    Args:
+        args: Its arguments, matching its `args` schema. The user approves exactly these.
+        name: The action (`jobs/<name>/job.toml` with `lifetime = "action"`).
+    """
+    return call("invoke_action", {"args": args, "name": name})
+
+
 def get_run_logs(*, run_id: str, tail: int | None = None) -> dict[str, Any]:
     """Output of a job run.
 

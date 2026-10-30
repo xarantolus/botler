@@ -141,6 +141,19 @@ def test_the_socket_is_used_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
     h.server.shutdown()
 
 
+def test_action_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import botler
+
+    monkeypatch.delenv("BOTLER_ACTION_ARGS", raising=False)
+    with pytest.raises(botler.BotlerError) as e:
+        botler.action_args()
+    assert e.value.code == "not_configured"
+    args = tmp_path / "args.json"
+    args.write_text('{"to": "a@b.c", "subject": "Hi"}')
+    monkeypatch.setenv("BOTLER_ACTION_ARGS", str(args))
+    assert botler.action_args() == {"to": "a@b.c", "subject": "Hi"}
+
+
 def test_unreachable_and_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
     import botler
 

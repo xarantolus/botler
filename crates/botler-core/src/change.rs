@@ -958,4 +958,26 @@ mod tests {
         let bad: Vec<String> = load(&t).errors().map(|d| d.message.clone()).collect();
         assert!(bad.iter().any(|m| m.contains("unknown resource kind")), "{bad:?}");
     }
+
+    /// Only actions may hold hub-class secrets; they need an args schema and no triggers.
+    #[test]
+    fn actions_alone_hold_hub_secrets() {
+        let hub_group = "[[group]]\nname = \"mail\"\nclass = \"hub\"\n[[group.secret]]\nname = \"SMTP_PASS\"\n";
+        let t = |job: &str| {
+            base()
+                .with("secrets.toml", hub_group)
+                .with("jobs/send/job.toml", job)
+                .with("jobs/send/Dockerfile", "FROM x")
+        };
+        let errors = |job: &str| load(&t(job)).errors().map(|d| d.message.clone()).collect::<Vec<_>>();
+        let ok = "lifetime = \"action\"\ncommand = [\"x\"]\nsecrets = [\"mail\"]\nargs = { type = \"object\" }\n";
+        assert!(errors(ok).is_empty(), "{:?}", errors(ok));
+        assert!(errors("command = [\"x\"]\nsecrets = [\"mail\"]\n").iter().any(|m| m.contains("hub-class")));
+        assert!(errors("lifetime = \"action\"\ncommand = [\"x\"]\n").iter().any(|m| m.contains("needs `args`")));
+        let bad_schema = "lifetime = \"action\"\ncommand = [\"x\"]\nargs = { type = 5 }\n";
+        assert!(errors(bad_schema).iter().any(|m| m.contains("not a valid JSON Schema")));
+        let triggered = format!("{ok}[[trigger]]\nname = \"t\"\ncron = \"0 7 * * *\"\n");
+        assert!(errors(&triggered).iter().any(|m| m.contains("cannot have triggers")), "{:?}", errors(&triggered));
+        assert!(errors("command = [\"x\"]\nargs = {}\n").iter().any(|m| m.contains("only applies to actions")));
+    }
 }

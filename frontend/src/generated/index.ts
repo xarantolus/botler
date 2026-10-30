@@ -3,6 +3,7 @@
 export type * from "./AccessChangedPayload";
 export type * from "./AccessRequested";
 export type * from "./AccessRevoked";
+export type * from "./ActionRequested";
 export type * from "./ActionResultPayload";
 export type * from "./Activity";
 export type * from "./AgentDefinitionSummary";
@@ -84,6 +85,7 @@ export type * from "./IncidentResolved";
 export type * from "./IncidentStatus";
 export type * from "./Instance";
 export type * from "./InstanceState";
+export type * from "./InvokeAction";
 export type * from "./ItemChange";
 export type * from "./ListChats";
 export type * from "./ListConnections";

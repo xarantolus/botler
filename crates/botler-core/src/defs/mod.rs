@@ -435,6 +435,21 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
         if spec.lifetime == Lifetime::Service && !spec.triggers.is_empty() {
             l.err(&path, "a service runs forever and cannot have triggers; use a oneshot job instead");
         }
+        match (spec.lifetime, &spec.args) {
+            (Lifetime::Action, None) => {
+                l.err(&path, "an action needs `args`: the JSON Schema of the arguments it is invoked with");
+            }
+            (Lifetime::Action, Some(schema)) => {
+                if let Err(e) = crate::event_check::compile(schema) {
+                    l.err(&path, format!("`args` is not a valid JSON Schema: {e}"));
+                }
+                if !spec.triggers.is_empty() {
+                    l.err(&path, "an action runs only when invoked and approved; it cannot have triggers");
+                }
+            }
+            (_, Some(_)) => l.err(&path, "`args` only applies to actions (lifetime = \"action\")"),
+            (_, None) => {}
+        }
         if spec.lifetime == Lifetime::Oneshot && spec.health.is_some() {
             l.warn(&path, "health heartbeats only apply to services; ignored for oneshot jobs");
         }
@@ -674,7 +689,7 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
         for key in j.spec.env.foreign_keys(false) {
             l.err(&path, format!("`{key}` only applies to agents"));
         }
-        if j.spec.lifetime == Lifetime::Oneshot && (j.spec.env.port.is_some() || !j.spec.env.publish.is_empty()) {
+        if j.spec.lifetime != Lifetime::Service && (j.spec.env.port.is_some() || !j.spec.env.publish.is_empty()) {
             l.err(&path, "`port` and `publish` only apply to services (lifetime = \"service\")");
         }
         for p in &j.spec.env.publish {
@@ -699,6 +714,11 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
             }
         }
         for g in &j.spec.env.secrets {
+            // Actions run only after the user approved their arguments: the one place hub-class
+            // secrets may be used.
+            if j.spec.lifetime == Lifetime::Action && defs.secret_groups.contains_key(g) {
+                continue;
+            }
             check_container_group(l, defs, &path, g);
         }
         if let Some(t) = &j.spec.on_failure {
@@ -723,7 +743,7 @@ fn check_target(l: &mut Loader<'_>, defs: &Definitions, path: &str, target: &Tar
         Target::Spawn(n) => (!defs.agents.contains_key(n)).then(|| format!("spawn target agent {n:?} does not exist")),
         Target::Run(n) => match defs.jobs.get(n) {
             Some(j) if j.spec.lifetime == Lifetime::Oneshot => None,
-            Some(_) => Some(format!("run target {n:?} is a service; services cannot be triggered")),
+            Some(_) => Some(format!("run target {n:?} is a service or action; only oneshot jobs are triggered")),
             None => Some(format!("run target job {n:?} does not exist")),
         },
     };
