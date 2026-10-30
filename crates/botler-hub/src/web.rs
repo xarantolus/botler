@@ -37,7 +37,7 @@ fn content_type(path: &str) -> &'static str {
 }
 
 fn not_found(what: String) -> Response {
-    (StatusCode::NOT_FOUND, Json(ApiErrorBody { error: what })).into_response()
+    (StatusCode::NOT_FOUND, Json(ApiErrorBody { error: what, conflict: None })).into_response()
 }
 
 fn file(path: &str, body: &'static [u8]) -> Response {
@@ -60,7 +60,10 @@ pub async fn app(method: Method, uri: Uri) -> Response {
         return not_found(format!("no route {method} {path}"));
     }
     if method != Method::GET && method != Method::HEAD {
-        return (StatusCode::METHOD_NOT_ALLOWED, Json(ApiErrorBody { error: format!("{method} {path}") }))
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            Json(ApiErrorBody { error: format!("{method} {path}"), conflict: None }),
+        )
             .into_response();
     }
     let rel = path.trim_start_matches('/');
