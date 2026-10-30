@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::auth::Principal;
 use crate::hub::{Hub, HubError, Live, Result};
-use crate::{images, plumbing, prompt};
+use crate::{images, ops, plumbing, prompt};
 
 /// Attempts before a delivery pi keeps rejecting is dropped.
 const MAX_ATTEMPTS: i64 = 5;
@@ -388,9 +388,10 @@ async fn container_spec(
         .ok_or_else(|| HubError::Undefined { kind: "model route", name: def.name.clone() })?;
 
     let route_key: Vec<String> = route.api_key_secret.iter().cloned().collect();
+    let principal = Principal::Agent { instance: instance.name.clone(), wake: wake.into() };
     let p = plumbing::plumbing(
         hub,
-        &Principal::Agent { instance: instance.name.clone(), wake: wake.into() },
+        &principal,
         Duration::hours(AGENT_TOKEN_TTL_HOURS),
         &def.spec.secrets,
         &route_key,
@@ -427,7 +428,9 @@ async fn container_spec(
         json!({
             "url": format!("{}/mcp", hub.config.container_url),
             "headers": { "Authorization": "Bearer ${BOTLER_TOKEN}" },
-            "description": "The botler hub: messaging, timers, spawning agents, asking the user, proposing changes, incidents."
+            "description": "The botler hub: messaging, timers, spawning agents, asking the user, proposing changes, incidents.",
+            // The extension's turn-ending tools replace these.
+            "toolExposure": ops::TURN_ENDING.iter().map(|n| (*n, "hidden")).collect::<BTreeMap<_, _>>(),
         }),
     );
     for svc in &def.spec.mcp {
@@ -441,9 +444,12 @@ async fn container_spec(
     }
     // Python tools this agent is granted (`tools` globs); the extension registers them.
     let tools = applied.defs.tools_for(&def.spec);
+    // Hub ops that end the turn; the extension registers them with `terminate: true`.
+    let caller = ops::Caller { principal, capabilities: def.spec.capabilities.clone(), runnable: None };
     let files: Vec<(&str, String)> = vec![
         ("models.json", to_json(&models)?),
         ("tools.json", to_json(&json!(tools))?),
+        ("turn-tools.json", to_json(&ops::turn_ending_tools(&caller))?),
         ("mcp.json", to_json(&json!({ "mcpServers": servers }))?),
         ("botler.md", prompt::render(instance, def, branch)),
         ("AGENTS.md", def.prompt.clone().unwrap_or_default()),

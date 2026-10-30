@@ -299,6 +299,22 @@ pub const OPS: &[OpSpec] = &[
     },
 ];
 
+/// Ops after which the agent's turn is over by nature: the outcome arrives later as an event that
+/// wakes it, so another model call right after them can only produce filler or polling. MCP tool
+/// results cannot end a turn, so the pi extension registers these as its own tools that call
+/// `/api/v1/ops/{name}` and return `terminate: true` (from `turn-tools.json`, rendered by
+/// [`turn_ending_tools`]); their MCP duplicates are hidden from the agent in `mcp.json`.
+/// `send_message` is not one: work usually goes on after it.
+pub const TURN_ENDING: &[&str] = &["ask_user", "request_secrets", "propose_change", "submit_review", "archive_ready"];
+
+/// The [`TURN_ENDING`] ops `caller` may call, as `{name, description, parameters}`.
+pub fn turn_ending_tools(caller: &Caller) -> Value {
+    OPS.iter()
+        .filter(|o| TURN_ENDING.contains(&o.name) && (o.visible)(caller))
+        .map(|o| json!({ "name": o.name, "description": o.description, "parameters": (o.schema)() }))
+        .collect()
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct Empty {}
 
