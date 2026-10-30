@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use botler_core::payloads::TrialOutcome;
 use botler_store::RunKind;
 use chrono::Utc;
 use schemars::JsonSchema;
@@ -46,7 +47,12 @@ impl Op for Health {
             return Err(OpError::Forbidden("only services report health".into()));
         };
         let run = hub.store.run(run_id).await?;
-        if run.kind != RunKind::Service {
+        if run.kind == RunKind::Trial && !self.ok {
+            let reason = format!("reported unhealthy: {}", self.reason.as_deref().unwrap_or("no reason given"));
+            crate::trials::finish(hub, &run, TrialOutcome::Failed, None, Some(reason)).await?;
+            return Ok(HealthRecorded::Stopping { stopping: true });
+        }
+        if !matches!(run.kind, RunKind::Service | RunKind::Trial) {
             return Err(OpError::BadRequest(format!("{} is a oneshot job; only services report health", run.runnable)));
         }
         if self.ok {

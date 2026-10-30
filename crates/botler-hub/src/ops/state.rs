@@ -27,7 +27,8 @@ impl Op for StateGet {
     type Output = StateValue;
 
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<StateValue, OpError> {
-        Ok(StateValue { value: hub.store.kv_get(&caller.subject(), &self.key).await? })
+        let owner = crate::trials::state_owner(hub, caller).await?;
+        Ok(StateValue { value: hub.store.kv_get(&owner, &self.key).await? })
     }
 }
 
@@ -45,7 +46,8 @@ impl Op for StateSet {
     type Output = Saved;
 
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<Saved, OpError> {
-        hub.store.kv_set(&caller.subject(), &self.key, &self.value).await?;
+        let owner = crate::trials::state_owner(hub, caller).await?;
+        hub.store.kv_set(&owner, &self.key, &self.value).await?;
         Ok(Saved { ok: true })
     }
 }

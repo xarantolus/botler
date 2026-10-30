@@ -64,6 +64,21 @@ fn git(dir: &Path, args: &[&str]) {
 
 impl Env {
     /// Commit files on top of main, advance main and apply it (what a merged proposal does).
+    /// Commit files on top of main and push them as `branch` (what an agent does). Returns the head.
+    pub async fn push(&self, branch: &str, files: &[(&str, &str)]) -> String {
+        let work = self._dir.path().join(format!("clone-{}", uuid::Uuid::now_v7()));
+        git(self._dir.path(), &["clone", "-q", self.hub.repo.git_dir().to_str().unwrap(), work.to_str().unwrap()]);
+        for (rel, body) in files {
+            let p = work.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "-q", "-m", "agent change"]);
+        git(&work, &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")]);
+        self.hub.repo.rev(&format!("refs/heads/{branch}")).await.unwrap().unwrap()
+    }
+
     pub async fn commit(&self, files: &[(&str, &str)]) {
         let work = self._dir.path().join(format!("clone-{}", uuid::Uuid::now_v7()));
         git(self._dir.path(), &["clone", "-q", self.hub.repo.git_dir().to_str().unwrap(), work.to_str().unwrap()]);

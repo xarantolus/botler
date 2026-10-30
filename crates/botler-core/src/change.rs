@@ -438,7 +438,7 @@ fn likely_mistakes(old: &Definitions, new: &Definitions, now: DateTime<Utc>) -> 
             out.push(format!("`{}` listens for `{pattern}`, which matches no declared event type.", t.id));
         }
     }
-    for j in new.jobs.values().filter(|j| j.spec.lifetime == crate::defs::Lifetime::Oneshot) {
+    for j in new.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Oneshot) {
         let ran_before = old.triggers.values().any(|t| t.target == crate::defs::Target::Run(j.name.clone()));
         let runs_now = new.triggers.values().any(|t| t.target == crate::defs::Target::Run(j.name.clone()))
             || new.jobs.values().any(|o| o.spec.on_failure == Some(crate::defs::Target::Run(j.name.clone())));
@@ -757,7 +757,7 @@ mod tests {
         let paths = ["jobs/w/src/w/__main__.py".to_string()];
         let esc = |old: &Definitions, new: &Definitions| preview(old, new, &paths, Utc::now()).escalations;
         let v1 = svc("lifetime = \"service\"\ncommand = [\"w\"]\n");
-        assert_eq!(esc(&defs(&base()), &v1), [added.clone()], "the first deployment asks");
+        assert_eq!(esc(&defs(&base()), &v1), std::slice::from_ref(&added), "the first deployment asks");
         let v2 = svc("lifetime = \"service\"\ncommand = [\"w\", \"--fast\"]\n");
         let s = preview(&v1, &v2, &paths, Utc::now());
         assert!(s.escalations.is_empty(), "code-only changes do not: {:?}", s.escalations);
@@ -771,7 +771,7 @@ mod tests {
 
         // Turning a oneshot into a service asks; a disabled service asks when it is enabled.
         let oneshot = svc("command = [\"w\"]\n");
-        assert_eq!(esc(&oneshot, &v1), [added.clone()]);
+        assert_eq!(esc(&oneshot, &v1), std::slice::from_ref(&added));
         let disabled = svc("lifetime = \"service\"\nenabled = false\ncommand = [\"w\"]\n");
         assert!(esc(&defs(&base()), &disabled).is_empty());
         assert!(disabled.services().next().is_none(), "a disabled service does not run");

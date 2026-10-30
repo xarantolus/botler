@@ -41,6 +41,7 @@ pub fn default_limit(operation: &str) -> RateLimit {
         "spawn_agent" => RateLimit::new(5, 300),
         "ask_user" => RateLimit::new(5, 600),
         "propose_change" => RateLimit::new(10, 3600),
+        "trial_run" => RateLimit::new(10, 3600),
         "invoke_action" => RateLimit::new(10, 600),
         "replay_event" => RateLimit::new(10, 600),
         "wake" => RateLimit::new(30, 3600),
