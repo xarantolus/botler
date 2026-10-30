@@ -14,6 +14,11 @@
 // `tools/` are registered here: the hub renders the ones this agent is granted into
 // /botler/agent-dir/tools.json (entries of tools.manifest.json) and mounts the applied main commit
 // at /botler/applied; each call runs `python -m botler.tools call <name>` there.
+//
+// Hub ops after which the turn is over (ask_user, propose_change, ...) are registered here too,
+// from /botler/agent-dir/turn-tools.json (rendered by the hub from its op specs): MCP results
+// cannot end a turn, these return `terminate: true` so no model call follows. The hub hides
+// their MCP duplicates.
 
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -21,6 +26,7 @@ import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const TOOLS_FILE = "/botler/agent-dir/tools.json";
+const TURN_TOOLS_FILE = "/botler/agent-dir/turn-tools.json";
 const APPLIED = "/botler/applied";
 const TOOL_TIMEOUT_MS = 300_000; // the first call may install the tools' dependencies
 const MAX_OUTPUT = 50_000;
@@ -37,15 +43,46 @@ export function piToolName(name: string): string {
   return name.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
 }
 
-function loadTools(): ToolDecl[] {
+/** A hub op the extension exposes as a turn-ending tool. */
+interface OpDecl {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+function loadJson<T>(path: string): T[] {
   let text: string;
   try {
-    text = readFileSync(TOOLS_FILE, "utf8");
+    text = readFileSync(path, "utf8");
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return []; // no tools granted
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return []; // nothing granted
     throw e;
   }
-  return JSON.parse(text) as ToolDecl[];
+  return JSON.parse(text) as T[];
+}
+
+/** Call hub op `name` (`POST /api/v1/ops/{name}`, as the Python SDK does); throws on failure. */
+export async function callOp(name: string, args: unknown, signal?: AbortSignal): Promise<unknown> {
+  const url = process.env.BOTLER_URL;
+  const token = process.env.BOTLER_TOKEN;
+  if (!url || !token) throw new Error(`cannot call ${name}: BOTLER_URL or BOTLER_TOKEN is not set`);
+  const resp = await fetch(`${url.replace(/\/$/, "")}/api/v1/ops/${name}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(args ?? {}),
+    signal,
+  });
+  const raw = await resp.text();
+  if (!resp.ok) {
+    let message = raw || resp.statusText;
+    try {
+      message = String((JSON.parse(raw) as { error?: unknown }).error ?? message);
+    } catch {
+      // not JSON: keep the raw body
+    }
+    throw new Error(`${name} failed (${resp.status}): ${message}`);
+  }
+  return raw ? JSON.parse(raw) : null;
 }
 
 /** Run one tool call in a subprocess: JSON args on stdin, `{ok, result | error}` on stdout. */
@@ -79,6 +116,11 @@ export function runTool(name: string, args: unknown, signal?: AbortSignal): Prom
     });
     child.stdin.end(JSON.stringify(args ?? {}));
   });
+}
+
+function toText(result: unknown): string {
+  const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+  return text.length > MAX_OUTPUT ? `${text.slice(0, MAX_OUTPUT)}\n[truncated ${text.length - MAX_OUTPUT} characters]` : text;
 }
 
 const PREFIX = "botler:delivery ";
@@ -116,7 +158,23 @@ export default function botler(pi: ExtensionAPI) {
   const registered = new Set<string>();
 
   pi.on("session_start", async (_event, ctx) => {
-    for (const t of loadTools()) {
+    for (const op of loadJson<OpDecl>(TURN_TOOLS_FILE)) {
+      if (registered.has(op.name)) continue;
+      registered.add(op.name);
+      pi.registerTool({
+        name: op.name,
+        label: op.name,
+        description: `${op.description}\n\nOn success this ends your turn: say anything else in the same reply, before the call.`,
+        parameters: op.parameters as never,
+        // Ending the turn only works when the model calls it, not from a codemode script.
+        exposure: "model-only",
+        async execute(_id, params, signal) {
+          const result = await callOp(op.name, params, signal);
+          return { content: [{ type: "text", text: toText(result) }], details: undefined, terminate: true };
+        },
+      });
+    }
+    for (const t of loadJson<ToolDecl>(TOOLS_FILE)) {
       const name = piToolName(t.name);
       if (registered.has(name)) continue;
       registered.add(name);
@@ -129,11 +187,7 @@ export default function botler(pi: ExtensionAPI) {
         parameters: t.parameters as never,
         async execute(_id, params, signal) {
           const result = await runTool(t.name, params, signal);
-          let text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-          if (text.length > MAX_OUTPUT) {
-            text = `${text.slice(0, MAX_OUTPUT)}\n[truncated ${text.length - MAX_OUTPUT} characters]`;
-          }
-          return { content: [{ type: "text", text }], details: undefined };
+          return { content: [{ type: "text", text: toText(result) }], details: undefined };
         },
       });
     }

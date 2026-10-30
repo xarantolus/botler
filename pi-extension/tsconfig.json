@@ -5,7 +5,13 @@
     "moduleResolution": "NodeNext",
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // The template's agent-authored extensions (`template/pi/extensions`) are checked here too;
+    // they resolve pi's packages from this node_modules.
+    "paths": {
+      "@earendil-works/*": ["./node_modules/@earendil-works/*"],
+      "typebox": ["./node_modules/typebox"]
+    }
   },
-  "include": ["src"]
+  "include": ["src", "../template/pi/extensions/*.ts"]
 }

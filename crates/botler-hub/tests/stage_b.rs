@@ -42,6 +42,19 @@ async fn message_wakes_botler_and_is_delivered_once() {
     assert!(models.contains("\"$OPENROUTER_API_KEY\"") && models.contains("16384"), "{models}");
     assert!(!models.contains("null"), "pi ignores models.json containing nulls: {models}");
     assert!(!models.contains("sk-test"), "secret values never land in rendered files");
+    // Turn-ending ops: registered by the extension from the hub's own schemas, hidden over MCP.
+    let read_json = |f: &str| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir("botler").join(f)).unwrap()).unwrap()
+    };
+    let turn = read_json("turn-tools.json");
+    let names: Vec<&str> = turn.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["propose_change", "request_secrets", "archive_ready", "ask_user"], "botler is no reviewer");
+    let ask = turn.as_array().unwrap().iter().find(|t| t["name"] == "ask_user").unwrap();
+    assert_eq!(ask["parameters"]["required"], json!(["question"]), "{ask}");
+    let hidden = &read_json("mcp.json")["mcpServers"]["botler"]["toolExposure"];
+    for op in botler_hub::ops::TURN_ENDING {
+        assert_eq!(hidden[op], "hidden", "{hidden}");
+    }
     assert!(e.hub.paths.workspace("botler").join(".git").exists());
 
     let prompts = e.fake.prompts(&name);
