@@ -144,9 +144,12 @@ async fn granted_python_tools_reach_the_agent() {
     e.commit(&[
         ("agents/counter/agent.toml", "kind = \"persistent\"\ntools = [\"example.*\"]\n"),
         ("agents/counter/AGENTS.md", "counts words"),
+        // The template's agents are granted web.*; this one has no tools.
+        ("agents/plain/agent.toml", "kind = \"persistent\"\n"),
+        ("agents/plain/AGENTS.md", "no tools"),
     ])
     .await;
-    for to in ["counter", "botler"] {
+    for to in ["counter", "plain"] {
         let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, chrono::Utc::now())
             .to(to)
             .payload(serde_json::json!({"text": "hi"}));
@@ -170,7 +173,7 @@ async fn granted_python_tools_reach_the_agent() {
     };
     let (src, ro) = monorepo("counter").expect("applied commit mounted for tool code");
     assert!(ro && src.join("tools/example/src/example/__init__.py").exists() && src.join("uv.lock").exists());
-    assert!(monorepo("botler").is_none(), "no tools granted, nothing mounted");
-    let none = std::fs::read_to_string(e.hub.paths.agent_dir("botler").join("tools.json")).unwrap();
+    assert!(monorepo("plain").is_none(), "no tools granted, nothing mounted");
+    let none = std::fs::read_to_string(e.hub.paths.agent_dir("plain").join("tools.json")).unwrap();
     assert_eq!(none.trim(), "[]");
 }

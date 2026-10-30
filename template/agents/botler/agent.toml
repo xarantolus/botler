@@ -6,3 +6,4 @@ image = "agent"
 workspace = "monorepo"
 capabilities = ["read_sessions"]
 idle_timeout = "30m"
+tools = ["web.*"]
