@@ -144,6 +144,8 @@ Agents reach the same hub endpoints via MCP. Scripts the agent writes inside its
 
 **Approvals and dialogs.** `ask_user(question, ctas, about[], ttl, priority)` creates a dialog. An event touching an `about` target aborts it, and a late answer is rejected (DECISIONS 21). `invoke_action(name, args)` on an action tagged `approval` creates a proposal bound to the args hash. You approve in the web app's fixed shell, then the hub runs the action in a job container with the hub-held secret and returns the result as an event.
 
+**Web app, API types and the live stream.** The web app (`frontend/`, Vue 3 + TypeScript + Naive UI) is built with Vite into `frontend/dist`, which is committed and compiled into the binary (`include_dir`); the hub serves it at `/` with an SPA fallback, and the old stopgap page at `/legacy`. Every JSON shape it reads is a named Rust type (`crates/botler-hub/src/wire.rs` for API responses, store and core records, `live.rs` for WebSocket messages, `botler-core` `payloads.rs` for built-in event payloads as a tagged union). The TypeScript types and a typed route table (`routes.ts`: path, params, query, body and response per route) are **generated** from those types with ts-rs into `frontend/src/generated/`; the frontend never declares API shapes itself. Regenerate with `BOTLER_UPDATE_BINDINGS=1 cargo test -p botler --test bindings`; the same test fails when the committed output is stale, `web::tests::embedded_frontend_is_current` fails when `dist` is older than the frontend sources, and a router test checks that every route in the table is served. `GET /api/v1/live` is a WebSocket: the client authenticates with its first message (`{"type":"auth","token":…}`, so tokens stay out of URLs), then receives every event, agent status change (`waking` with its step, `running`, `dormant`, `failed`, `paused`) and dialog, plus raw pi events of the one chat it `watch`es. The app falls back to polling while the socket is down and reconnects with backoff.
+
 **Monorepo transaction.** An agent works on branch `agents/<instance>/<slug>` in its worktree and calls `propose_change(branch, summary)`. The hub then:
 1. Rebases onto main or rejects.
 2. Runs the **gate** (a job in the dev image: ruff, format, pyright strict, pytest with no network, plus `botler validate`, which parses every definition with the hub's own parser and emits the action/capability manifest).
@@ -188,7 +190,9 @@ crates/botler-cli/         `botler init|validate|status|secret set|logs|dev`
 pi-extension/              TypeScript @botler/pi-extension (tests with pi SDK in-process)
 python/botler-sdk/         job/connector SDK: emit events, @action decorator, health check, manifest
 images/agent-base/, images/job-base/
-web/                       stopgap index.html now; later Vue 3 + component library
+frontend/                  Vue 3 + TypeScript + Naive UI web app; src/generated/ is generated
+                           from the Rust API types; dist/ is committed and embedded in the binary
+web/                       the old dependency-free page, served at /legacy
 template/                  the monorepo template (below)
 docs/ARCHITECTURE.md, docs/DECISIONS.md (consolidated), docs/legacy/ (current 4 files)
 ```
@@ -216,7 +220,7 @@ pyproject.toml, uv.lock    uv workspace
 
 ## Key tech choices
 
-tokio, axum, sqlx (SQLite, WAL), bollard against the rootless Podman socket (`podman system service`, user systemd unit; Docker also works), git CLI wrapper (more predictable than libgit2 for worktrees and rebase), croner, rmcp (official Rust MCP SDK), serde/toml/schemars, tracing, chacha20poly1305 for secret values at rest, rust-embed, thiserror/anyhow. Web: **Vue 3 + an established component library** (PrimeVue or Naive UI; pi's `pi-web-ui` is stale), so it looks good with little effort. A dependency-free stopgap page (`web/index.html`) is served until then, against the same API. Push: ntfy (self-hostable), with system-written text only.
+tokio, axum, sqlx (SQLite, WAL), bollard against the rootless Podman socket (`podman system service`, user systemd unit; Docker also works), git CLI wrapper (more predictable than libgit2 for worktrees and rebase), croner, rmcp (official Rust MCP SDK), serde/toml/schemars, tracing, chacha20poly1305 for secret values at rest, rust-embed, thiserror/anyhow. Web: **Vue 3 + Naive UI** (good dark mode and data tables; pi's `pi-web-ui` is stale), TypeScript types generated from the Rust API types with **ts-rs** (it follows serde's attributes, so tagged enums become discriminated unions). The old dependency-free page (`web/index.html`) stays at `/legacy`. Push: ntfy (self-hostable), with system-written text only.
 
 ## Milestones (entire system, in build order)
 
