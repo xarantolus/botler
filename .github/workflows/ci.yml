@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # Tests use git (repo, smart HTTP), tar and zstd/gzip (backup); all ship with ubuntu-latest.
+      - run: git --version && tar --version && zstd --version
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Real-container tests skip unless BOTLER_PODMAN_TESTS=1.
+      - run: cargo test --workspace
+
+  pi-extension:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pi-extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: pi-extension/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+
+  # web: frontend checks (lint, type-check, build) go here once the Vue app lands.
+  # python-sdk: ruff / type-check / pytest for the Python SDK go here once it lands.

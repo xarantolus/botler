@@ -1,0 +1,12 @@
+{
+  "name": "botler-pi-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "typescript": "5.9.3"
+  }
+}
