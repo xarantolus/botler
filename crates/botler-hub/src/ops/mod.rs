@@ -35,7 +35,7 @@ pub use timers::*;
 
 use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
-use crate::{health, memory, secret_requests};
+use crate::{health, memory, search, secret_requests};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpError {
@@ -122,6 +122,10 @@ impl Caller {
     /// The calling agent's instance; anyone else is refused with `refusal`.
     pub(crate) fn agent(&self, refusal: &str) -> Result<&str, OpError> {
         self.instance().ok_or_else(|| OpError::Forbidden(refusal.into()))
+    }
+
+    pub(crate) fn require(&self, cap: Capability) -> Result<(), OpError> {
+        if self.may(cap) { Ok(()) } else { Err(OpError::Forbidden(format!("needs the `{}` capability", cap.as_str()))) }
     }
 
     pub fn may(&self, cap: Capability) -> bool {
@@ -238,6 +242,7 @@ pub static OPS: &[OpSpec] = &[
     op::<ArchiveReady>(),
     op::<ListEventTypes>(),
     op::<ReadSession>(),
+    op::<search::Search>(),
     op::<memory::MemoryWrite>(),
     op::<memory::MemoryAppend>(),
     op::<memory::MemoryDelete>(),

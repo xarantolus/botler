@@ -139,12 +139,25 @@ async function scrollToEnd() {
   if (log.value && stickToBottom) log.value.scrollTop = log.value.scrollHeight;
 }
 watch(() => [session.value?.items.length, state.streaming, name.value && state.outbox[name.value]?.length], scrollToEnd);
+/** The element showing entry `id` (a tool result shown with its call is in the call's item). */
+function entryElement(id: string): Element | null | undefined {
+  const items = session.value?.items ?? [];
+  const r = items.find((it) => it.id === id);
+  const shown =
+    r?.kind === "tool_result" && paired.value.has(r.id)
+      ? items.find((it) => it.kind === "assistant" && it.tool_calls.some((c) => c.id === r.tool_call_id))
+      : r;
+  return shown ? log.value?.querySelector(`[data-entry="${CSS.escape(shown.id)}"]`) : null;
+}
 watch(
-  () => [route.query.delivery, session.value?.items.length] as const,
-  async ([delivery]) => {
-    if (typeof delivery !== "string" || !session.value) return;
+  () => [route.query.delivery, route.query.entry, session.value?.items.length] as const,
+  async ([delivery, entry]) => {
+    if ((typeof delivery !== "string" && typeof entry !== "string") || !session.value) return;
     await nextTick();
-    const el = log.value?.querySelector(`[data-delivery="${CSS.escape(delivery)}"]`);
+    const el =
+      typeof entry === "string"
+        ? entryElement(entry)
+        : log.value?.querySelector(`[data-delivery="${CSS.escape(String(delivery))}"]`);
     if (!el) return;
     stickToBottom = false;
     el.scrollIntoView({ block: "center" });
@@ -305,16 +318,16 @@ const isFrontDoor = computed(() => name.value === frontDoorName.value);
         </div>
         <template v-for="it in session?.items ?? []" :key="it.id">
           <template v-if="it.kind === 'user'">
-            <div v-if="envelopeOf(it) && !isUserMessage(envelopeOf(it)!)" class="msg" :data-delivery="it.delivery ?? ''">
+            <div v-if="envelopeOf(it) && !isUserMessage(envelopeOf(it)!)" class="msg" :data-delivery="it.delivery ?? ''" :data-entry="it.id">
               <EnvelopeCard :env="envelopeOf(it)!" :at="it.at" />
             </div>
-            <div v-else class="msg user" :data-delivery="it.delivery ?? ''">
+            <div v-else class="msg user" :data-delivery="it.delivery ?? ''" :data-entry="it.id">
               <div class="bubble"><MarkdownText :source="(it.message_text ?? envelopeOf(it)?.body ?? it.text).trim()" /></div>
               <div class="meta" :title="it.local_time ?? it.at ?? ''">you · {{ ago(it.at) }}<template v-if="it.gap"> · {{ it.gap }}</template></div>
             </div>
           </template>
 
-          <div v-else-if="it.kind === 'assistant'" class="msg">
+          <div v-else-if="it.kind === 'assistant'" class="msg" :data-entry="it.id">
             <NCollapse v-if="it.thinking">
               <NCollapseItem title="thinking" :name="1">
                 <pre class="mono">{{ it.thinking }}</pre>
@@ -329,16 +342,16 @@ const isFrontDoor = computed(() => name.value === frontDoorName.value);
             </div>
           </div>
 
-          <div v-else-if="it.kind === 'tool_result' && !paired.has(it.id)" class="msg">
+          <div v-else-if="it.kind === 'tool_result' && !paired.has(it.id)" class="msg" :data-entry="it.id">
             <ToolCallView :result="it" />
           </div>
 
-          <div v-else-if="it.kind === 'note'" class="msg note" :data-delivery="it.delivery">
+          <div v-else-if="it.kind === 'note'" class="msg note" :data-delivery="it.delivery" :data-entry="it.id">
             <span class="note-label">note from {{ it.from }}<template v-if="it.event_kind !== 'message'"> · {{ it.event_kind }}</template> · {{ it.local_time ?? ago(it.at) }}</span>
             <MarkdownText :source="it.text.trim()" />
           </div>
 
-          <div v-else-if="it.kind === 'compaction'" class="msg">
+          <div v-else-if="it.kind === 'compaction'" class="msg" :data-entry="it.id">
             <NCollapse>
               <NCollapseItem title="earlier conversation compacted" :name="1">
                 <MarkdownText :source="it.summary" />

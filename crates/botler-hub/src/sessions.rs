@@ -216,6 +216,123 @@ pub async fn retarget_cwd(path: &std::path::Path, cwd: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// One session entry as viewers see it, or `None` for entries that are not shown (model changes,
+/// labels, ...). `message_text` is left empty: [`read`] fills it from the journal.
+pub fn parse_entry(e: &Value) -> Option<Item> {
+    let id = e.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+    let at = e.get("timestamp").and_then(Value::as_str).map(String::from);
+    match e.get("type").and_then(Value::as_str) {
+        Some("message") => {
+            let m = e.get("message")?;
+            let content = m.get("content").cloned().unwrap_or(Value::Null);
+            match m.get("role").and_then(Value::as_str) {
+                Some("user") => {
+                    let text = match &content {
+                        Value::String(s) => s.clone(),
+                        c => texts(c, "text", "text"),
+                    };
+                    let item = match parse_header(&text) {
+                        Some(h) => Item::User {
+                            id,
+                            at,
+                            text: clip(h.rest),
+                            from: Some(h.from),
+                            provenance: Some(h.provenance),
+                            event_kind: Some(h.kind),
+                            message_text: None,
+                            delivery: Some(h.delivery),
+                            event: Some(h.event),
+                            local_time: h.local_time,
+                            gap: h.gap,
+                        },
+                        None => Item::User {
+                            id,
+                            at,
+                            text: clip(text),
+                            from: None,
+                            provenance: None,
+                            event_kind: None,
+                            delivery: None,
+                            event: None,
+                            local_time: None,
+                            gap: None,
+                            message_text: None,
+                        },
+                    };
+                    Some(item)
+                }
+                Some("assistant") => {
+                    let tool_calls = content
+                        .as_array()
+                        .map(|c| {
+                            c.iter()
+                                .filter(|p| p.get("type").and_then(Value::as_str) == Some("toolCall"))
+                                .map(|p| ToolCall {
+                                    id: p.get("id").and_then(Value::as_str).map(String::from),
+                                    name: p.get("name").and_then(Value::as_str).unwrap_or("?").into(),
+                                    arguments: p.get("arguments").cloned().unwrap_or(Value::Null),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Some(Item::Assistant {
+                        id,
+                        at,
+                        text: clip(texts(&content, "text", "text")),
+                        thinking: clip(texts(&content, "thinking", "thinking")),
+                        tool_calls,
+                        model: m.get("model").and_then(Value::as_str).map(String::from),
+                        cost_usd: m.pointer("/usage/cost/total").and_then(Value::as_f64),
+                        error: m.get("errorMessage").and_then(Value::as_str).map(String::from),
+                    })
+                }
+                Some("toolResult") => {
+                    let tool: String = m.get("toolName").and_then(Value::as_str).unwrap_or("").into();
+                    let text = texts(&content, "text", "text");
+                    let (dialog_id, proposal_id) = result_links(&tool, &text);
+                    Some(Item::ToolResult {
+                        id,
+                        at,
+                        tool_call_id: m.get("toolCallId").and_then(Value::as_str).map(String::from),
+                        tool,
+                        text: clip(text),
+                        is_error: m.get("isError").and_then(Value::as_bool).unwrap_or(false),
+                        dialog_id,
+                        proposal_id,
+                    })
+                }
+                _ => None,
+            }
+        }
+        // Notes the botler extension added without a turn (acknowledgements between agents).
+        Some("custom_message") if e.get("customType").and_then(Value::as_str) == Some("botler.note") => {
+            let content = e.get("content").cloned().unwrap_or(Value::Null);
+            let text = match &content {
+                Value::String(s) => s.clone(),
+                c => texts(c, "text", "text"),
+            };
+            parse_header(&text).map(|h| Item::Note {
+                id,
+                at,
+                text: clip(h.rest),
+                from: h.from,
+                provenance: h.provenance,
+                event_kind: h.kind,
+                delivery: h.delivery,
+                event: h.event,
+                local_time: h.local_time,
+                gap: h.gap,
+            })
+        }
+        Some("compaction") => Some(Item::Compaction {
+            id,
+            at,
+            summary: clip(e.get("summary").and_then(Value::as_str).unwrap_or("").into()),
+        }),
+        _ => None,
+    }
+}
+
 /// The active branch of an instance's session, oldest first.
 pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
     let inst = hub.store.instance(instance).await?;
@@ -238,120 +355,11 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
 
     let mut out = Vec::new();
     for e in branch {
-        let id = e.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-        let at = e.get("timestamp").and_then(Value::as_str).map(String::from);
-        match e.get("type").and_then(Value::as_str) {
-            Some("message") => {
-                let Some(m) = e.get("message") else { continue };
-                let content = m.get("content").cloned().unwrap_or(Value::Null);
-                match m.get("role").and_then(Value::as_str) {
-                    Some("user") => {
-                        let text = match &content {
-                            Value::String(s) => s.clone(),
-                            c => texts(c, "text", "text"),
-                        };
-                        let item = match parse_header(&text) {
-                            Some(h) => Item::User {
-                                id,
-                                at,
-                                text: clip(h.rest),
-                                from: Some(h.from),
-                                provenance: Some(h.provenance),
-                                event_kind: Some(h.kind),
-                                message_text: user_text(hub, &h.event).await?,
-                                delivery: Some(h.delivery),
-                                event: Some(h.event),
-                                local_time: h.local_time,
-                                gap: h.gap,
-                            },
-                            None => Item::User {
-                                id,
-                                at,
-                                text: clip(text),
-                                from: None,
-                                provenance: None,
-                                event_kind: None,
-                                delivery: None,
-                                event: None,
-                                local_time: None,
-                                gap: None,
-                                message_text: None,
-                            },
-                        };
-                        out.push(item);
-                    }
-                    Some("assistant") => {
-                        let tool_calls = content
-                            .as_array()
-                            .map(|c| {
-                                c.iter()
-                                    .filter(|p| p.get("type").and_then(Value::as_str) == Some("toolCall"))
-                                    .map(|p| ToolCall {
-                                        id: p.get("id").and_then(Value::as_str).map(String::from),
-                                        name: p.get("name").and_then(Value::as_str).unwrap_or("?").into(),
-                                        arguments: p.get("arguments").cloned().unwrap_or(Value::Null),
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        out.push(Item::Assistant {
-                            id,
-                            at,
-                            text: clip(texts(&content, "text", "text")),
-                            thinking: clip(texts(&content, "thinking", "thinking")),
-                            tool_calls,
-                            model: m.get("model").and_then(Value::as_str).map(String::from),
-                            cost_usd: m.pointer("/usage/cost/total").and_then(Value::as_f64),
-                            error: m.get("errorMessage").and_then(Value::as_str).map(String::from),
-                        });
-                    }
-                    Some("toolResult") => {
-                        let tool: String = m.get("toolName").and_then(Value::as_str).unwrap_or("").into();
-                        let text = texts(&content, "text", "text");
-                        let (dialog_id, proposal_id) = result_links(&tool, &text);
-                        out.push(Item::ToolResult {
-                            id,
-                            at,
-                            tool_call_id: m.get("toolCallId").and_then(Value::as_str).map(String::from),
-                            tool,
-                            text: clip(text),
-                            is_error: m.get("isError").and_then(Value::as_bool).unwrap_or(false),
-                            dialog_id,
-                            proposal_id,
-                        });
-                    }
-                    _ => {}
-                }
-            }
-            // Notes the botler extension added without a turn (acknowledgements between agents).
-            Some("custom_message") if e.get("customType").and_then(Value::as_str) == Some("botler.note") => {
-                let content = e.get("content").cloned().unwrap_or(Value::Null);
-                let text = match &content {
-                    Value::String(s) => s.clone(),
-                    c => texts(c, "text", "text"),
-                };
-                if let Some(h) = parse_header(&text) {
-                    out.push(Item::Note {
-                        id,
-                        at,
-                        text: clip(h.rest),
-                        from: h.from,
-                        provenance: h.provenance,
-                        event_kind: h.kind,
-                        delivery: h.delivery,
-                        event: h.event,
-                        local_time: h.local_time,
-                        gap: h.gap,
-                    });
-                }
-            }
-            Some("compaction") => out.push(Item::Compaction {
-                id,
-                at,
-                summary: clip(e.get("summary").and_then(Value::as_str).unwrap_or("").into()),
-            }),
-            _ => {}
+        let Some(mut item) = parse_entry(e) else { continue };
+        if let Item::User { event: Some(ev), message_text, .. } = &mut item {
+            *message_text = user_text(hub, ev).await?;
         }
+        out.push(item);
     }
     Ok(out)
 }

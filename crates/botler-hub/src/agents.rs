@@ -41,6 +41,10 @@ pub struct LiveAgent {
     stopping: AtomicBool,
     /// What it did this turn: decides whether its parent hears about the end of the turn.
     turn: std::sync::Mutex<TurnLog>,
+    /// Held while a delivery is handed to pi and recorded as delivered. pi can start and settle
+    /// the turn before its response to the prompt is processed, so the end-of-turn handling takes
+    /// it before looking up the delivery that started the turn.
+    delivering: Mutex<()>,
     kill: Mutex<Option<oneshot::Sender<()>>>,
 }
 
@@ -196,6 +200,7 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
         None
     };
     hub.store.mark_delivery_attempt(&d.id).await?;
+    let _delivering = agent.delivering.lock().await;
     match agent.pi.prompt(&text, &[], streaming).await {
         Ok(disposition) => {
             hub.store.mark_delivered(&d.id).await?;
@@ -300,6 +305,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
         turn: std::sync::Mutex::default(),
+        delivering: Mutex::default(),
         kill: Mutex::new(Some(attached.kill)),
     });
     hub.agents.live.lock().await.insert(instance.name.clone(), agent.clone());
@@ -633,7 +639,14 @@ async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
         last_reply,
     });
     let mut ev = builtin(idle, Source::Agent(instance.name.clone()))?.to(parent);
-    if let Some(d) = hub.store.last_delivered(&instance.name).await? {
+    // A delivery still being recorded may be the one that started this turn: wait for it. pi's
+    // response to the prompt is read by the client's reader task, not this pump, so this cannot
+    // deadlock, and the prompt is bounded by the pi timeout.
+    let last = {
+        let _delivering = agent.delivering.lock().await;
+        hub.store.last_delivered(&instance.name).await?
+    };
+    if let Some(d) = last {
         let started = hub.store.event(&d.event_id).await?;
         ev = ev.in_reply_to(&started);
     }

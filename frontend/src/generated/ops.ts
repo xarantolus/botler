@@ -51,6 +51,8 @@ import type { ResolveIncident } from "./ResolveIncident";
 import type { ReviewRecorded } from "./ReviewRecorded";
 import type { RunLogs } from "./RunLogs";
 import type { Saved } from "./Saved";
+import type { Search } from "./Search";
+import type { SearchResults } from "./SearchResults";
 import type { SecretRequest } from "./SecretRequest";
 import type { SendMessage } from "./SendMessage";
 import type { SessionMessages } from "./SessionMessages";
@@ -85,6 +87,7 @@ export interface Ops {
   archive_ready: { input: ArchiveReady; output: Archived };
   list_event_types: { input: ListEventTypes; output: EventTypes };
   read_session: { input: ReadSession; output: SessionMessages };
+  search: { input: Search; output: SearchResults };
   memory_write: { input: MemoryWrite; output: MemoryWritten };
   memory_append: { input: MemoryAppend; output: MemoryWritten };
   memory_delete: { input: MemoryDelete; output: MemoryDeleted };

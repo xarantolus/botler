@@ -4,4 +4,12 @@ export type ReadSession = { instance: string,
 /**
  * How many of the most recent messages (default 20, max 200).
  */
-last?: number, };
+last?: number, 
+/**
+ * An entry id (from `search`): read the messages around it instead of the latest.
+ */
+around?: string, 
+/**
+ * With `around`: how many messages before and after it (default 5, max 50).
+ */
+n?: number, };

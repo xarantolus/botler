@@ -165,74 +165,82 @@ pub struct ReadSession {
     /// How many of the most recent messages (default 20, max 200).
     #[serde(default)]
     pub last: Option<u32>,
+    /// An entry id (from `search`): read the messages around it instead of the latest.
+    #[serde(default)]
+    pub around: Option<String>,
+    /// With `around`: how many messages before and after it (default 5, max 50).
+    #[serde(default)]
+    pub n: Option<u32>,
 }
 
 #[derive(Debug, Serialize, TS)]
 pub struct SessionMessages {
-    /// Absent when the session has no messages yet.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub instance: Option<String>,
+    pub instance: String,
     pub messages: Vec<SessionMessage>,
 }
 
 #[derive(Debug, Serialize, TS)]
 pub struct SessionMessage {
-    pub role: String,
-    /// The text parts, at most 4000 characters.
+    /// The entry id, for `around`.
+    pub id: String,
+    /// `user`, `assistant`, `toolResult`, `note` or `compaction`.
+    pub role: &'static str,
+    /// At most 4000 characters.
     pub text: String,
-    /// pi's timestamp, as recorded.
-    pub at: Option<Value>,
+    pub at: Option<String>,
 }
 
 impl Op for ReadSession {
     const NAME: &'static str = "read_session";
-    const DESCRIPTION: &'static str =
-        "Read the recent messages of another instance's session (what it has been doing).";
-    const WHO: Who = Who::Capable(Capability::ReadSessions);
+    const DESCRIPTION: &'static str = "Read the recent messages of a session: your own, or another instance's (what it has been doing) if you may. `around` (an entry id from `search`) reads the messages around that entry instead.";
+    const WHO: Who = Who::UserAndAgents;
     type Output = SessionMessages;
 
-    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<SessionMessages, OpError> {
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<SessionMessages, OpError> {
         let inst = hub
             .store
             .resolve_instance(&self.instance)
             .await?
             .ok_or_else(|| OpError::BadRequest(format!("no chat named {}", self.instance)))?;
+        if caller.instance() != Some(inst.name.as_str()) {
+            caller.require(Capability::ReadSessions)?;
+        }
         let path = hub.paths.sessions(&inst.name).join(&inst.session_file);
-        let last = self.last.unwrap_or(20).min(200) as usize;
         let text = match tokio::fs::read_to_string(&path).await {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(SessionMessages { instance: None, messages: vec![] });
+                return Ok(SessionMessages { instance: inst.name, messages: vec![] });
             }
             Err(e) => return Err(HubError::Io(e).into()),
         };
+        // Every entry in file order: compaction keeps the history, so this includes what was compacted.
         let mut messages: Vec<SessionMessage> = text
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .filter(|e| e.get("type").and_then(Value::as_str) == Some("message"))
-            .filter_map(|e| {
-                let m = e.get("message")?;
-                let role = m.get("role")?.as_str()?;
-                if role == "system" {
-                    return None;
-                }
-                let text: String = m
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .map(|c| {
-                        c.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
-                    })
-                    .unwrap_or_default();
-                Some(SessionMessage {
-                    role: role.into(),
-                    text: text.chars().take(4000).collect(),
-                    at: e.get("timestamp").cloned(),
-                })
+            .filter_map(|e| crate::sessions::parse_entry(&e))
+            .filter_map(|item| {
+                use crate::sessions::Item;
+                let (id, at, role, text) = match item {
+                    Item::User { id, at, text, .. } => (id, at, "user", text),
+                    Item::Assistant { id, at, text, .. } => (id, at, "assistant", text),
+                    Item::ToolResult { id, at, text, .. } => (id, at, "toolResult", text),
+                    Item::Note { id, at, text, .. } => (id, at, "note", text),
+                    Item::Compaction { id, at, summary } => (id, at, "compaction", summary),
+                };
+                (!text.is_empty()).then(|| SessionMessage { id, role, text: text.chars().take(4000).collect(), at })
             })
             .collect();
-        let start = messages.len().saturating_sub(last);
-        Ok(SessionMessages { instance: Some(inst.name), messages: messages.split_off(start) })
+        let range = match &self.around {
+            Some(entry) => {
+                let i = messages.iter().position(|m| m.id == *entry).ok_or_else(|| {
+                    OpError::BadRequest(format!("no message {entry} in {}'s current session", inst.name))
+                })?;
+                let n = self.n.unwrap_or(5).min(50) as usize;
+                i.saturating_sub(n)..(i + n + 1).min(messages.len())
+            }
+            None => messages.len().saturating_sub(self.last.unwrap_or(20).min(200) as usize)..messages.len(),
+        };
+        Ok(SessionMessages { instance: inst.name, messages: messages.drain(range).collect() })
     }
 }
 

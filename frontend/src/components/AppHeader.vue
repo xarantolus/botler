@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { NButton, NPopover, NSpace, NTag, NText, NTooltip } from "naive-ui";
-import { computed, ref } from "vue";
+import { NButton, NInput, NPopover, NSpace, NTag, NText, NTooltip } from "naive-ui";
+import { computed, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { call } from "../api/client";
 import { dialog, notifyError } from "../notify";
 import { logout, refreshStatus, state } from "../store";
@@ -8,6 +9,21 @@ import { usd } from "../lib/time";
 import BreakerResume from "./BreakerResume.vue";
 
 const toggling = ref(false);
+
+const route = useRoute();
+const router = useRouter();
+const query = ref("");
+watch(
+  () => route.query.q,
+  (q) => {
+    if (route.name === "search" && typeof q === "string") query.value = q;
+  },
+  { immediate: true },
+);
+function search() {
+  const q = query.value.trim();
+  if (q) void router.push({ name: "search", query: { ...(route.name === "search" ? route.query : {}), q } });
+}
 const s = computed(() => state.status);
 
 const spend = computed(() => {
@@ -80,6 +96,14 @@ function togglePause() {
       <NText class="wide-only" depth="3" style="font-size: 12px">v{{ s.version }} · {{ s.commit.slice(0, 10) }} · {{ s.runtime.binary }} {{ s.runtime.version }}</NText>
     </NSpace>
     <div v-else style="flex: 1" />
+    <NInput
+      v-model:value="query"
+      size="small"
+      clearable
+      placeholder="Search everything"
+      style="width: 220px; max-width: 100%"
+      @keydown.enter="search"
+    />
     <NSpace size="small">
       <NButton size="small" :type="s?.paused ? 'primary' : 'warning'" ghost :loading="toggling" :disabled="!s" @click="togglePause">
         {{ s?.paused ? "Resume" : "Pause" }}

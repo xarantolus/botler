@@ -169,6 +169,24 @@ An agent messaging itself is refused with a hint (files in its home, `set_timer`
 - **In the prompt:** the core prompt says what belongs in memory (durable facts, preferences, decisions) versus the monorepo (code, definitions) and the home (working files). The `INDEX.md` of each of the agent's namespaces (first 4 KiB) is appended to the system prompt file when the container starts. It is read once per wake, so the system prompt is fixed for the whole pi session and stays cacheable; changes show from the next wake. Injecting it per prompt (`before_agent_start`) would change the system prompt mid-session and break prompt caching.
 - **Search:** later, through the derived full-text index.
 
+**Search (derived, rebuildable).** `<data>/search.db` is an SQLite FTS5 table `docs(source, ref,
+owner, at, title, body)` (porter stemming) plus `cursors`, and holds nothing that is not derived:
+deleting it (even while the hub runs) rebuilds it, and backups leave it out. An indexer loop in
+`search.rs`, woken by hub activity and every minute, reads incrementally: events after the last
+id; each session file from a byte offset (pi files are append-only; a rewritten file, i.e. a new
+inode, is read again), every entry rather than only the active branch, so compacted history stays
+findable; memory Markdown by mtime; the applied monorepo's text files (< 256 KB), replaced when the
+applied commit changes. Documents have a rowid derived from `(source, ref, owner)`, so re-indexing
+replaces them. One op, `search(query, sources?, scope?, limit?, raw?)`: the query is plain words
+(each quoted) unless `raw` asks for FTS5 syntax, whose errors come back as bad requests; results
+are `{source, ref, owner, at, title, snippet}` ranked by bm25 (titles weigh more). Permissions:
+the user sees everything; an agent sees its own session, other sessions only with
+`read_sessions` (the same rule as `read_session`), memory only in its namespaces
+(`agents/<definition>`, `projects/<home>`, `user`), and events and the monorepo like
+`get_events`; jobs cannot search. `scope="self"` limits an agent to its own session and memory.
+A session hit's `ref` is an entry id: `read_session(instance=owner, around=ref, n)` returns the
+messages around it.
+
 **Built-in event catalog.** Every hub event type (`runnable.failed`, `proposal.updated`, `dialog.aborted`, ...) has a catalog entry in core with a summary, payload fields, follow-up tools filled in with the event's values (e.g. `get_incident_history(runnable=...)`, `get_run_logs(run_id=...)`, `replay_event`, `resolve_incident`), and guidance. Deliveries are rendered from it. Failure guidance points the agent at incident history (core fact: every incident stores its resolution) *and* its memory notes, and requires `resolve_incident` with the cause and fix.
 
 **Messaging.** Everything is an event `{id, type, source, provenance(trusted|external|untrusted), to?, correlation?, payload}`. Sources include schedules, timers, job output, MCP `send_message`/`emit_event`, user chat, dialog answers, transaction results and hub alarms (job failed, agent crashed, health check failed). Routing uses direct addressing plus subscriptions declared in agent definitions (`[[on]] type = "connector.failed"`).

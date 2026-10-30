@@ -44,6 +44,8 @@ pub enum HubError {
     #[error("migrating the data directory: {0}")]
     Migration(String),
     #[error(transparent)]
+    Search(#[from] crate::search::SearchError),
+    #[error(transparent)]
     Memory(#[from] crate::memory::MemoryError),
     #[error("{instance} keeps crashing; next start allowed at {until}")]
     Backoff { instance: String, until: chrono::DateTime<chrono::Utc> },
@@ -96,6 +98,7 @@ pub struct Hub {
     pub agents: crate::agents::Agents,
     /// Serialises image builds so the same tag is never built twice concurrently.
     pub build_lock: Mutex<()>,
+    pub search: crate::search::Index,
     pub memory: crate::memory::Memory,
 }
 
@@ -121,6 +124,7 @@ impl Hub {
         let applied = Self::load_bootable(&store, &repo).await?;
         let memory = crate::memory::Memory::open(paths.memory()).await?;
         let (live, _) = broadcast::channel(1024);
+        let search = crate::search::Index::open(&paths.search_db()).await?;
         let id = {
             use sha2::Digest;
             hex::encode(sha2::Sha256::digest(crate::config::path_str(&paths.root)))[..8].to_string()
@@ -143,6 +147,7 @@ impl Hub {
             live,
             agents: crate::agents::Agents::default(),
             build_lock: Mutex::new(()),
+            search,
             memory,
         }))
     }

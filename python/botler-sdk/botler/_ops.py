@@ -145,13 +145,28 @@ def list_event_types() -> dict[str, Any]:
     return call("list_event_types", {})
 
 
-def read_session(*, instance: str, last: int | None = None) -> dict[str, Any]:
-    """Read the recent messages of another instance's session (what it has been doing).
+def read_session(*, instance: str, around: str | None = None, last: int | None = None, n: int | None = None) -> dict[str, Any]:
+    """Read the recent messages of a session: your own, or another instance's (what it has been doing) if you may. `around` (an entry id from `search`) reads the messages around that entry instead.
 
     Args:
+        around: An entry id (from `search`): read the messages around it instead of the latest.
         last: How many of the most recent messages (default 20, max 200).
+        n: With `around`: how many messages before and after it (default 5, max 50).
     """
-    return call("read_session", {"instance": instance, "last": last})
+    return call("read_session", {"instance": instance, "around": around, "last": last, "n": n})
+
+
+def search(*, query: str, limit: int | None = None, raw: bool | None = None, scope: Any = None, sources: list[Any] | None = None) -> dict[str, Any]:
+    """Full-text search over sessions, memory notes, the event journal and the monorepo, best matches first. `scope="self"` searches only your own conversation (including what was compacted away) and your memory. Session results: read the context with `read_session(instance=owner, around=ref)`.
+
+    Args:
+        query: Words to find; a result contains all of them (stemmed, so `deploy` finds `deployed`).
+        limit: How many results (default 10, max 30).
+        raw: Treat `query` as SQLite FTS5 syntax: `"exact phrase"`, `a OR b`, `a NOT b`, `prefix*`, `NEAR(a b)`.
+        scope: `self` searches only your own conversation (also from before compaction) and your memory.
+        sources: Restrict to these sources (`session`, `memory`, `event`, `repo`); default all.
+    """
+    return call("search", {"query": query, "limit": limit, "raw": raw, "scope": scope, "sources": sources})
 
 
 def memory_write(*, content: str, path: str, expected_sha256: str | None = None) -> dict[str, Any]:

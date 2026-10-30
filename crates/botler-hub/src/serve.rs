@@ -47,6 +47,7 @@ pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()
     tokio::spawn(services::run(hub.clone()));
     tokio::spawn(images::collect_garbage_loop(hub.clone()));
     tokio::spawn(agents::run(hub.clone()));
+    tokio::spawn(crate::search::run(hub.clone()));
 
     let listener = tokio::net::TcpListener::bind(hub.config.listen).await?;
     tracing::info!(addr = %hub.config.listen, commit = %hub.applied().await.commit, "botler hub listening");
