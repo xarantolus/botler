@@ -7,9 +7,12 @@ use crate::config::Paths;
 
 pub const AGENT_BASE_DOCKERFILE: &str = include_str!("../../../images/agent-base/Dockerfile");
 
-/// Image tag of the agent base image built from [`AGENT_BASE_DOCKERFILE`].
+/// Image tag of the agent base image built from [`AGENT_BASE_DOCKERFILE`]: a hash of it (the
+/// whole build context), so a changed Dockerfile rolls out without a version bump.
 pub fn agent_base_tag() -> String {
-    format!("localhost/botler/agent-base:{}", env!("CARGO_PKG_VERSION"))
+    use sha2::Digest;
+    let hash = hex::encode(sha2::Sha256::digest(AGENT_BASE_DOCKERFILE));
+    format!("localhost/botler/agent-base:{}", &hash[..16])
 }
 
 /// The tag monorepo images build `FROM`.

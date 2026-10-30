@@ -7,7 +7,7 @@ ARG PI_VERSION=1.4.0
 ARG UV_VERSION=0.9.26
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates curl python3 python3-venv ripgrep tini \
+ && apt-get install -y --no-install-recommends git ca-certificates curl python3 python3-venv ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION} \
@@ -36,5 +36,5 @@ ENV PI_CODING_AGENT_DIR=/botler/agent-dir \
 # HOME is not /root: it is an ordinary directory the hub mounts and keeps per agent.
 RUN mkdir -p /botler /home/agent /inbox
 WORKDIR /home/agent
-ENTRYPOINT ["/usr/bin/tini", "--"]
+# No init here: the hub starts every container with `--init`, whose init is PID 1 and reaps zombies.
 CMD ["pi", "--mode", "rpc"]

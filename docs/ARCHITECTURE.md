@@ -175,6 +175,8 @@ An agent messaging itself is refused with a hint (files in its home, `set_timer`
 6. Fast-forwards main, then reconciles (image rebuilds, schedule table, services; agents pick up new definitions on their next wake, never mid-turn).
 7. Push-mirrors to GitLab/Forgejo if configured. Gate failures go back to the agent as an event.
 
+**Template upgrades.** `refs/botler/template` holds pristine snapshots of the hub's built-in template as a linear history; `botler init` makes main's root commit the first one (older repos bootstrap the ref from main's root, which `init` always made from the template). When the built-in template differs from the newest snapshot, the hub commits a new snapshot at boot and git-merges it into main (3-way, so agent edits survive) on branch `hub/template-<snapshot>`, proposed through the normal transaction on behalf of the front door ("Upgrade botler template files (hub vX)"; it touches protected paths, so you approve it). A conflicting merge is committed with its markers on that branch and handed to the front door to resolve and propose. The branch marks an upgrade as handled; a newer template supersedes an open upgrade. `botler template status` shows the state.
+
 **pi integration (reuse first).**
 - Agent base image: pinned pi + Node + Python/uv + git + the **botler pi extension**.
 - The extension:

@@ -119,6 +119,8 @@ pub const BUILTIN: &[BuiltinEvent] = &[
             why: "the full gate report, review notes and deployment summary",
         }],
         guidance: "If the gate failed, fix the reported problems on your branch and call `propose_change` again. \
+                   `gate/run` and everything the gate checks are files on your branch: a gate failure is always \
+                   fixable there (changes to `gate/` need the user's approval). \
                    If it was rejected, read the reason before trying anything else.",
     },
     BuiltinEvent {
