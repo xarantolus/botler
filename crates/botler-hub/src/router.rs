@@ -102,15 +102,8 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
     Ok(())
 }
 
-/// Create a new instance of an agent definition and queue its first delivery.
-pub async fn spawn(
-    hub: &Hub,
-    definition: &str,
-    parent: Option<&str>,
-    task: Option<&str>,
-    event: Option<&Event>,
-    trigger: Option<&str>,
-) -> Result<String> {
+/// Create a new (ephemeral) instance of an agent definition, without delivering anything.
+pub async fn new_instance(hub: &Hub, definition: &str, parent: Option<&str>, task: Option<&str>) -> Result<String> {
     let applied = hub.applied().await;
     if !applied.defs.agents.contains_key(definition) {
         return Err(HubError::Undefined { kind: "agent", name: definition.into() });
@@ -128,6 +121,20 @@ pub async fn spawn(
             task: task.map(String::from),
         })
         .await?;
+    tracing::info!(instance = %name, definition, "created agent instance");
+    Ok(name)
+}
+
+/// Create a new instance of an agent definition and queue its first delivery.
+pub async fn spawn(
+    hub: &Hub,
+    definition: &str,
+    parent: Option<&str>,
+    task: Option<&str>,
+    event: Option<&Event>,
+    trigger: Option<&str>,
+) -> Result<String> {
+    let name = new_instance(hub, definition, parent, task).await?;
     let ev = match event {
         Some(e) => e.clone(),
         None => {
@@ -147,7 +154,6 @@ pub async fn spawn(
     let prompt = if event.is_some() { task } else { None };
     hub.store.enqueue_delivery(&ev.id.to_string(), &name, trigger, prompt).await?;
     hub.dispatch_notify.notify_one();
-    tracing::info!(instance = %name, definition, "spawned agent instance");
     Ok(name)
 }
 

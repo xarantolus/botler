@@ -188,7 +188,7 @@ crates/botler-cli/         `botler init|validate|status|secret set|logs|dev`
 pi-extension/              TypeScript @botler/pi-extension (tests with pi SDK in-process)
 python/botler-sdk/         job/connector SDK: emit events, @action decorator, health check, manifest
 images/agent-base/, images/job-base/
-web/                       TS + Vite + React (pi chat components reused if available)
+web/                       stopgap index.html now; later Vue 3 + component library
 template/                  the monorepo template (below)
 docs/ARCHITECTURE.md, docs/DECISIONS.md (consolidated), docs/legacy/ (current 4 files)
 ```
@@ -216,7 +216,7 @@ pyproject.toml, uv.lock    uv workspace
 
 ## Key tech choices
 
-tokio, axum, sqlx (SQLite, WAL), bollard against the rootless Podman socket (`podman system service`, user systemd unit; Docker also works), git CLI wrapper (more predictable than libgit2 for worktrees and rebase), croner, rmcp (official Rust MCP SDK), serde/toml/schemars, tracing, chacha20poly1305 for secret values at rest, rust-embed, thiserror/anyhow. Web: React + Vite + TanStack Query, WS for live session streams. Push: ntfy (self-hostable), with system-written text only.
+tokio, axum, sqlx (SQLite, WAL), bollard against the rootless Podman socket (`podman system service`, user systemd unit; Docker also works), git CLI wrapper (more predictable than libgit2 for worktrees and rebase), croner, rmcp (official Rust MCP SDK), serde/toml/schemars, tracing, chacha20poly1305 for secret values at rest, rust-embed, thiserror/anyhow. Web: **Vue 3 + an established component library** (PrimeVue or Naive UI; pi's `pi-web-ui` is stale), so it looks good with little effort. A dependency-free stopgap page (`web/index.html`) is served until then, against the same API. Push: ntfy (self-hostable), with system-written text only.
 
 ## Milestones (entire system, in build order)
 

@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>botler</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dc;
+    --accent: #2f5bd3; --accent-ink: #ffffff; --user: #eef2fd; --warn: #b4540a; --bad: #b42318; --ok: #1f7a3a;
+    --code: #f1f0ec; --chip: #ecebe6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --panel: #1c1c1a; --ink: #ecebe6; --muted: #9a9a93; --line: #2e2e2b;
+      --accent: #7d9bf0; --accent-ink: #10131c; --user: #1f2537; --warn: #e3974d; --bad: #f07a6e; --ok: #6cc58a;
+      --code: #232320; --chip: #2a2a27;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 5px 10px; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  input, textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%; }
+  textarea { resize: vertical; min-height: 44px; }
+  code, pre { font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre { background: var(--code); padding: 8px 10px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 6px 0; }
+  .muted { color: var(--muted); }
+  .chip { display: inline-block; background: var(--chip); border-radius: 999px; padding: 0 8px; font-size: 12px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+  .dot.running { background: var(--ok); } .dot.ended { background: transparent; border: 1px solid var(--muted); }
+
+  #login { max-width: 420px; margin: 18vh auto; padding: 0 16px; }
+  #app { display: none; height: 100%; grid-template-columns: 240px minmax(0, 1fr) 360px; }
+  #app.on { display: grid; }
+  aside, section { min-height: 0; }
+  #side { border-right: 1px solid var(--line); display: flex; flex-direction: column; background: var(--panel); }
+  #side header { padding: 12px; border-bottom: 1px solid var(--line); }
+  #side h1 { font-size: 16px; margin: 0 0 4px; }
+  #chats { overflow-y: auto; flex: 1; padding: 6px; }
+  .chat { padding: 7px 8px; border-radius: 6px; cursor: pointer; display: block; width: 100%; text-align: left; border: 0; background: none; }
+  .chat:hover { background: var(--bg); } .chat.sel { background: var(--user); }
+  .chat .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #side footer { padding: 10px 12px; border-top: 1px solid var(--line); font-size: 12px; }
+
+  #main { display: flex; flex-direction: column; min-width: 0; }
+  #chathead { padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  #chathead h2 { font-size: 15px; margin: 0; }
+  #log { flex: 1; overflow-y: auto; padding: 14px 16px; }
+  .msg { max-width: 860px; margin: 0 auto 12px; }
+  .msg .meta { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  .msg .body { white-space: pre-wrap; word-break: break-word; }
+  .msg.user .body { background: var(--user); padding: 8px 11px; border-radius: 8px; }
+  .msg.flash .body { outline: 2px solid var(--accent); }
+  .msg.err .body { color: var(--bad); }
+  details { margin: 4px 0; } details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+  #composer { border-top: 1px solid var(--line); padding: 10px 16px; display: flex; gap: 8px; align-items: flex-end; }
+  #composer textarea { flex: 1; }
+
+  #right { border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-width: 0; }
+  #tabs { display: flex; border-bottom: 1px solid var(--line); }
+  #tabs button { border: 0; border-radius: 0; flex: 1; padding: 9px 4px; background: none; color: var(--muted); }
+  #tabs button.on { color: var(--ink); box-shadow: inset 0 -2px var(--accent); }
+  #pane { overflow-y: auto; flex: 1; padding: 10px 12px; }
+  .row { padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .row.click { cursor: pointer; } .row.click:hover { background: var(--bg); }
+  .bad { color: var(--bad); } .warn { color: var(--warn); } .ok { color: var(--ok); }
+  .ctas { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+
+  @media (max-width: 1000px) {
+    #app.on { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr) 40vh; }
+    #side { border-right: 0; border-bottom: 1px solid var(--line); max-height: 30vh; }
+    #right { border-left: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="login">
+  <h1>botler</h1>
+  <p class="muted">Paste your user token (from <code>botler token</code>).</p>
+  <input id="tok" type="password" autocomplete="off" placeholder="user token">
+  <p><button class="primary" id="go">Open</button> <span id="loginerr" class="bad"></span></p>
+</div>
+
+<div id="app">
+  <aside id="side">
+    <header>
+      <h1>botler</h1>
+      <div id="statusline" class="muted" style="font-size:12px"></div>
+      <div style="margin-top:8px"><button id="newchat" class="primary" style="width:100%">New chat</button></div>
+    </header>
+    <div id="chats"></div>
+    <footer>
+      <button id="pause">Pause everything</button>
+      <button id="logout" style="float:right">Log out</button>
+    </footer>
+  </aside>
+
+  <section id="main">
+    <div id="chathead"><h2 id="title">main</h2><span id="sub" class="muted"></span></div>
+    <div id="log"></div>
+    <form id="composer">
+      <textarea id="input" rows="2" placeholder="Message (Enter to send, Shift+Enter for a new line)"></textarea>
+      <button class="primary" id="send">Send</button>
+    </form>
+  </section>
+
+  <aside id="right">
+    <div id="tabs">
+      <button data-tab="events" class="on">Events</button>
+      <button data-tab="questions">Questions <span id="qcount"></span></button>
+      <button data-tab="runs">Runs</button>
+      <button data-tab="secrets">Secrets</button>
+    </div>
+    <div id="pane"></div>
+  </aside>
+</div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const ago = (t) => {
+  if (!t) return "";
+  const s = (Date.now() - new Date(t).getTime()) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  if (s < 86400) return Math.floor(s / 3600) + " h ago";
+  return new Date(t).toLocaleString();
+};
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode: token lives for this tab only */ } },
+  del(k) { try { localStorage.removeItem(k); } catch { /* ignore */ } },
+};
+
+let token = store.get("botler.token");
+let current = store.get("botler.chat") || "main";
+let tab = "events";
+let lastSessionKey = "";
+let flashDelivery = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { "authorization": "Bearer " + token, "content-type": "application/json", ...(opts.headers || {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401) { logout("Your token is invalid or expired."); throw new Error("unauthorized"); }
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+function logout(msg) {
+  store.del("botler.token");
+  token = null;
+  $("#app").classList.remove("on");
+  $("#login").style.display = "block";
+  $("#loginerr").textContent = msg || "";
+}
+
+async function login() {
+  token = $("#tok").value.trim() || token;
+  if (!token) return;
+  try {
+    await api("/api/v1/status");
+    store.set("botler.token", token);
+    $("#login").style.display = "none";
+    $("#app").classList.add("on");
+    refreshAll();
+  } catch (e) {
+    if (e.message !== "unauthorized") $("#loginerr").textContent = e.message;
+  }
+}
+
+// ---------- sidebar ----------
+async function refreshSide() {
+  const [status, instances] = await Promise.all([api("/api/v1/status"), api("/api/v1/instances")]);
+  const paused = status.paused;
+  $("#statusline").innerHTML =
+    `${esc(status.commit.slice(0, 10))} · ${status.open_dialogs} questions · ${status.open_incidents} incidents` +
+    (paused ? ' · <b class="warn">paused</b>' : "") +
+    (status.breakers.length ? ` · <span class="bad">${status.breakers.length} breaker(s)</span>` : "");
+  $("#pause").textContent = paused ? "Resume" : "Pause everything";
+  $("#pause").dataset.paused = paused ? "1" : "";
+  const list = instances
+    .filter((i) => i.state !== "ended" || i.name === current)
+    .sort((a, b) => (a.name === "main" ? -1 : b.name === "main" ? 1 : b.last_active.localeCompare(a.last_active)));
+  $("#chats").innerHTML = list.map((i) => `
+    <button class="chat ${i.name === current ? "sel" : ""}" data-chat="${esc(i.name)}">
+      <div><span class="dot ${esc(i.state)}"></span>${esc(i.title || i.slug || i.name)}</div>
+      <div class="sub">${esc(i.slug || i.definition)} · ${esc(i.state)} · ${esc(ago(i.last_active))}</div>
+    </button>`).join("") || '<p class="muted">No chats yet.</p>';
+}
+
+// ---------- chat ----------
+function renderItem(it) {
+  const time = `<span title="${esc(it.at)}">${esc(ago(it.at))}</span>`;
+  if (it.kind === "user") {
+    const from = it.from ? `${esc(it.from)}${it.event_kind && it.event_kind !== "message" ? " · " + esc(it.event_kind) : ""}` : "you";
+    const prov = it.provenance && it.provenance !== "trusted" ? ` <span class="chip warn">${esc(it.provenance)}</span>` : "";
+    return `<div class="msg user" data-delivery="${esc(it.delivery || "")}"><div class="meta">${from}${prov} · ${time}</div><div class="body">${esc(it.text.trim())}</div></div>`;
+  }
+  if (it.kind === "assistant") {
+    let html = "";
+    if (it.thinking) html += `<details><summary>thinking</summary><pre>${esc(it.thinking)}</pre></details>`;
+    for (const c of it.tool_calls) {
+      const args = c.name === "codemode" && c.arguments && c.arguments.code ? c.arguments.code : JSON.stringify(c.arguments, null, 2);
+      html += `<details><summary>tool: ${esc(c.name)}</summary><pre>${esc(args)}</pre></details>`;
+    }
+    if (it.text) html += `<div class="body">${esc(it.text.trim())}</div>`;
+    if (it.error) html += `<div class="body bad">${esc(it.error)}</div>`;
+    const cost = it.cost_usd != null ? ` · $${it.cost_usd.toFixed(5)}` : "";
+    return `<div class="msg ${it.error ? "err" : ""}"><div class="meta">agent · ${esc(it.model || "")}${cost} · ${time}</div>${html}</div>`;
+  }
+  if (it.kind === "tool_result") {
+    return `<div class="msg"><details><summary class="${it.is_error ? "bad" : ""}">result${it.tool ? " of " + esc(it.tool) : ""}${it.is_error ? " (error)" : ""}</summary><pre>${esc(it.text)}</pre></details></div>`;
+  }
+  if (it.kind === "compaction") {
+    return `<div class="msg"><details><summary>— earlier conversation compacted —</summary><pre>${esc(it.summary)}</pre></details></div>`;
+  }
+  return "";
+}
+
+async function refreshChat() {
+  const s = await api("/api/v1/sessions/" + encodeURIComponent(current));
+  const i = s.instance;
+  $("#title").textContent = i.title || i.slug || i.name;
+  $("#sub").innerHTML = `${esc(i.name)} · ${esc(i.definition)} · ${esc(i.state)}` +
+    (s.busy ? ' · <span class="ok">working…</span>' : "") + (s.pending ? ` · ${s.pending} queued` : "");
+  const key = JSON.stringify([s.items.length, s.busy, s.pending, s.items.at(-1)?.id]);
+  if (key === lastSessionKey && !flashDelivery) return;
+  lastSessionKey = key;
+  const log = $("#log");
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  log.innerHTML = s.items.map(renderItem).join("") || '<p class="muted" style="text-align:center">No messages yet.</p>';
+  if (flashDelivery) {
+    const el = log.querySelector(`[data-delivery="${CSS.escape(flashDelivery)}"]`);
+    flashDelivery = null;
+    if (el) { el.classList.add("flash"); el.scrollIntoView({ block: "center" }); return; }
+  }
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+function openChat(name, delivery) {
+  current = name;
+  store.set("botler.chat", name);
+  lastSessionKey = "";
+  flashDelivery = delivery || null;
+  refreshSide().catch(report);
+  refreshChat().catch(report);
+}
+
+async function send(e) {
+  e.preventDefault();
+  const text = $("#input").value.trim();
+  if (!text) return;
+  $("#send").disabled = true;
+  try {
+    await api("/api/v1/messages", { method: "POST", body: JSON.stringify({ to: current, text }) });
+    $("#input").value = "";
+    lastSessionKey = "";
+    setTimeout(() => refreshChat().catch(report), 400);
+  } catch (err) { alert(err.message); }
+  $("#send").disabled = false;
+}
+
+async function newChat() {
+  const text = prompt("What is this chat about? (your first message)");
+  if (!text) return;
+  try {
+    const r = await api("/api/v1/chats", { method: "POST", body: JSON.stringify({ text }) });
+    openChat(r.instance);
+  } catch (err) { alert(err.message); }
+}
+
+// ---------- right panel ----------
+async function renderEvents() {
+  const evs = await api("/api/v1/events?limit=80");
+  return evs.map((e) => {
+    const p = e.payload || {};
+    const what = p.text ? String(p.text).slice(0, 140) : p.runnable ? `${p.runnable} ${p.kind || ""}` : p.question || p.trigger || "";
+    const src = e.source.kind + (e.source.name ? ":" + e.source.name : "");
+    return `<div class="row click" data-event="${esc(e.id)}">
+      <div><b>${esc(e.type)}</b> <span class="muted">from ${esc(src)}${e.to ? " → " + esc(e.to) : ""}</span></div>
+      <div class="muted" style="font-size:12px">${esc(ago(e.at))}${e.provenance !== "trusted" ? " · " + esc(e.provenance) : ""}</div>
+      ${what ? `<div style="font-size:13px">${esc(what)}</div>` : ""}
+    </div>`;
+  }).join("") || '<p class="muted">No events yet.</p>';
+}
+
+async function renderQuestions() {
+  const d = await api("/api/v1/dialogs");
+  $("#qcount").textContent = d.open.length ? `(${d.open.length})` : "";
+  const open = d.open.map((q) => `
+    <div class="row" data-dialog="${esc(q.id)}">
+      <div class="muted" style="font-size:12px">${esc(q.instance)} · ${esc(q.priority)} · ${esc(ago(q.created_at))}</div>
+      <div><b>${esc(q.question)}</b></div>
+      ${q.detail ? `<div style="white-space:pre-wrap">${esc(q.detail)}</div>` : ""}
+      <div class="ctas">${q.ctas.length
+        ? q.ctas.map((c) => `<button data-answer="${esc(c)}">${esc(c)}</button>`).join("")
+        : `<input placeholder="Your answer" data-free><button data-answer-free>Answer</button>`}</div>
+    </div>`).join("");
+  const past = d.recent.filter((q) => q.status !== "open").slice(0, 15).map((q) => `
+    <div class="row muted"><div style="font-size:12px">${esc(q.instance)} · ${esc(q.status)}${q.answer ? ": " + esc(q.answer) : ""}${q.abort_reason ? " (" + esc(q.abort_reason) + ")" : ""}</div><div>${esc(q.question)}</div></div>`).join("");
+  return (open || '<p class="muted">Nothing is waiting for you.</p>') + (past ? `<h4 class="muted">Earlier</h4>${past}` : "");
+}
+
+async function renderRuns() {
+  const [runs, incidents] = await Promise.all([api("/api/v1/runs"), api("/api/v1/incidents")]);
+  const inc = incidents.map((i) => `<div class="row"><b class="bad">${esc(i.runnable)}</b> ${esc(i.kind)} ×${i.count}<div class="muted" style="font-size:12px">since ${esc(ago(i.first_at))}</div></div>`).join("");
+  const rs = runs.map((r) => {
+    const cls = r.status === "succeeded" ? "ok" : r.status === "running" || r.status === "queued" ? "" : "bad";
+    return `<div class="row"><b>${esc(r.runnable)}</b> <span class="${cls}">${esc(r.status)}</span><div class="muted" style="font-size:12px">${esc(r.kind)} · ${esc(ago(r.created_at))}${r.reason ? " · " + esc(r.reason) : ""}</div></div>`;
+  }).join("");
+  return (inc ? `<h4>Open incidents</h4>${inc}` : "") + `<h4>Recent runs</h4>${rs || '<p class="muted">No job runs yet.</p>'}`;
+}
+
+async function renderSecrets() {
+  const list = await api("/api/v1/secrets");
+  return `<p class="muted" style="font-size:12px">Declared in the monorepo's <code>secrets.toml</code>. Values are stored encrypted by the hub and never shown again.</p>` +
+    list.map((s) => `<div class="row" data-secret="${esc(s.name)}">
+      <div><b>${esc(s.name)}</b> <span class="chip">${esc(s.class)}</span> ${s.has_value ? '<span class="ok">set</span>' : '<span class="bad">missing</span>'}</div>
+      <div class="muted" style="font-size:12px">${esc(s.description)}</div>
+      <div class="ctas"><input type="password" placeholder="${s.has_value ? "replace value" : "value"}" autocomplete="off"><button data-save>Save</button></div>
+    </div>`).join("");
+}
+
+async function refreshPane() {
+  const render = { events: renderEvents, questions: renderQuestions, runs: renderRuns, secrets: renderSecrets }[tab];
+  const pane = $("#pane");
+  // Do not clobber what the user is typing.
+  if (pane.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;
+  pane.innerHTML = await render();
+}
+
+async function onPaneClick(e) {
+  const ev = e.target.closest("[data-event]");
+  if (ev) {
+    const t = await api("/api/v1/events/" + ev.dataset.event + "/trace");
+    if (t.reached.length) openChat(t.reached[0].instance, t.reached[0].session_anchor.delivery_id);
+    else alert("This event did not reach a chat directly" + (t.runs.length ? ` (it started ${t.runs.length} job run(s)).` : "."));
+    return;
+  }
+  const dialog = e.target.closest("[data-dialog]");
+  if (dialog && (e.target.dataset.answer !== undefined || e.target.dataset.answerFree !== undefined)) {
+    const answer = e.target.dataset.answer ?? dialog.querySelector("[data-free]").value.trim();
+    if (!answer) return;
+    try {
+      await api(`/api/v1/dialogs/${dialog.dataset.dialog}/answer`, { method: "POST", body: JSON.stringify({ answer }) });
+    } catch (err) { alert(err.message); }
+    refreshPane().catch(report);
+    return;
+  }
+  const secret = e.target.closest("[data-secret]");
+  if (secret && e.target.dataset.save !== undefined) {
+    const input = secret.querySelector("input");
+    if (!input.value) return;
+    try {
+      await api("/api/v1/secrets/" + encodeURIComponent(secret.dataset.secret), { method: "PUT", body: JSON.stringify({ value: input.value }) });
+      input.value = "";
+      input.blur();
+    } catch (err) { alert(err.message); }
+    refreshPane().catch(report);
+  }
+}
+
+function report(e) { if (e.message !== "unauthorized") console.warn(e); }
+
+function refreshAll() {
+  refreshSide().catch(report);
+  refreshChat().catch(report);
+  refreshPane().catch(report);
+}
+
+// ---------- wiring ----------
+$("#go").onclick = login;
+$("#tok").onkeydown = (e) => { if (e.key === "Enter") login(); };
+$("#logout").onclick = () => logout();
+$("#newchat").onclick = newChat;
+$("#composer").onsubmit = send;
+$("#input").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) send(e); };
+$("#chats").onclick = (e) => { const c = e.target.closest("[data-chat]"); if (c) openChat(c.dataset.chat); };
+$("#pane").onclick = (e) => onPaneClick(e).catch(report);
+$("#pause").onclick = async () => {
+  const resume = !!$("#pause").dataset.paused;
+  if (!resume && !confirm("Stop all agents and freeze all schedules?")) return;
+  await api(resume ? "/api/v1/resume" : "/api/v1/pause", { method: "POST" }).catch((e) => alert(e.message));
+  refreshSide().catch(report);
+};
+document.querySelectorAll("#tabs button").forEach((b) => b.onclick = () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("on", x === b));
+  refreshPane().catch(report);
+});
+
+setInterval(() => { if (token && !document.hidden) { refreshChat().catch(report); refreshSide().catch(report); } }, 2000);
+setInterval(() => { if (token && !document.hidden) refreshPane().catch(report); }, 4000);
+if (token) login(); else $("#login").style.display = "block";
+</script>
+</body>
+</html>

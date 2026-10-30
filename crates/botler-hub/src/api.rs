@@ -51,6 +51,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/events", get(events))
         .route("/api/v1/events/{id}/trace", get(trace))
         .route("/api/v1/instances", get(instances))
+        .route("/api/v1/sessions/{instance}", get(session))
+        .route("/api/v1/chats", post(new_chat))
         .route("/api/v1/runs", get(runs))
         .route("/api/v1/incidents", get(incidents))
         .route("/api/v1/secrets", get(secrets))
@@ -61,6 +63,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .layer(middleware::from_fn_with_state(hub.clone(), authenticate));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        // The web app is public static content; every API call it makes carries the user token.
+        .route("/", get(web_index))
         .merge(authed)
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
         .with_state(hub)
@@ -268,6 +272,54 @@ async fn trace(State(hub): State<AppState>, Extension(p): Extension<Principal>, 
     Ok(Json(
         json!({ "event": event, "reached": reached, "runs": hub.store.runs_for_event(&id).await?, "thread": thread }),
     ))
+}
+
+async fn web_index() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")],
+        include_str!("../../../web/index.html"),
+    )
+}
+
+async fn session(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(instance): Path<String>,
+) -> ApiResult {
+    user_only(&p)?;
+    let inst = hub
+        .store
+        .resolve_instance(&instance)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no chat {instance}")))?;
+    let busy = hub.agents.get(&inst.name).await.is_some_and(|a| a.busy());
+    let pending = hub.store.pending_deliveries(&inst.name).await?.len();
+    let items = crate::sessions::read(&hub, &inst.name).await?;
+    Ok(Json(json!({ "instance": inst, "busy": busy, "pending": pending, "items": items })))
+}
+
+#[derive(Deserialize)]
+struct NewChat {
+    text: String,
+    /// Agent definition; defaults to `chat`.
+    #[serde(default)]
+    definition: Option<String>,
+}
+
+/// Start a new chat with the user's first message.
+async fn new_chat(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Json(c): Json<NewChat>,
+) -> ApiResult {
+    user_only(&p)?;
+    let def = c.definition.unwrap_or_else(|| "chat".into());
+    let name = crate::router::new_instance(&hub, &def, None, None).await?;
+    let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+        .to(name.clone())
+        .payload(json!({ "text": c.text }));
+    hub.emit(ev).await?;
+    Ok(Json(json!({ "instance": name })))
 }
 
 async fn instances(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {

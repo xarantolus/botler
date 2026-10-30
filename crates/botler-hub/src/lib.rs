@@ -19,6 +19,7 @@ pub mod prompt;
 pub mod router;
 pub mod scheduler;
 pub mod serve;
+pub mod sessions;
 pub mod supervisor;
 pub mod template;
 

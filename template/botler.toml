@@ -13,14 +13,14 @@ default = "standard"
 provider = "openrouter"
 model = "deepseek/deepseek-v4.1-flash"
 api_key_secret = "OPENROUTER_API_KEY"
-max_tokens = 8192
+max_tokens = 16384
 
 # Cheapest: classification, short summaries. Weaker at multi-step tool use.
 [models.routes.fast]
 provider = "openrouter"
 model = "qwen/qwen3.8-flash"
 api_key_secret = "OPENROUTER_API_KEY"
-max_tokens = 4096
+max_tokens = 8192
 
 # Expensive; only for agents that name it.
 [models.routes.smart]
