@@ -137,6 +137,8 @@ interface Envelope {
   correlation: string;
   body: string;
   quiet?: boolean;
+  at?: string;
+  gap?: string;
 }
 
 function parse(text: string): Envelope | undefined {
@@ -150,7 +152,8 @@ function parse(text: string): Envelope | undefined {
 }
 
 export function header(env: Envelope): string {
-  return `[from ${env.from} | provenance: ${env.provenance} | ${env.kind} | delivery ${env.id} | event ${env.event}]`;
+  const when = env.at ? `${env.at}${env.gap ? ` (${env.gap})` : ""} | ` : "";
+  return `[${when}from ${env.from} | provenance: ${env.provenance} | ${env.kind} | delivery ${env.id} | event ${env.event}]`;
 }
 
 export default function botler(pi: ExtensionAPI) {

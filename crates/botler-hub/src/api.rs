@@ -195,6 +195,7 @@ async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
         commit: applied.commit.clone(),
         paused: hub.paused().await?,
         front_door: botler_core::FRONT_DOOR.into(),
+        timezone: applied.defs.timezone.name().into(),
         runtime: RuntimeInfo { binary: info.binary.clone(), version: info.version.clone(), rootless: info.rootless },
         open_dialogs: hub.store.open_dialogs().await?.len(),
         open_incidents: hub.store.open_incidents().await?.len(),

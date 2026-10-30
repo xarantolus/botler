@@ -60,6 +60,25 @@ async fn message_wakes_botler_and_is_delivered_once() {
     let prompts = e.fake.prompts(&name);
     assert_eq!(prompts.len(), 1);
     assert!(prompts[0].starts_with("botler:delivery ") && prompts[0].contains("hello"));
+    // Local time in the instance's zone, which follows the host when botler.toml names none.
+    let tz = e.hub.applied().await.defs.timezone;
+    assert_eq!(tz, botler_hub::localtime::host());
+    let env: serde_json::Value = serde_json::from_str(prompts[0].trim_start_matches("botler:delivery ")).unwrap();
+    assert!(env["at"].as_str().unwrap().ends_with(&format!(" {}", tz.name())), "{env}");
+    assert!(env.get("gap").is_none(), "first delivery has no gap: {env}");
+    // The container runs in the same zone.
+    assert_eq!(c.spec.env["TZ"], tz.name());
+    if std::path::Path::new(botler_hub::localtime::ZONEINFO).join(tz.name()).is_file() {
+        for dst in ["/etc/localtime".to_string(), format!("/usr/share/zoneinfo/{}", tz.name())] {
+            assert!(
+                c.spec
+                    .mounts
+                    .iter()
+                    .any(|m| matches!(m, botler_runtime::Mount::Bind { dst: d, read_only: true, .. } if *d == dst)),
+                "{dst} not mounted"
+            );
+        }
+    }
     assert!(e.hub.store.pending_deliveries("botler").await.unwrap().is_empty());
 
     // A redelivery of the same delivery id (crash between prompt and mark_delivered) is dropped
@@ -78,7 +97,10 @@ async fn message_wakes_botler_and_is_delivered_once() {
         .into();
     let delivery = e.hub.store.delivery(&first_id).await.unwrap();
     let agent = e.hub.agents.get("botler").await.unwrap();
-    let again = agent.pi.prompt(&agents::envelope(&delivery, &ev).unwrap(), &[], None).await.unwrap();
+    let now = Utc::now();
+    let text = agents::envelope(&delivery, &ev, tz, now, Some(now - Duration::days(3))).unwrap();
+    assert!(text.contains("\"gap\":\"first message in 3 days\""), "{text}");
+    let again = agent.pi.prompt(&text, &[], None).await.unwrap();
     assert_eq!(again, botler_runtime::Disposition::Handled);
     assert_eq!(e.fake.prompts(&name).len(), 1);
     settle().await;

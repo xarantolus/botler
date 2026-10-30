@@ -22,7 +22,8 @@ const provType = computed(() =>
       <NText style="font-size: 13px">from <strong>{{ env.from }}</strong></NText>
       <NTag size="small" :bordered="false" :type="provType">{{ env.provenance }}</NTag>
       <NTag v-if="env.malformed" size="small" type="error">malformed</NTag>
-      <NText depth="3" style="font-size: 12px" :title="at ?? ''">{{ ago(at) }}</NText>
+      <NText depth="3" style="font-size: 12px" :title="at ?? ''">{{ env.localTime ?? ago(at) }}</NText>
+      <NTag v-if="env.gap" size="small" :bordered="false">{{ env.gap }}</NTag>
       <RouterLink v-if="env.event" :to="{ name: 'events', query: { event: env.event } }" style="font-size: 12px">
         trace
       </RouterLink>

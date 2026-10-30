@@ -1,7 +1,7 @@
-//! What every hub-started container gets: how to reach the hub, its secrets, the SDK.
+//! What every hub-started container gets: how to reach the hub, its secrets, the SDK, local time.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use botler_core::defs::SecretClass;
 use botler_runtime::Mount;
@@ -70,6 +70,7 @@ pub async fn plumbing(
             }
         }
     }
+    crate::localtime::apply(applied.defs.timezone, Path::new(crate::localtime::ZONEINFO), &mut env, &mut mounts);
     Ok(Plumbing { env, mounts, secret_dir: wrote_files.then_some(secret_dir) })
 }
 

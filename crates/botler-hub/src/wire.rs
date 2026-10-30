@@ -42,6 +42,8 @@ pub struct HubStatus {
     pub paused: bool,
     /// The front-door chat (the user's default conversation, pinned on top).
     pub front_door: String,
+    /// The instance's time zone (IANA name); agents and delivery headers use it.
+    pub timezone: String,
     pub runtime: RuntimeInfo,
     pub open_dialogs: usize,
     pub open_incidents: usize,

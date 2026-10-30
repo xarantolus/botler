@@ -12,7 +12,7 @@ import BreakerResume from "../components/BreakerResume.vue";
 import WakeProgress from "../components/WakeProgress.vue";
 import type { Dialog, SessionItem } from "../generated";
 import { envelopeOf, isUserMessage } from "../lib/envelope";
-import { heldFor } from "../lib/breakers";
+import { heldFor, pausing } from "../lib/breakers";
 import { chatTitle, linkedDialog, redirectChat } from "../lib/events";
 import { currentStatus, phaseBadge } from "../lib/phase";
 import { ago, usd } from "../lib/time";
@@ -33,7 +33,12 @@ const props = defineProps<{ instance?: string }>();
 const route = useRoute();
 const router = useRouter();
 
-const name = computed(() => props.instance ?? frontDoorName.value);
+// A remembered `main` resolves to the front door right away (no fetch of a missing chat).
+const name = computed(() =>
+  props.instance
+    ? (redirectChat(props.instance, state.instances, frontDoorName.value) ?? props.instance)
+    : frontDoorName.value,
+);
 const session = computed(() => (state.session?.instance.name === name.value ? state.session : null));
 const inst = computed(() => session.value?.instance ?? null);
 
@@ -47,6 +52,7 @@ watch(
   { immediate: true },
 );
 const held = computed(() => (name.value ? heldFor(name.value, state.status?.breakers ?? []) : []));
+const paused = computed(() => (name.value ? pausing(name.value, state.status?.breakers ?? []) : []));
 
 watch(
   name,
@@ -273,6 +279,10 @@ const isFrontDoor = computed(() => name.value === frontDoorName.value);
         Waiting for the agent to hand over before archiving (asked {{ ago(inst.archive_requested_at) }}).
       </NAlert>
 
+      <NAlert v-for="b in paused" :key="b.subject" type="error" class="banner" title="Paused by a breaker">
+        {{ b.reason }}. It does not wake until you resume it.
+        <div style="margin-top: 6px"><BreakerResume :subject="b.subject" /></div>
+      </NAlert>
       <NAlert v-for="h in held" :key="h.breaker.subject" type="warning" class="banner" title="Messages are held">
         Messages between this chat and <strong>{{ h.other }}</strong> are held by a breaker: {{ h.breaker.reason }}
         <div style="margin-top: 6px"><BreakerResume :subject="h.breaker.subject" /></div>
@@ -300,7 +310,7 @@ const isFrontDoor = computed(() => name.value === frontDoorName.value);
             </div>
             <div v-else class="msg user" :data-delivery="it.delivery ?? ''">
               <div class="bubble"><MarkdownText :source="(it.message_text ?? envelopeOf(it)?.body ?? it.text).trim()" /></div>
-              <div class="meta" :title="it.at ?? ''">you · {{ ago(it.at) }}</div>
+              <div class="meta" :title="it.local_time ?? it.at ?? ''">you · {{ ago(it.at) }}<template v-if="it.gap"> · {{ it.gap }}</template></div>
             </div>
           </template>
 
@@ -324,7 +334,7 @@ const isFrontDoor = computed(() => name.value === frontDoorName.value);
           </div>
 
           <div v-else-if="it.kind === 'note'" class="msg note" :data-delivery="it.delivery">
-            <span class="note-label">note from {{ it.from }}<template v-if="it.event_kind !== 'message'"> · {{ it.event_kind }}</template> · {{ ago(it.at) }}</span>
+            <span class="note-label">note from {{ it.from }}<template v-if="it.event_kind !== 'message'"> · {{ it.event_kind }}</template> · {{ it.local_time ?? ago(it.at) }}</span>
             <MarkdownText :source="it.text.trim()" />
           </div>
 

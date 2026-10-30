@@ -10,4 +10,8 @@ commit: string, paused: boolean,
 /**
  * The front-door chat (the user's default conversation, pinned on top).
  */
-front_door: string, runtime: RuntimeInfo, open_dialogs: number, open_incidents: number, breakers: Array<Breaker>, };
+front_door: string, 
+/**
+ * The instance's time zone (IANA name); agents and delivery headers use it.
+ */
+timezone: string, runtime: RuntimeInfo, open_dialogs: number, open_incidents: number, breakers: Array<Breaker>, };

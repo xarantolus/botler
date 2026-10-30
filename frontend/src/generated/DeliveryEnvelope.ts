@@ -18,4 +18,13 @@ body: string,
  * A note (e.g. an acknowledgement from another agent): added to the session without
  * starting a turn. The agent reads it with whatever wakes it next.
  */
-quiet: boolean, };
+quiet: boolean, 
+/**
+ * When it was delivered, in the instance's time zone (`Fri 2026-10-30 17:05
+ * Europe/Berlin`, see [`crate::clock::format_local`]).
+ */
+at: string, 
+/**
+ * After a long silence: `first message in 3 days` (see [`crate::clock::gap_note`]).
+ */
+gap?: string, };

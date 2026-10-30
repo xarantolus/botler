@@ -19,6 +19,11 @@ export function heldFor(instance: string, breakers: Breaker[]): { breaker: Break
   return out;
 }
 
+/** Breakers pausing `instance` itself (wake churn, budget, provider errors). */
+export function pausing(instance: string, breakers: Breaker[]): Breaker[] {
+  return breakers.filter((b) => b.subject === `instance:${instance}`);
+}
+
 export function isTripped(subject: string, breakers: Breaker[]): boolean {
   return breakers.some((b) => b.subject === subject);
 }

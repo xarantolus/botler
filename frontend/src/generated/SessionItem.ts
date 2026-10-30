@@ -3,6 +3,14 @@ import type { ToolCall } from "./ToolCall";
 
 export type SessionItem = { "kind": "user", id: string, at: string | null, text: string, from: string | null, provenance: string | null, event_kind: string | null, delivery: string | null, event: string | null, 
 /**
+ * When it was delivered, in the instance's local time (from the delivery header).
+ */
+local_time: string | null, 
+/**
+ * After a long silence, e.g. `first message in 3 days`.
+ */
+gap: string | null, 
+/**
  * For a message the user typed: exactly their text (`text` is what the agent received,
  * with the catalog's guidance around it).
  */
@@ -18,4 +26,4 @@ dialog_id: string | null,
 /**
  * The proposal a `propose_change` call started (its approval is shown in place).
  */
-proposal_id: string | null, } | { "kind": "note", id: string, at: string | null, text: string, from: string, provenance: string, event_kind: string, delivery: string, event: string, } | { "kind": "compaction", id: string, at: string | null, summary: string, };
+proposal_id: string | null, } | { "kind": "note", id: string, at: string | null, text: string, from: string, provenance: string, event_kind: string, delivery: string, event: string, local_time: string | null, gap: string | null, } | { "kind": "compaction", id: string, at: string | null, summary: string, };

@@ -21,6 +21,10 @@ pub enum Item {
         event_kind: Option<String>,
         delivery: Option<String>,
         event: Option<String>,
+        /// When it was delivered, in the instance's local time (from the delivery header).
+        local_time: Option<String>,
+        /// After a long silence, e.g. `first message in 3 days`.
+        gap: Option<String>,
         /// For a message the user typed: exactly their text (`text` is what the agent received,
         /// with the catalog's guidance around it).
         message_text: Option<String>,
@@ -59,6 +63,8 @@ pub enum Item {
         event_kind: String,
         delivery: String,
         event: String,
+        local_time: Option<String>,
+        gap: Option<String>,
     },
     Compaction {
         id: String,
@@ -87,21 +93,47 @@ fn clip(s: String) -> String {
     format!("{}\n… ({} more bytes)", &s[..end], s.len() - end)
 }
 
-/// `[from X | provenance: Y | kind | delivery D | event E]` → parts.
-fn parse_header(text: &str) -> Option<(String, String, String, String, String, String)> {
+/// A delivery header the botler pi extension wrote, and the text after it.
+#[derive(Debug, PartialEq)]
+struct Header {
+    local_time: Option<String>,
+    gap: Option<String>,
+    from: String,
+    provenance: String,
+    kind: String,
+    delivery: String,
+    event: String,
+    rest: String,
+}
+
+/// `[<local time> (<gap>) | from X | provenance: Y | kind | delivery D | event E]`; the time
+/// (and the gap note within it) is absent in headers written before local time existed.
+fn parse_header(text: &str) -> Option<Header> {
     let first = text.lines().next()?;
     let inner = first.strip_prefix('[')?.strip_suffix(']')?;
     let parts: Vec<&str> = inner.split(" | ").collect();
-    let [from, prov, kind, delivery, event] = parts[..] else { return None };
-    let rest = text.split_once('\n').map_or("", |(_, r)| r).to_string();
-    Some((
-        from.strip_prefix("from ")?.into(),
-        prov.strip_prefix("provenance: ")?.into(),
-        kind.into(),
-        delivery.strip_prefix("delivery ")?.into(),
-        event.strip_prefix("event ")?.into(),
-        rest,
-    ))
+    let (when, [from, prov, kind, delivery, event]) = (match parts[..] {
+        [from, prov, kind, delivery, event] => Some((None, [from, prov, kind, delivery, event])),
+        [when, from, prov, kind, delivery, event] => Some((Some(when), [from, prov, kind, delivery, event])),
+        _ => None,
+    })?;
+    let (local_time, gap) = match when {
+        None => (None, None),
+        Some(w) => match w.strip_suffix(')').and_then(|w| w.split_once(" (")) {
+            Some((time, gap)) => (Some(time.to_string()), Some(gap.to_string())),
+            None => (Some(w.to_string()), None),
+        },
+    };
+    Some(Header {
+        local_time,
+        gap,
+        from: from.strip_prefix("from ")?.into(),
+        provenance: prov.strip_prefix("provenance: ")?.into(),
+        kind: kind.into(),
+        delivery: delivery.strip_prefix("delivery ")?.into(),
+        event: event.strip_prefix("event ")?.into(),
+        rest: text.split_once('\n').map_or("", |(_, r)| r).to_string(),
+    })
 }
 
 fn texts(content: &Value, kind: &str, field: &str) -> String {
@@ -219,16 +251,18 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
                             c => texts(c, "text", "text"),
                         };
                         let item = match parse_header(&text) {
-                            Some((from, prov, kind, delivery, event, rest)) => Item::User {
+                            Some(h) => Item::User {
                                 id,
                                 at,
-                                text: clip(rest),
-                                from: Some(from),
-                                provenance: Some(prov),
-                                event_kind: Some(kind),
-                                message_text: user_text(hub, &event).await?,
-                                delivery: Some(delivery),
-                                event: Some(event),
+                                text: clip(h.rest),
+                                from: Some(h.from),
+                                provenance: Some(h.provenance),
+                                event_kind: Some(h.kind),
+                                message_text: user_text(hub, &h.event).await?,
+                                delivery: Some(h.delivery),
+                                event: Some(h.event),
+                                local_time: h.local_time,
+                                gap: h.gap,
                             },
                             None => Item::User {
                                 id,
@@ -239,6 +273,8 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
                                 event_kind: None,
                                 delivery: None,
                                 event: None,
+                                local_time: None,
+                                gap: None,
                                 message_text: None,
                             },
                         };
@@ -294,8 +330,19 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
                     Value::String(s) => s.clone(),
                     c => texts(c, "text", "text"),
                 };
-                if let Some((from, provenance, event_kind, delivery, event, rest)) = parse_header(&text) {
-                    out.push(Item::Note { id, at, text: clip(rest), from, provenance, event_kind, delivery, event });
+                if let Some(h) = parse_header(&text) {
+                    out.push(Item::Note {
+                        id,
+                        at,
+                        text: clip(h.rest),
+                        from: h.from,
+                        provenance: h.provenance,
+                        event_kind: h.kind,
+                        delivery: h.delivery,
+                        event: h.event,
+                        local_time: h.local_time,
+                        gap: h.gap,
+                    });
                 }
             }
             Some("compaction") => out.push(Item::Compaction {
@@ -330,14 +377,27 @@ mod tests {
 
     #[test]
     fn header_parsing() {
-        let (from, prov, kind, d, e, rest) =
+        let h =
             parse_header("[from user | provenance: trusted | message | delivery d1 | event e1]\nhello\nworld").unwrap();
         assert_eq!(
-            (from.as_str(), prov.as_str(), kind.as_str(), d.as_str(), e.as_str()),
+            (h.from.as_str(), h.provenance.as_str(), h.kind.as_str(), h.delivery.as_str(), h.event.as_str()),
             ("user", "trusted", "message", "d1", "e1")
         );
-        assert_eq!(rest, "hello\nworld");
+        assert_eq!((h.rest.as_str(), h.local_time, h.gap), ("hello\nworld", None, None));
         assert!(parse_header("plain text").is_none());
+
+        // With the local time, and a gap note after a long silence.
+        let h = parse_header(
+            "[Fri 2026-10-30 17:05 Europe/Berlin (first message in 3 days) | from user | provenance: trusted | message | delivery d | event e]\nhi",
+        )
+        .unwrap();
+        assert_eq!(h.local_time.as_deref(), Some("Fri 2026-10-30 17:05 Europe/Berlin"));
+        assert_eq!(h.gap.as_deref(), Some("first message in 3 days"));
+        assert_eq!((h.from.as_str(), h.rest.as_str()), ("user", "hi"));
+        let h =
+            parse_header("[Fri 2026-10-30 17:05 UTC | from hub | provenance: trusted | timer | delivery d | event e]")
+                .unwrap();
+        assert_eq!((h.local_time.as_deref(), h.gap), (Some("Fri 2026-10-30 17:05 UTC"), None));
     }
 
     #[test]

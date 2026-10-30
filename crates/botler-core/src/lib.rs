@@ -3,6 +3,7 @@
 
 pub mod catalog;
 pub mod change;
+pub mod clock;
 pub mod defs;
 pub mod duration;
 pub mod event;
@@ -13,7 +14,7 @@ pub mod payloads;
 pub mod routing;
 pub mod trigger;
 
-pub use defs::{Definitions, Diagnostic, load};
+pub use defs::{Definitions, Diagnostic, load, load_with};
 pub use event::{Event, Provenance, Source};
 
 /// The always-on chat the user talks to by default (instance and definition name): it receives

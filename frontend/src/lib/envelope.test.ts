@@ -12,9 +12,27 @@ describe("parseEnvelope", () => {
       kind: "runnable.failed",
       delivery: "d1",
       event: "e1",
+      localTime: null,
+      gap: null,
       body: "hello\nworld",
       malformed: false,
     });
+  });
+
+  it("reads the local time and gap note", () => {
+    const e = parseEnvelope(
+      "[Fri 2026-10-30 17:05 Europe/Berlin (first message in 3 days) | from user | provenance: trusted | message | delivery d | event e]\nhi",
+    );
+    expect([e?.localTime, e?.gap, e?.from, e?.kind, e?.body]).toEqual([
+      "Fri 2026-10-30 17:05 Europe/Berlin",
+      "first message in 3 days",
+      "user",
+      "message",
+      "hi",
+    ]);
+    const plain = parseEnvelope("[Fri 2026-10-30 17:05 UTC | from hub | provenance: trusted | timer | delivery d | event e]");
+    expect([plain?.localTime, plain?.gap]).toEqual(["Fri 2026-10-30 17:05 UTC", null]);
+    expect(parseEnvelope("[note] something | from x")).toBeNull();
   });
 
   it("accepts the short form without kind and event", () => {
@@ -53,8 +71,11 @@ describe("envelopeOf", () => {
       event_kind: "message",
       delivery: "d",
       event: "e",
+      local_time: "Fri 2026-10-30 17:05 UTC",
+      gap: null,
     });
     expect(e?.body).toBe("body");
+    expect(e?.localTime).toBe("Fri 2026-10-30 17:05 UTC");
     expect(isUserMessage(e!)).toBe(true);
   });
 

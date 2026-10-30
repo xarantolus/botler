@@ -1,6 +1,7 @@
 // Delivery envelopes: the botler pi extension turns every delivered event into a user turn whose
 // first line is a header like
-//   [from agent:main | provenance: trusted | message | delivery D | event E]
+//   [Fri 2026-10-30 17:05 Europe/Berlin (first message in 3 days) | from agent:x | provenance: trusted | message | delivery D | event E]
+// (the local time and gap note are absent in older headers).
 // The hub parses the strict form already (sessions.rs); this parser is tolerant of older and
 // partial headers too (e.g. without kind or event), and of the malformed-delivery marker.
 
@@ -10,6 +11,10 @@ export interface Envelope {
   kind: string | null;
   delivery: string | null;
   event: string | null;
+  /** When it was delivered, in the instance's local time. */
+  localTime: string | null;
+  /** After a long silence, e.g. `first message in 3 days`. */
+  gap: string | null;
   body: string;
   malformed: boolean;
 }
@@ -22,11 +27,39 @@ export function parseEnvelope(text: string): Envelope | null {
   const first = (nl < 0 ? text : text.slice(0, nl)).trim();
   const body = nl < 0 ? "" : text.slice(nl + 1);
   if (first === MALFORMED) {
-    return { from: "?", provenance: "untrusted", kind: null, delivery: null, event: null, body, malformed: true };
+    return {
+      from: "?",
+      provenance: "untrusted",
+      kind: null,
+      delivery: null,
+      event: null,
+      localTime: null,
+      gap: null,
+      body,
+      malformed: true,
+    };
   }
-  if (!first.startsWith("[from ") || !first.endsWith("]")) return null;
+  if (!first.startsWith("[") || !first.endsWith("]")) return null;
   const parts = first.slice(1, -1).split(" | ").map((p) => p.trim());
-  const env: Envelope = { from: "", provenance: "", kind: null, delivery: null, event: null, body, malformed: false };
+  const env: Envelope = {
+    from: "",
+    provenance: "",
+    kind: null,
+    delivery: null,
+    event: null,
+    localTime: null,
+    gap: null,
+    body,
+    malformed: false,
+  };
+  // An optional leading local time, with an optional gap note in parentheses.
+  if (parts[0] && !parts[0].startsWith("from ")) {
+    const when = parts.shift()!;
+    const m = /^(.*) \((.*)\)$/.exec(when);
+    env.localTime = m ? m[1]! : when;
+    env.gap = m ? m[2]! : null;
+  }
+  if (!parts[0]?.startsWith("from ")) return null;
   for (const p of parts) {
     if (p.startsWith("from ")) env.from = p.slice(5);
     else if (p.startsWith("provenance: ")) env.provenance = p.slice(12);
@@ -52,6 +85,8 @@ export function envelopeOf(item: {
   event_kind: string | null;
   delivery: string | null;
   event: string | null;
+  local_time?: string | null;
+  gap?: string | null;
 }): Envelope | null {
   if (item.from !== null && item.provenance !== null) {
     return {
@@ -60,6 +95,8 @@ export function envelopeOf(item: {
       kind: item.event_kind,
       delivery: item.delivery,
       event: item.event,
+      localTime: item.local_time ?? null,
+      gap: item.gap ?? null,
       body: item.text,
       malformed: false,
     };

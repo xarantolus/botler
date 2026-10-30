@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Breaker } from "../generated";
-import { heldFor, isTripped, pairOf } from "./breakers";
+import { heldFor, isTripped, pairOf, pausing } from "./breakers";
 
 const b = (subject: string): Breaker => ({ subject, kind: "pair", reason: "r", tripped_at: "2026-10-30T10:00:00Z" });
 
@@ -19,5 +19,8 @@ describe("breakers", () => {
     expect(heldFor("dave", list)).toEqual([]);
     expect(isTripped("chain:1", list)).toBe(true);
     expect(isTripped("chain:2", list)).toBe(false);
+    expect(pausing("alice", [...list, b("instance:alice"), b("instance:bob")]).map((x) => x.subject)).toEqual([
+      "instance:alice",
+    ]);
   });
 });
