@@ -133,8 +133,18 @@ pub async fn state_owner(hub: &Hub, caller: &Caller) -> Result<String> {
     })
 }
 
-/// The trial's container exited by itself.
+/// Whether `run`'s minutes are up at `now`, and the reason to give.
+async fn time_up(hub: &Hub, run: &Run, now: DateTime<Utc>) -> Result<Option<String>> {
+    let (Some(started), Some(t)) = (run.started_at, hub.store.trial(&run.id).await?) else { return Ok(None) };
+    let up = now - started >= Duration::minutes(i64::from(t.minutes));
+    Ok(up.then(|| format!("stopped after {} minutes, as asked", t.minutes)))
+}
+
+/// The trial's container exited: by itself, or because [`sweep`] stopped it when time was up.
 pub async fn on_exit(hub: &Hub, run: &Run, exit_code: Option<i64>, oom: bool) -> Result<()> {
+    if let Some(why) = time_up(hub, run, Utc::now()).await? {
+        return finish(hub, run, TrialOutcome::TimeUp, exit_code, Some(why)).await;
+    }
     let ok = exit_code == Some(0) && !oom;
     let reason = (!ok).then(|| if oom { "out of memory".to_string() } else { format!("exit code {exit_code:?}") });
     let outcome = if ok { TrialOutcome::Succeeded } else { TrialOutcome::Failed };
@@ -143,20 +153,30 @@ pub async fn on_exit(hub: &Hub, run: &Run, exit_code: Option<i64>, oom: bool) ->
 
 /// Stop a running trial whose minutes are up, and give up on one that never started.
 pub async fn sweep(hub: &Hub, run: &Run, now: DateTime<Utc>) -> Result<()> {
-    match (run.status, run.started_at) {
-        (RunStatus::Running, Some(started)) => {
-            let Some(t) = hub.store.trial(&run.id).await? else { return Ok(()) };
-            if now - started >= Duration::minutes(i64::from(t.minutes)) {
-                let why = format!("stopped after {} minutes, as asked", t.minutes);
-                return finish(hub, run, TrialOutcome::TimeUp, None, Some(why)).await;
+    match run.status {
+        RunStatus::Running => {
+            let Some(why) = time_up(hub, run, now).await? else { return Ok(()) };
+            // Stopped while its run is live, so its last calls still succeed and its log ends
+            // cleanly; the exit, seen here or by `on_exit`, counts as time up.
+            match hub.containers.stop(&jobs::run_container(hub, run), 10).await {
+                Ok(()) | Err(botler_runtime::ContainerError::NotFound(_)) => {}
+                Err(e) => return Err(e.into()),
             }
-            Ok(())
+            finish(hub, run, TrialOutcome::TimeUp, None, Some(why)).await
         }
-        (RunStatus::Queued, _) if now - run.created_at > START_DEADLINE => {
+        RunStatus::Queued if now - run.created_at > START_DEADLINE => {
             finish(hub, run, TrialOutcome::Failed, None, Some("never started (hub restarted?)".into())).await
         }
         _ => Ok(()),
     }
+}
+
+/// Stop every trial (the kill switch): they run code nobody has reviewed yet.
+pub async fn stop_all(hub: &Hub) -> Result<()> {
+    for run in hub.store.active_runs().await?.into_iter().filter(|r| r.kind == RunKind::Trial) {
+        finish(hub, &run, TrialOutcome::Failed, None, Some("botler was paused".into())).await?;
+    }
+    Ok(())
 }
 
 /// End trial `run` (once): stop and remove its container and tell the agent that started it.

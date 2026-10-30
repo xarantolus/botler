@@ -37,6 +37,11 @@ pub async fn env() -> Env {
 
 /// Like [`env`], but on `runtime` (`fake` is then unused).
 pub async fn env_on(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake) -> Env {
+    env_with(runtime, fake, HubConfig::new(SocketAddr::from(([127, 0, 0, 1], 0)))).await
+}
+
+/// Like [`env_on`], with `config`.
+pub async fn env_with(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake, config: HubConfig) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::new(dir.path().join("data"));
     paths.ensure().unwrap();
@@ -44,7 +49,7 @@ pub async fn env_on(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake) ->
     copy_dir(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template")), &tpl);
     botler_repo::Repo::new(paths.repo(), paths.worktrees()).init_from(&tpl).await.unwrap();
     assets::unpack(&paths).unwrap();
-    let hub = Hub::open(paths, HubConfig::new(SocketAddr::from(([127, 0, 0, 1], 0))), runtime).await.unwrap();
+    let hub = Hub::open(paths, config, runtime).await.unwrap();
     Env { _dir: dir, hub, fake }
 }
 

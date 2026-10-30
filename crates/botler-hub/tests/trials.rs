@@ -176,6 +176,14 @@ async fn a_failing_trial_reports_back_without_an_incident() {
     assert_eq!(done.len(), 2);
     assert!(done.iter().any(|(_, p)| p.reason.as_deref().is_some_and(|r| r.contains("imap login failed"))));
     assert!(s.e.hub.store.open_incidents().await.unwrap().is_empty());
+
+    // The kill switch stops trials, and none start while paused.
+    start(&s, 5).await;
+    botler_hub::control::pause(&s.e.hub).await.unwrap();
+    assert!(finished(&s).await.iter().any(|(_, p)| p.reason.as_deref() == Some("botler was paused")));
+    assert!(s.e.fake.containers().is_empty());
+    let r = ops::call(&s.e.hub, &s.agent, "trial_run", json!({"job": "watch", "branch": s.branch})).await;
+    assert!(r.unwrap_err().to_string().contains("paused"));
 }
 
 #[tokio::test]
@@ -191,4 +199,75 @@ async fn trials_are_checked() {
     let user = Caller { principal: Principal::User, capabilities: vec![], runnable: None };
     let r = ops::call(&s.e.hub, &user, "trial_run", json!({"job": "watch", "branch": s.branch})).await;
     assert!(err(r).contains("only agents"));
+}
+
+/// Real Podman (`BOTLER_PODMAN_TESTS=1`; needs the agent base image, which it never builds): the
+/// template's example watcher, tried from a branch that ticks every 5 seconds, on a throwaway hub
+/// listening on port 7435. It builds the job image, reaches the hub for `state`, `emit` and
+/// `health`, is stopped after its minute, and its ticks come back as recorded effects. Removes the
+/// images it built (its own data directory's label) afterwards; the trial removes its container.
+#[tokio::test]
+async fn podman_trial_of_the_example_watcher() {
+    use std::sync::Arc;
+
+    use botler_runtime::Containers;
+    if std::env::var("BOTLER_PODMAN_TESTS").as_deref() != Ok("1") {
+        return;
+    }
+    let rt = Arc::new(botler_runtime::Cli::detect(None).await.unwrap());
+    if rt.image_id(botler_hub::assets::AGENT_BASE_LATEST).await.unwrap().is_none() {
+        eprintln!("skipped: no agent base image");
+        return;
+    }
+    let config = botler_hub::config::HubConfig::new(([0, 0, 0, 0], 7435).into());
+    let e = common::env_with(rt.clone(), botler_runtime::fake::Fake::new(), config).await;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:7435").await.unwrap();
+    tokio::spawn(axum::serve(listener, botler_hub::api::router(e.hub.clone())).into_future());
+    tokio::spawn(botler_hub::supervisor::run(e.hub.clone()));
+
+    let instance = router::new_instance(&e.hub, "botler", None, None).await.unwrap();
+    let agent = Caller {
+        principal: Principal::Agent { instance: instance.clone(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    let main_py = "jobs/example-watcher/src/example_watcher/__main__.py";
+    let code = std::fs::read_to_string(format!("{}/../../template/{main_py}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let fast = code.replace("INTERVAL_SECONDS = 30.0", "INTERVAL_SECONDS = 5.0");
+    assert_ne!(code, fast);
+    let branch = format!("agents/{instance}/watch");
+    e.push(&branch, &[(main_py, &fast)]).await;
+
+    let input = json!({"job": "example-watcher", "branch": branch, "minutes": 1});
+    let out = ops::call(&e.hub, &agent, "trial_run", input).await.unwrap();
+    let run_id = out["run_id"].as_str().unwrap().to_string();
+    let q = EventQuery { kind: Some("trial.finished".into()), correlation: None, since: None, limit: 5 };
+    let mut done = Vec::new();
+    for _ in 0..600 {
+        done = e.hub.store.events(&q).await.unwrap();
+        if !done.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let run = e.hub.store.run(&run_id).await.unwrap();
+    let leftover = rt.inspect(&jobs::container_name(&e.hub, &run_id)).await.unwrap();
+    let owned = e.hub.labels("x").into_iter().filter(|(k, _)| k == botler_hub::images::OWNER_LABEL).collect();
+    for t in rt.images(&owned).await.unwrap() {
+        rt.remove_image(&t).await.unwrap();
+    }
+
+    assert_eq!(done.len(), 1, "no trial.finished; run: {run:?}");
+    let Some(Ok(BuiltinPayload::TrialFinished(p))) = BuiltinPayload::of(&done[0]) else { panic!("{:?}", done[0]) };
+    eprintln!("trial.finished: {}", serde_json::to_string_pretty(&p).unwrap());
+    assert_eq!(p.outcome, TrialOutcome::TimeUp, "{p:?}");
+    let counts: Vec<i64> = p.effects.iter().filter_map(|e| e.detail["payload"]["count"].as_i64()).collect();
+    assert!(counts.len() >= 5 && counts[..3] == [1, 2, 3], "{counts:?}");
+    assert!(p.effects.iter().all(|e| e.op == "emit_event" && e.detail["type"] == "example.tick"));
+    assert!(p.logs_tail.contains("ticked"), "{}", p.logs_tail);
+    assert!(run.heartbeat_at.is_some(), "health.ok() reached the hub");
+    assert!(leftover.is_none(), "the trial removed its container");
+    let ticks = EventQuery { kind: Some("example.tick".into()), correlation: None, since: None, limit: 5 };
+    assert!(e.hub.store.events(&ticks).await.unwrap().is_empty(), "nothing was routed");
+    assert!(e.hub.store.open_incidents().await.unwrap().is_empty());
 }
