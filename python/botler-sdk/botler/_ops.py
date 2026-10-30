@@ -61,7 +61,7 @@ def set_chat_title(*, slug: str, title: str) -> dict[str, Any]:
 
 
 def spawn_agent(*, definition: str, task: str, env: Any = None) -> dict[str, Any]:
-    """Start a new instance of an agent definition with a task. It reports back to you by message. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user.
+    """Start a new instance of an agent definition with a task. It reports back to you by message. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user. Give the child the access its task needs; never tell it to work around missing access.
 
     Args:
         definition: Agent definition under `agents/`, e.g. `dev`.

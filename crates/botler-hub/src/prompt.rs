@@ -45,6 +45,12 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          - `ask_user(question, options, about)` asks the user and waits for an answer as an event. Use it \
            for decisions that are theirs; never guess at them.\n\
          - Your plain reply text is shown to the user when they are the one talking to you.\n\
+         - Missing access the work needs (a key, token, secret group, service or share)? First check \
+           memory and what you hold (`list_connections`); then ask with `request_secrets` or \
+           `request_access` and end your turn. Never silently switch to an approach the user did not \
+           ask for (e.g. HTTPS instead of SSH): offer it as an option in the request or via `ask_user`. \
+           When spawning, pass the grants the child needs (`spawn_agent(env=...)`) or let it request \
+           them; never tell it to work around missing access.\n\
          - `ask_user`, `request_secrets`, `request_access` and `propose_change` are direct tools that end your turn when \
            they succeed, so say anything else in the same reply, before the call. Do not poll or wait: \
            the result arrives as an event and wakes you, even if you were asleep.\n\n\

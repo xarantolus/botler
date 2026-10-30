@@ -91,7 +91,7 @@ pub struct AgentSpawned {
 
 impl Op for SpawnAgent {
     const NAME: &'static str = "spawn_agent";
-    const DESCRIPTION: &'static str = "Start a new instance of an agent definition with a task. It reports back to you by message. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user.";
+    const DESCRIPTION: &'static str = "Start a new instance of an agent definition with a task. It reports back to you by message. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user. Give the child the access its task needs; never tell it to work around missing access.";
     const WHO: Who = Who::UserAndAgents;
     type Output = AgentSpawned;
 

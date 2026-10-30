@@ -32,6 +32,13 @@ name = "imap"
 class = "container"
 [[group.secret]]
 name = "IMAP_PASS"
+
+[[group]]
+name = "github-ssh"
+class = "container"
+[[group.secret]]
+name = "GITHUB_SSH_KEY"
+file = "/home/agent/.ssh/id_ed25519"
 "#;
 
 const EVENTS: &str = r#"[[event]]
@@ -55,7 +62,9 @@ async fn setup() -> Env {
     files.extend(common::job("mail-watch", "command = [\"watch\"]\nemits = [\"mail.received\"]\n"));
     let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
     e.commit(&refs).await;
-    for (k, v) in [("OPENROUTER_API_KEY", "sk"), ("NAS_PASS", "hunter2"), ("IMAP_PASS", "imap")] {
+    for (k, v) in
+        [("OPENROUTER_API_KEY", "sk"), ("NAS_PASS", "hunter2"), ("IMAP_PASS", "imap"), ("GITHUB_SSH_KEY", "KEY")]
+    {
         e.hub.store.set_secret(&e.hub.secret_key, k, v).await.unwrap();
     }
     e
@@ -337,4 +346,37 @@ async fn event_types_list_producers_and_subscribers_and_are_searchable() {
             .with("jobs/j/Dockerfile", "FROM x"),
     );
     assert!(report.errors().any(|d| d.message.contains("nope.never")));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_granted_ssh_key_lands_private_in_a_private_ssh_dir() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = setup().await;
+    let out = op(
+        &e,
+        &user(),
+        "spawn_agent",
+        json!({"definition": "dev", "task": "push", "env": {"secrets": ["github-ssh"]}}),
+    )
+    .await
+    .unwrap();
+    let dev = out["instance"].as_str().unwrap().to_string();
+    run(&e).await;
+    let spec = &e.fake.containers()[&agents::container_name(&e.hub, &dev)].spec;
+    let key = spec
+        .mounts
+        .iter()
+        .find_map(|m| match m {
+            botler_runtime::Mount::Bind { src, dst, read_only: true } if dst == "/home/agent/.ssh/id_ed25519" => {
+                Some(src.clone())
+            }
+            _ => None,
+        })
+        .expect("key mounted at ~/.ssh/id_ed25519");
+    assert_eq!(std::fs::read_to_string(&key).unwrap(), "KEY");
+    assert_eq!(std::fs::metadata(&key).unwrap().permissions().mode() & 0o777, 0o600);
+    let home = e.hub.paths.home(&dev).join(".ssh");
+    assert_eq!(std::fs::metadata(&home).unwrap().permissions().mode() & 0o777, 0o700);
+    assert!(!spec.env.contains_key("GITHUB_SSH_KEY"), "files are not env vars");
 }
