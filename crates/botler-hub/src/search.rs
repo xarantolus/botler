@@ -267,6 +267,19 @@ impl Index {
         Ok(Self { path: path.to_path_buf(), pool: RwLock::new(pool), pass: Mutex::new(()) })
     }
 
+    /// Drop an instance's session entries (its session files were deleted).
+    pub async fn forget_sessions(&self, instance: &str) -> Result<()> {
+        let pool = self.pool().await?;
+        let _pass = self.pass.lock().await;
+        sqlx::query("DELETE FROM docs WHERE source = 'session' AND owner = ?").bind(instance).execute(&pool).await?;
+        sqlx::query("DELETE FROM cursors WHERE substr(key, 1, ?) = ?")
+            .bind(format!("session:{instance}/").len() as i64)
+            .bind(format!("session:{instance}/"))
+            .execute(&pool)
+            .await?;
+        Ok(())
+    }
+
     /// The pool, reopened on a fresh file if `search.db` was deleted.
     async fn pool(&self) -> Result<SqlitePool> {
         if !tokio::fs::try_exists(&self.path).await? {

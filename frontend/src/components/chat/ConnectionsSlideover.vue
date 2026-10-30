@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // A chat's edges: what it holds (definition and grants, revocable), the events it subscribes to
-// (removable), who spawned it and whom it spawned, its pending timers and the services it uses.
+// (removable; stale ones, which stopped applying while it was archived, are greyed out), who
+// spawned it and whom it spawned, its pending timers and the services it uses.
 import { ref, shallowRef, watch } from "vue";
 import { call } from "../../api/client";
 import { confirm } from "../../confirm";
@@ -29,12 +30,12 @@ const filter = (s: Subscription) =>
     .join(", ");
 
 async function revoke(g: Grant) {
-  const ok = await confirm({
+  const ok = g.stale !== null || (await confirm({
     title: `Revoke ${resource(g)}?`,
     description: "The chat is told, and its container no longer has it from its next start.",
     confirmLabel: "Revoke",
     color: "error",
-  });
+  }));
   if (!ok) return;
   busy.value = g.id;
   try {
@@ -84,25 +85,30 @@ async function unsubscribe(s: Subscription) {
             <UBadge v-for="s in data.definition_secrets" :key="s" color="neutral" variant="outline" icon="i-lucide-key-round" :label="s" />
           </div>
           <p v-if="!data.grants.length" class="text-muted">No grants beyond its definition.</p>
-          <div v-for="g in data.grants" :key="g.id" class="flex items-center gap-2">
+          <div v-for="g in data.grants" :key="g.id" class="flex items-center gap-2" :class="{ 'opacity-50': g.stale }">
             <UIcon :name="g.kind === 'secret' ? 'i-lucide-key-round' : 'i-lucide-shield-plus'" class="size-4 shrink-0 text-muted" />
-            <code class="min-w-0 flex-1 truncate font-mono">{{ resource(g) }}</code>
-            <UBadge v-if="g.suspended" color="neutral" variant="subtle" size="sm" label="suspended" />
+            <div class="min-w-0 flex-1">
+              <code class="block truncate font-mono" :class="{ 'line-through': g.stale }">{{ resource(g) }}</code>
+              <p v-if="g.stale" class="text-xs text-muted">stale: {{ g.stale }}</p>
+            </div>
+            <UBadge v-if="g.stale" color="neutral" variant="subtle" size="sm" label="stale" />
+            <UBadge v-else-if="g.suspended" color="neutral" variant="subtle" size="sm" label="suspended" />
             <span class="text-xs text-muted">{{ g.granted_by }} · <TimeAgo :at="g.created_at" /></span>
-            <UButton size="xs" color="error" variant="ghost" label="Revoke" :loading="busy === g.id" @click="revoke(g)" />
+            <UButton size="xs" color="error" variant="ghost" :label="g.stale ? 'Remove' : 'Revoke'" :loading="busy === g.id" @click="revoke(g)" />
           </div>
         </section>
 
         <section class="space-y-2">
           <h3 class="font-semibold text-highlighted">Subscriptions</h3>
           <p v-if="!data.subscriptions.length" class="text-muted">None.</p>
-          <div v-for="s in data.subscriptions" :key="s.id" class="flex items-start gap-2">
+          <div v-for="s in data.subscriptions" :key="s.id" class="flex items-start gap-2" :class="{ 'opacity-50': s.stale }">
             <UIcon :name="s.wake ? 'i-lucide-bell-ring' : 'i-lucide-bell-off'" class="mt-0.5 size-4 shrink-0 text-muted" />
             <div class="min-w-0 flex-1">
               <code class="font-mono">{{ s.pattern }}</code>
               <span v-if="filter(s)" class="text-muted"> where {{ filter(s) }}</span>
               <p v-if="s.note" class="truncate text-xs text-muted">{{ s.note }}</p>
               <p v-if="!s.wake" class="text-xs text-muted">quiet: read with whatever wakes it next</p>
+              <p v-if="s.stale" class="text-xs text-muted">stale: {{ s.stale }}</p>
             </div>
             <UButton size="xs" color="neutral" variant="ghost" icon="i-lucide-trash-2" aria-label="Remove subscription" :loading="busy === s.id" @click="unsubscribe(s)" />
           </div>

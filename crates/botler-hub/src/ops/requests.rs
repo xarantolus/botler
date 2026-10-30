@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use botler_core::defs::{Resource, ResourceKind};
 use botler_store::{DialogKind, DialogStatus, NewDialog, Priority};
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -183,6 +184,108 @@ impl Op for AskUser {
         Ok(Asked {
             dialog_id: d.id,
             note: "The answer arrives later as a dialog.answered event; continue with other work or stop.".into(),
+        })
+    }
+}
+
+/// The answers of a visit request.
+pub const VISIT_DONE: &str = "done";
+pub const VISIT_CANCEL: &str = "cancel";
+
+/// What a visit request asks the user to open (stored as the dialog's `spec`). The web app builds
+/// the link from the host name it is browsing on, `host_port` and `path`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+pub struct VisitSpec {
+    /// The service whose published port this is.
+    pub service: String,
+    pub host_port: u16,
+    /// Starts with `/`.
+    pub path: String,
+    pub title: String,
+    pub instructions: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+#[ts(optional_fields)]
+pub struct RequestVisit {
+    /// A host port published by a service this chat may use.
+    pub host_port: u16,
+    /// Path to open, e.g. `/login`. Defaults to `/`.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// What the visit is for, e.g. "Log in to Home Assistant".
+    pub title: String,
+    /// What the user should do there, step by step.
+    pub instructions: String,
+    /// Withdraw the request after this long, e.g. `1d`.
+    #[serde(default)]
+    pub expires_in: Option<String>,
+}
+
+/// The service publishing `host_port`, if `instance` may use it (its definition's `mcp`, or a
+/// grant).
+async fn visit_service(hub: &Hub, instance: &str, host_port: u16) -> Result<String, OpError> {
+    let applied = hub.applied().await;
+    let Some(job) = applied.defs.jobs.values().find(|j| j.spec.env.publish.iter().any(|p| p.host_port == host_port))
+    else {
+        return Err(OpError::BadRequest(format!("no service publishes host port {host_port}")));
+    };
+    let r = Resource::new(ResourceKind::Service, job.name.clone());
+    if !crate::grants::holds(hub, instance, &r, None).await? {
+        return Err(OpError::Forbidden(format!(
+            "port {host_port} belongs to service `{}`, which this chat may not use; `request_access(\"{r}\")` first",
+            job.name
+        )));
+    }
+    Ok(job.name.clone())
+}
+
+impl Op for RequestVisit {
+    const NAME: &'static str = "request_visit";
+    const DESCRIPTION: &'static str = "Ask the user to open a page of a service in their browser (e.g. to log in) and tell you when done. `host_port` must be a port published by a service this chat may use. The answer (`done` or `cancel`) arrives as a `dialog.answered` event.";
+    const WHO: Who = Who::UserAndAgents;
+    const ENDS_TURN: bool = true;
+    type Output = Asked;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<Asked, OpError> {
+        let instance = caller.agent("only agents request visits")?;
+        let path = self.path.unwrap_or_else(|| "/".into());
+        if !path.starts_with('/') || path.chars().any(char::is_whitespace) {
+            return Err(OpError::BadRequest(format!("path {path:?} must start with `/` and contain no spaces")));
+        }
+        if self.title.trim().is_empty() || self.instructions.trim().is_empty() {
+            return Err(OpError::BadRequest(
+                "say what the visit is for (`title`) and what to do (`instructions`)".into(),
+            ));
+        }
+        let service = visit_service(hub, instance, self.host_port).await?;
+        let expires_at = self.expires_in.as_deref().map(|d| parse_when(None, Some(d), Utc::now())).transpose()?;
+        let spec = VisitSpec {
+            service,
+            host_port: self.host_port,
+            path,
+            title: self.title.clone(),
+            instructions: self.instructions.clone(),
+        };
+        let d = hub
+            .store
+            .create_dialog(&NewDialog {
+                instance: instance.into(),
+                kind: DialogKind::Visit,
+                question: self.title,
+                detail: Some(self.instructions),
+                ctas: vec![VISIT_DONE.into(), VISIT_CANCEL.into()],
+                about: vec![],
+                priority: Priority::Blocking,
+                proposal_id: None,
+                spec: Some(serde_json::to_value(&spec).map_err(|e| HubError::Io(std::io::Error::other(e)))?),
+                expires_at,
+            })
+            .await?;
+        crate::notify::dialog_opened(hub, &d).await;
+        Ok(Asked {
+            dialog_id: d.id,
+            note: "The user's answer (`done` or `cancel`) arrives as a dialog.answered event; stop until then.".into(),
         })
     }
 }

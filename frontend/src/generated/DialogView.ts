@@ -3,6 +3,7 @@ import type { DialogKind } from "./DialogKind";
 import type { DialogStatus } from "./DialogStatus";
 import type { NewField } from "./NewField";
 import type { Priority } from "./Priority";
+import type { VisitSpec } from "./VisitSpec";
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
@@ -24,7 +25,11 @@ group?: string,
 /**
  * Whether the group does not exist yet (credentials requests).
  */
-new_group?: boolean, id: string, instance: string, kind: DialogKind, question: string, detail: string | null, ctas: Array<string>, about: Array<string>, priority: Priority, proposal_id: string | null, 
+new_group?: boolean, 
+/**
+ * What to open (visit requests).
+ */
+visit?: VisitSpec, id: string, instance: string, kind: DialogKind, question: string, detail: string | null, ctas: Array<string>, about: Array<string>, priority: Priority, proposal_id: string | null, 
 /**
  * Structured request for typed dialogs.
  */

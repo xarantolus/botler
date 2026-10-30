@@ -16,6 +16,8 @@ text_enum!(DialogKind {
     Credentials = "credentials",
     /// Give a chat a resource (a grant; `spec` names it).
     Access = "access",
+    /// Open a page of a service in the browser (e.g. to log in), then say done (`spec`: where).
+    Visit = "visit",
 });
 
 text_enum!(DialogStatus {

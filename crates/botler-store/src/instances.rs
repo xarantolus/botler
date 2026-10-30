@@ -55,6 +55,9 @@ pub struct ArchiveRecord {
     #[serde(default)]
     pub handed_to: Option<String>,
     pub at: DateTime<Utc>,
+    /// Disk space freed by cleaning and packing its home after archiving.
+    #[serde(default)]
+    pub freed_bytes: Option<u64>,
 }
 
 /// An agent's handover when its chat is archived.
@@ -239,6 +242,79 @@ impl Store {
         .bind(name)
         .execute(&self.pool)
         .await?;
+        if r.rows_affected() == 0 {
+            return Err(crate::not_found("instance", name));
+        }
+        Ok(())
+    }
+
+    /// Record the space freed by packing an archived chat's home in its archive report.
+    pub async fn set_archive_freed(&self, name: &str, bytes: u64) -> Result<()> {
+        sqlx::query("UPDATE instances SET archive_report = json_set(archive_report, '$.freed_bytes', ?) WHERE name = ? AND archive_report IS NOT NULL")
+            .bind(bytes as i64)
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Chats that may be archived automatically: dormant, not persistent, no archive pending,
+    /// inactive since `before`. Oldest first.
+    pub async fn archivable_instances(&self, before: DateTime<Utc>) -> Result<Vec<Instance>> {
+        let rows = sqlx::query(
+            "SELECT * FROM instances WHERE state = 'dormant' AND persistent = 0 AND archive_requested_at IS NULL AND last_active < ? ORDER BY last_active",
+        )
+        .bind(ts(before))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(row).collect()
+    }
+
+    /// Chats whose handover was asked for before `before` and never came.
+    pub async fn stale_archive_requests(&self, before: DateTime<Utc>) -> Result<Vec<Instance>> {
+        let rows = sqlx::query(
+            "SELECT * FROM instances WHERE state != 'archived' AND archive_requested_at IS NOT NULL AND archive_requested_at < ?",
+        )
+        .bind(ts(before))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(row).collect()
+    }
+
+    /// Delete an archived chat for good: its row and what only it uses (queued deliveries,
+    /// timers it set or that resume it, its state, its breaker). The event journal, runs, usage,
+    /// dialogs and proposals are history and stay. Returns false if it is not archived.
+    pub async fn delete_archived_instance(&self, name: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let r = sqlx::query("DELETE FROM instances WHERE name = ? AND state = 'archived'")
+            .bind(name)
+            .execute(&mut *tx)
+            .await?;
+        if r.rows_affected() == 0 {
+            return Ok(false);
+        }
+        let (agent, subject) = (format!("agent:{name}"), format!("instance:{name}"));
+        let target = crate::encode("timer target", &serde_json::json!({ "resume": name }))?;
+        for (sql, v) in [
+            ("DELETE FROM deliveries WHERE instance = ? AND status = 'pending'", name),
+            ("DELETE FROM timers WHERE status = 'pending' AND created_by = ?", &agent),
+            ("DELETE FROM timers WHERE status = 'pending' AND target = ?", &target),
+            ("DELETE FROM kv WHERE owner = ?", &agent),
+            ("DELETE FROM breakers WHERE subject = ?", &subject),
+        ] {
+            sqlx::query(sql).bind(v).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    /// Point an instance at another agent definition (restoring a chat whose own is gone).
+    pub async fn set_instance_definition(&self, name: &str, definition: &str) -> Result<()> {
+        let r = sqlx::query("UPDATE instances SET definition = ? WHERE name = ?")
+            .bind(definition)
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
         if r.rows_affected() == 0 {
             return Err(crate::not_found("instance", name));
         }

@@ -17,6 +17,7 @@ use crate::failures::{self, Failure};
 use crate::hub::{Hub, Result};
 use crate::images::{self, Recipe};
 use crate::jobs;
+use crate::wire::{PublishedPort, ServiceState, ServiceStatus};
 
 /// The stable container name of a service. On the services network it is also reachable by its
 /// plain name (a network alias).
@@ -190,9 +191,10 @@ pub async fn stop_all(hub: &Hub) -> Result<()> {
     Ok(())
 }
 
-/// Every defined service, whether it runs, and its addresses (`botler status`, the web app).
-pub async fn status(hub: &Hub) -> Result<Vec<crate::wire::ServiceStatus>> {
+/// Every defined service, its state and its addresses (`botler status`, the web app).
+pub async fn status(hub: &Hub) -> Result<Vec<ServiceStatus>> {
     let applied = hub.applied().await;
+    let paused = hub.paused().await?;
     let host = tokio::fs::read_to_string("/proc/sys/kernel/hostname").await.map(|h| h.trim().to_string());
     let mut out = Vec::new();
     for def in applied.defs.services() {
@@ -203,6 +205,13 @@ pub async fn status(hub: &Hub) -> Result<Vec<crate::wire::ServiceStatus>> {
             .await?
             .first()
             .is_some_and(|i| i.kind == "crashloop" && i.status == botler_store::IncidentStatus::Open);
+        let state = match last.map(|r| r.status) {
+            _ if paused => ServiceState::Paused,
+            _ if failed => ServiceState::Failed,
+            Some(RunStatus::Running) => ServiceState::Running,
+            Some(RunStatus::Failed | RunStatus::Timeout) => ServiceState::Backoff,
+            _ => ServiceState::Starting,
+        };
         let published = def
             .spec
             .env
@@ -213,7 +222,7 @@ pub async fn status(hub: &Hub) -> Result<Vec<crate::wire::ServiceStatus>> {
                     (Ok(h), "0.0.0.0" | "::") if !h.is_empty() => h.clone(),
                     _ => p.bind.clone(),
                 };
-                crate::wire::PublishedPort {
+                PublishedPort {
                     bind: p.bind.clone(),
                     host_port: p.host_port,
                     port: p.port,
@@ -221,10 +230,9 @@ pub async fn status(hub: &Hub) -> Result<Vec<crate::wire::ServiceStatus>> {
                 }
             })
             .collect();
-        out.push(crate::wire::ServiceStatus {
+        out.push(ServiceStatus {
             name: def.name.clone(),
-            running: last.is_some_and(|r| r.status == RunStatus::Running),
-            failed,
+            state,
             internal_url: def.spec.env.port.map(|p| format!("http://{}:{p}", def.name)),
             published,
         });

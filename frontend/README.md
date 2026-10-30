@@ -74,7 +74,14 @@ npm run build        # vue-tsc, vite build, offline check, then records the sour
 npm run check-dist   # fails if dist/ is older than the sources or references external URLs
 npm test             # vitest: unit tests (src/**/*.test.ts) and component tests (tests/)
 npm run typecheck
+npm run e2e          # end-to-end smoke test (local only: needs Podman and a built botler binary)
 ```
+
+`npm run e2e` (`e2e/smoke.mjs`) runs a throwaway hub with real agents on port 7437, its models
+pointed at a scripted stub in the same file, and drives the app in headless Chromium: sign in,
+send, answer a question inline, reject a proposal, and run a job from the System view when there
+is one. It cleans up after itself; the first run builds the agent image. Its header lists the
+environment variables (Chromium binary, screenshots, where the data directory goes).
 
 `npm run build` writes a hash of the sources (`src/`, `public/`, `index.html`, the package and
 config files; tests excluded) to `dist/.source-hash`. `cargo test` recomputes it

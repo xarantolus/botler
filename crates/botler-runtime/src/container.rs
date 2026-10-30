@@ -168,6 +168,8 @@ pub trait Containers: Send + Sync {
     async fn remove_image(&self, tag: &str) -> Result<()>;
     /// Point tag `target` at the image `source` names (moving it if it exists).
     async fn tag(&self, source: &str, target: &str) -> Result<()>;
+    /// Size of an image in bytes (layers shared with other images counted in full).
+    async fn image_size(&self, tag: &str) -> Result<u64>;
     /// Start detached; returns the container id.
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String>;
     async fn run_attached(&self, spec: &ContainerSpec) -> Result<Attached>;
@@ -398,6 +400,11 @@ impl Containers for Cli {
 
     async fn tag(&self, source: &str, target: &str) -> Result<()> {
         run(&self.info.binary, &["tag", source, target]).await.map(|_| ())
+    }
+
+    async fn image_size(&self, tag: &str) -> Result<u64> {
+        let out = run(&self.info.binary, &["image", "inspect", "--format", "{{.Size}}", tag]).await?;
+        out.trim().parse().map_err(|e| ContainerError::Parse { what: "image size", detail: format!("{out:?}: {e}") })
     }
 
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {

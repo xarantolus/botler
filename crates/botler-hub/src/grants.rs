@@ -72,7 +72,7 @@ pub fn check(defs: &Definitions, def: &AgentDef, r: &Resource, mode: Option<Moun
 /// The environment `instance`'s grants add to its definition's, and the ids of those grants (to
 /// notice when they change).
 pub async fn environment(hub: &Hub, instance: &str) -> Result<(Environment, Vec<String>), HubError> {
-    let grants = hub.store.live_grants(instance).await?;
+    let grants: Vec<Grant> = hub.store.live_grants(instance).await?.into_iter().filter(|g| g.stale.is_none()).collect();
     let held: Vec<(Resource, Option<MountMode>)> = grants.iter().map(|g| (g.resource(), g.mode)).collect();
     let env = botler_core::defs::environment_of(held.iter().map(|(r, m)| (r, *m)));
     Ok((env, grants.into_iter().map(|g| g.id).collect()))
@@ -87,7 +87,7 @@ pub async fn holds(hub: &Hub, instance: &str, r: &Resource, mode: Option<MountMo
     }
     let wide_enough =
         |g: &Grant| r.kind != ResourceKind::Mount || g.mode.unwrap_or_default() >= mode.unwrap_or_default();
-    Ok(hub.store.live_grants(instance).await?.iter().any(|g| g.resource() == *r && wide_enough(g)))
+    Ok(hub.store.live_grants(instance).await?.iter().any(|g| g.stale.is_none() && g.resource() == *r && wide_enough(g)))
 }
 
 /// Record a grant and tell the holder when nobody asked it (`notify`).
