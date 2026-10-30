@@ -85,7 +85,14 @@ pub const BUILTIN: &[BuiltinEvent] = &[
     BuiltinEvent {
         kind: kinds::DIALOG_ANSWERED,
         summary: "The user answered a question you asked.",
-        fields: &[("dialog_id", "the dialog"), ("question", "what you asked"), ("answer", "the chosen answer")],
+        fields: &[
+            ("dialog_id", "the dialog"),
+            ("question", "what you asked"),
+            ("answer", "the chosen answer"),
+            ("group", "credentials requests: the secret group"),
+            ("outcome", "credentials requests: declined, or which fields were added, filled and removed"),
+            ("note", "guidance from the hub, if any"),
+        ],
         follow_up: &[],
         guidance: "Continue the work that was waiting on this answer.",
     },
@@ -101,6 +108,7 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         summary: "A change you proposed moved forward: gate result, review verdict, user decision, or merge.",
         fields: &[
             ("proposal_id", "the proposal"),
+            ("title", "its title"),
             ("status", "gating | reviewing | awaiting_user | merged | rejected | failed"),
             ("detail", "gate failures, reviewer notes, or the reason for the decision"),
             ("summary", "the deployment summary of the change"),
@@ -136,6 +144,7 @@ pub const BUILTIN: &[BuiltinEvent] = &[
             ("subject", "what was paused (`chain:<id>` or `pair:<a>|<b>`)"),
             ("breaker", "cycle | pair"),
             ("reason", "what triggered it"),
+            ("correlation", "the conversation chain, for a cycle breaker"),
             ("pair", "the two agents, for a pair breaker; their messages are held until the user resumes"),
             ("recent", "their last messages"),
         ],
@@ -164,6 +173,7 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         fields: &[
             ("instance", "the agent"),
             ("title", "its title, if it named itself"),
+            ("slug", "its alias, if it has one"),
             ("last_reply", "its final answer of the turn"),
         ],
         follow_up: &[FollowUp {
@@ -173,6 +183,17 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         }],
         guidance: "Reply with `send_message` only if it asked you something or its result needs more work from \
                    it. Otherwise do not answer (no thanks needed): it sleeps until messaged.",
+    },
+    BuiltinEvent {
+        kind: kinds::SCHEDULE,
+        summary: "A schedule (cron or interval trigger) fired.",
+        fields: &[
+            ("trigger", "the trigger id"),
+            ("scheduled_for", "the fire time this run stands for"),
+            ("skipped", "fires missed during downtime and folded into this one"),
+        ],
+        follow_up: &[],
+        guidance: "Do what the trigger's prompt says.",
     },
     BuiltinEvent {
         kind: kinds::TIMER,

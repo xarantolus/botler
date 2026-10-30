@@ -29,7 +29,7 @@ pub use deliveries::{Delivery, DeliveryStatus};
 pub use dialogs::{Dialog, DialogKind, DialogStatus, NewDialog, Priority};
 pub use events::EventQuery;
 pub use incidents::{Incident, IncidentStatus};
-pub use instances::{Instance, InstanceState, NewInstance};
+pub use instances::{ArchiveRecord, Handoff, HandoverReport, Instance, InstanceState, NewInstance};
 pub use proposals::{NewProposal, Proposal, ProposalKind, ProposalStatus};
 pub use runs::{NewRun, Run, RunKind, RunStatus};
 pub use schedules::ScheduleState;
@@ -146,7 +146,7 @@ pub(crate) fn new_id() -> String {
 /// String-backed enums stored in TEXT columns.
 macro_rules! text_enum {
     ($name:ident { $($(#[$attr:meta])* $variant:ident = $text:literal),+ $(,)? }) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, ts_rs::TS)]
         #[serde(rename_all = "snake_case")]
         pub enum $name { $($(#[$attr])* $variant),+ }
 

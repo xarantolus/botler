@@ -531,7 +531,7 @@ pub struct SecretGroup {
     pub secrets: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SecretClass {
     /// Delivered into containers that are granted it (env var or file).

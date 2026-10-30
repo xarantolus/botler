@@ -8,8 +8,9 @@ use serde_json::Value;
 
 use crate::hub::{Hub, HubError, Result};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(rename = "SessionItem")]
 pub enum Item {
     User {
         id: String,
@@ -20,6 +21,13 @@ pub enum Item {
         event_kind: Option<String>,
         delivery: Option<String>,
         event: Option<String>,
+        /// When it was delivered, in the instance's local time (from the delivery header).
+        local_time: Option<String>,
+        /// After a long silence, e.g. `first message in 3 days`.
+        gap: Option<String>,
+        /// For a message the user typed: exactly their text (`text` is what the agent received,
+        /// with the catalog's guidance around it).
+        message_text: Option<String>,
     },
     Assistant {
         id: String,
@@ -35,8 +43,28 @@ pub enum Item {
         id: String,
         at: Option<String>,
         tool: String,
+        /// The tool call this answers.
+        tool_call_id: Option<String>,
         text: String,
         is_error: bool,
+        /// The dialog an `ask_user` / `request_secrets` call opened (shown in place).
+        dialog_id: Option<String>,
+        /// The proposal a `propose_change` call started (its approval is shown in place).
+        proposal_id: Option<String>,
+    },
+    /// A note that was added without starting a turn (e.g. an acknowledgement from another
+    /// agent); the agent reads it with whatever wakes it next.
+    Note {
+        id: String,
+        at: Option<String>,
+        text: String,
+        from: String,
+        provenance: String,
+        event_kind: String,
+        delivery: String,
+        event: String,
+        local_time: Option<String>,
+        gap: Option<String>,
     },
     Compaction {
         id: String,
@@ -45,8 +73,9 @@ pub enum Item {
     },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
 pub struct ToolCall {
+    pub id: Option<String>,
     pub name: String,
     pub arguments: Value,
 }
@@ -64,21 +93,47 @@ fn clip(s: String) -> String {
     format!("{}\n… ({} more bytes)", &s[..end], s.len() - end)
 }
 
-/// `[from X | provenance: Y | kind | delivery D | event E]` → parts.
-fn parse_header(text: &str) -> Option<(String, String, String, String, String, String)> {
+/// A delivery header the botler pi extension wrote, and the text after it.
+#[derive(Debug, PartialEq)]
+struct Header {
+    local_time: Option<String>,
+    gap: Option<String>,
+    from: String,
+    provenance: String,
+    kind: String,
+    delivery: String,
+    event: String,
+    rest: String,
+}
+
+/// `[<local time> (<gap>) | from X | provenance: Y | kind | delivery D | event E]`; the time
+/// (and the gap note within it) is absent in headers written before local time existed.
+fn parse_header(text: &str) -> Option<Header> {
     let first = text.lines().next()?;
     let inner = first.strip_prefix('[')?.strip_suffix(']')?;
     let parts: Vec<&str> = inner.split(" | ").collect();
-    let [from, prov, kind, delivery, event] = parts[..] else { return None };
-    let rest = text.split_once('\n').map_or("", |(_, r)| r).to_string();
-    Some((
-        from.strip_prefix("from ")?.into(),
-        prov.strip_prefix("provenance: ")?.into(),
-        kind.into(),
-        delivery.strip_prefix("delivery ")?.into(),
-        event.strip_prefix("event ")?.into(),
-        rest,
-    ))
+    let (when, [from, prov, kind, delivery, event]) = (match parts[..] {
+        [from, prov, kind, delivery, event] => Some((None, [from, prov, kind, delivery, event])),
+        [when, from, prov, kind, delivery, event] => Some((Some(when), [from, prov, kind, delivery, event])),
+        _ => None,
+    })?;
+    let (local_time, gap) = match when {
+        None => (None, None),
+        Some(w) => match w.strip_suffix(')').and_then(|w| w.split_once(" (")) {
+            Some((time, gap)) => (Some(time.to_string()), Some(gap.to_string())),
+            None => (Some(w.to_string()), None),
+        },
+    };
+    Some(Header {
+        local_time,
+        gap,
+        from: from.strip_prefix("from ")?.into(),
+        provenance: prov.strip_prefix("provenance: ")?.into(),
+        kind: kind.into(),
+        delivery: delivery.strip_prefix("delivery ")?.into(),
+        event: event.strip_prefix("event ")?.into(),
+        rest: text.split_once('\n').map_or("", |(_, r)| r).to_string(),
+    })
 }
 
 fn texts(content: &Value, kind: &str, field: &str) -> String {
@@ -92,6 +147,33 @@ fn texts(content: &Value, kind: &str, field: &str) -> String {
                 .join("\n")
         })
         .unwrap_or_default()
+}
+
+/// The dialog and proposal ids a botler tool result reports (`ask_user` → `dialog_id`,
+/// `request_secrets` → `request_id`, `propose_change` → `proposal_id`). MCP tools may carry a
+/// client prefix, hence the suffix match. Results that are not JSON (errors) have no links.
+fn result_links(tool: &str, text: &str) -> (Option<String>, Option<String>) {
+    if !["ask_user", "request_secrets", "propose_change"].iter().any(|t| tool.ends_with(t)) {
+        return (None, None);
+    }
+    let Ok(v) = serde_json::from_str::<Value>(text.trim()) else { return (None, None) };
+    let field = |k: &str| v.get(k).and_then(Value::as_str).map(String::from);
+    (field("dialog_id").or_else(|| field("request_id")), field("proposal_id"))
+}
+
+/// The text of the user's chat message `event_id`, or `None` for any other event. Events are
+/// never deleted, but a session can outlive a database it was copied from: a missing event is
+/// shown as the delivered text.
+async fn user_text(hub: &Hub, event_id: &str) -> Result<Option<String>> {
+    let ev = match hub.store.event(event_id).await {
+        Ok(ev) => ev,
+        Err(botler_store::Error::NotFound { .. }) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    if ev.kind != botler_core::event::kinds::MESSAGE || ev.source != botler_core::Source::User {
+        return Ok(None);
+    }
+    Ok(ev.payload.get("text").and_then(Value::as_str).map(String::from))
 }
 
 /// Point an existing session's header at working directory `cwd`. pi resumes a session in the
@@ -169,15 +251,18 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
                             c => texts(c, "text", "text"),
                         };
                         let item = match parse_header(&text) {
-                            Some((from, prov, kind, delivery, event, rest)) => Item::User {
+                            Some(h) => Item::User {
                                 id,
                                 at,
-                                text: clip(rest),
-                                from: Some(from),
-                                provenance: Some(prov),
-                                event_kind: Some(kind),
-                                delivery: Some(delivery),
-                                event: Some(event),
+                                text: clip(h.rest),
+                                from: Some(h.from),
+                                provenance: Some(h.provenance),
+                                event_kind: Some(h.kind),
+                                message_text: user_text(hub, &h.event).await?,
+                                delivery: Some(h.delivery),
+                                event: Some(h.event),
+                                local_time: h.local_time,
+                                gap: h.gap,
                             },
                             None => Item::User {
                                 id,
@@ -188,6 +273,9 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
                                 event_kind: None,
                                 delivery: None,
                                 event: None,
+                                local_time: None,
+                                gap: None,
+                                message_text: None,
                             },
                         };
                         out.push(item);
@@ -199,6 +287,7 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
                                 c.iter()
                                     .filter(|p| p.get("type").and_then(Value::as_str) == Some("toolCall"))
                                     .map(|p| ToolCall {
+                                        id: p.get("id").and_then(Value::as_str).map(String::from),
                                         name: p.get("name").and_then(Value::as_str).unwrap_or("?").into(),
                                         arguments: p.get("arguments").cloned().unwrap_or(Value::Null),
                                     })
@@ -216,13 +305,21 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
                             error: m.get("errorMessage").and_then(Value::as_str).map(String::from),
                         });
                     }
-                    Some("toolResult") => out.push(Item::ToolResult {
-                        id,
-                        at,
-                        tool: m.get("toolName").and_then(Value::as_str).unwrap_or("").into(),
-                        text: clip(texts(&content, "text", "text")),
-                        is_error: m.get("isError").and_then(Value::as_bool).unwrap_or(false),
-                    }),
+                    Some("toolResult") => {
+                        let tool: String = m.get("toolName").and_then(Value::as_str).unwrap_or("").into();
+                        let text = texts(&content, "text", "text");
+                        let (dialog_id, proposal_id) = result_links(&tool, &text);
+                        out.push(Item::ToolResult {
+                            id,
+                            at,
+                            tool_call_id: m.get("toolCallId").and_then(Value::as_str).map(String::from),
+                            tool,
+                            text: clip(text),
+                            is_error: m.get("isError").and_then(Value::as_bool).unwrap_or(false),
+                            dialog_id,
+                            proposal_id,
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -233,16 +330,18 @@ pub async fn read(hub: &Hub, instance: &str) -> Result<Vec<Item>> {
                     Value::String(s) => s.clone(),
                     c => texts(c, "text", "text"),
                 };
-                if let Some((from, prov, kind, delivery, event, rest)) = parse_header(&text) {
-                    out.push(Item::User {
+                if let Some(h) = parse_header(&text) {
+                    out.push(Item::Note {
                         id,
                         at,
-                        text: clip(rest),
-                        from: Some(from),
-                        provenance: Some(prov),
-                        event_kind: Some(kind),
-                        delivery: Some(delivery),
-                        event: Some(event),
+                        text: clip(h.rest),
+                        from: h.from,
+                        provenance: h.provenance,
+                        event_kind: h.kind,
+                        delivery: h.delivery,
+                        event: h.event,
+                        local_time: h.local_time,
+                        gap: h.gap,
                     });
                 }
             }
@@ -278,13 +377,38 @@ mod tests {
 
     #[test]
     fn header_parsing() {
-        let (from, prov, kind, d, e, rest) =
+        let h =
             parse_header("[from user | provenance: trusted | message | delivery d1 | event e1]\nhello\nworld").unwrap();
         assert_eq!(
-            (from.as_str(), prov.as_str(), kind.as_str(), d.as_str(), e.as_str()),
+            (h.from.as_str(), h.provenance.as_str(), h.kind.as_str(), h.delivery.as_str(), h.event.as_str()),
             ("user", "trusted", "message", "d1", "e1")
         );
-        assert_eq!(rest, "hello\nworld");
+        assert_eq!((h.rest.as_str(), h.local_time, h.gap), ("hello\nworld", None, None));
         assert!(parse_header("plain text").is_none());
+
+        // With the local time, and a gap note after a long silence.
+        let h = parse_header(
+            "[Fri 2026-10-30 17:05 Europe/Berlin (first message in 3 days) | from user | provenance: trusted | message | delivery d | event e]\nhi",
+        )
+        .unwrap();
+        assert_eq!(h.local_time.as_deref(), Some("Fri 2026-10-30 17:05 Europe/Berlin"));
+        assert_eq!(h.gap.as_deref(), Some("first message in 3 days"));
+        assert_eq!((h.from.as_str(), h.rest.as_str()), ("user", "hi"));
+        let h =
+            parse_header("[Fri 2026-10-30 17:05 UTC | from hub | provenance: trusted | timer | delivery d | event e]")
+                .unwrap();
+        assert_eq!((h.local_time.as_deref(), h.gap), (Some("Fri 2026-10-30 17:05 UTC"), None));
+    }
+
+    #[test]
+    fn tool_result_links() {
+        assert_eq!(
+            result_links("botler_ask_user", r#"{"dialog_id": "d1", "note": "later"}"#),
+            (Some("d1".into()), None)
+        );
+        assert_eq!(result_links("request_secrets", r#"{"request_id": "d2"}"#), (Some("d2".into()), None));
+        assert_eq!(result_links("propose_change", r#"{"proposal_id": "p1"}"#), (None, Some("p1".into())));
+        assert_eq!(result_links("bash", r#"{"dialog_id": "d1"}"#), (None, None));
+        assert_eq!(result_links("ask_user", "error: rate limited"), (None, None));
     }
 }

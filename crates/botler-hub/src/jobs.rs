@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use botler_core::defs::{Lifetime, Overlap};
-use botler_core::event::kinds;
-use botler_core::{Event, Provenance, Source};
+use botler_core::payloads::{BuiltinPayload, RunnableFinishedPayload};
+use botler_core::{Event, Source};
 use botler_runtime::{ContainerSpec, Mount, NetworkMode};
 use botler_store::{NewRun, Run, RunKind, RunStatus};
 use chrono::{Duration, Utc};
@@ -179,13 +179,12 @@ pub async fn on_exit(hub: &Hub, run_id: &str, exit_code: Option<i64>, oom: bool)
     }
     if ok {
         let output = logs.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
-        let ev = Event::new(
-            kinds::RUNNABLE_FINISHED,
-            Source::Runnable(run.runnable.clone()),
-            Provenance::Trusted,
-            Utc::now(),
-        )
-        .payload(json!({ "runnable": run.runnable, "run_id": run.id, "output": output }));
+        let payload = BuiltinPayload::RunnableFinished(RunnableFinishedPayload {
+            runnable: run.runnable.clone(),
+            run_id: run.id.clone(),
+            output,
+        });
+        let ev = crate::hub::builtin(payload, Source::Runnable(run.runnable.clone()))?;
         crate::router::dispatch(hub, ev, vec![]).await?;
     } else {
         let kind = if oom { "oom" } else { "exit" };

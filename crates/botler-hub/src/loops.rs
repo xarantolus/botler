@@ -2,9 +2,9 @@
 //! paused pair. The rules themselves are pure, in [`botler_core::loops`].
 
 use botler_core::event::kinds;
-use botler_core::event::payload::{BreakerKind, BreakerTripped, MessageExcerpt};
 use botler_core::loops::{PairLimit, pair_members, pair_overflow, pair_subject, wakes};
-use botler_core::{Event, Provenance, Source};
+use botler_core::payloads::{BreakerKind, BreakerTrippedPayload, BuiltinPayload, MessageExcerpt};
+use botler_core::{Event, Source};
 use chrono::{DateTime, Utc};
 
 use crate::hub::{Hub, HubError, Result};
@@ -97,7 +97,7 @@ async fn trip(
         })
         .collect();
     let (a, b) = pair_members(subject).unwrap_or((from, to));
-    let payload = BreakerTripped {
+    let payload = BreakerTrippedPayload {
         subject: subject.into(),
         breaker: BreakerKind::Pair,
         reason,
@@ -105,17 +105,11 @@ async fn trip(
         pair: Some([a.into(), b.into()]),
         recent,
     };
-    let alarm = Event::new(kinds::BREAKER_TRIPPED, Source::Hub, Provenance::Trusted, Utc::now())
+    let alarm = crate::hub::builtin(BuiltinPayload::BreakerTripped(payload), Source::Hub)?
         .to(botler_core::FRONT_DOOR)
-        .urgent(true)
-        .payload(to_value(&payload)?);
+        .urgent(true);
     hub.emit(alarm).await?;
     Ok(())
-}
-
-/// Serialise a typed payload.
-pub fn to_value<T: serde::Serialize>(payload: &T) -> Result<serde_json::Value> {
-    serde_json::to_value(payload).map_err(|e| HubError::Io(std::io::Error::other(e)))
 }
 
 /// The user resumes whatever a breaker paused. For a pair: held messages are delivered and the

@@ -28,7 +28,7 @@ impl ProposalStatus {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct Proposal {
     pub id: String,
     pub kind: ProposalKind,
@@ -40,7 +40,8 @@ pub struct Proposal {
     pub action: Option<String>,
     pub args: Option<serde_json::Value>,
     pub args_hash: Option<String>,
-    pub summary: Option<serde_json::Value>,
+    /// The deployment summary, once the change validated.
+    pub summary: Option<botler_core::change::ChangeSummary>,
     pub gate_report: Option<String>,
     pub verdict: Option<String>,
     pub review_notes: Option<String>,
@@ -66,11 +67,11 @@ pub struct NewProposal {
 
 fn row(r: &SqliteRow) -> Result<Proposal> {
     const T: &str = "proposals";
-    let json = |col: &str| -> Result<Option<serde_json::Value>> {
+    fn json<V: serde::de::DeserializeOwned>(r: &SqliteRow, col: &str) -> Result<Option<V>> {
         r.get::<Option<String>, _>(col)
-            .map(|s| serde_json::from_str(&s).map_err(|e| Error::Corrupt { table: T, detail: e.to_string() }))
+            .map(|s| serde_json::from_str(&s).map_err(|e| Error::Corrupt { table: T, detail: format!("{col}: {e}") }))
             .transpose()
-    };
+    }
     Ok(Proposal {
         id: r.get("id"),
         kind: ProposalKind::parse(T, r.get("kind"))?,
@@ -80,9 +81,9 @@ fn row(r: &SqliteRow) -> Result<Proposal> {
         base_commit: r.get("base_commit"),
         head_commit: r.get("head_commit"),
         action: r.get("action"),
-        args: json("args")?,
+        args: json(r, "args")?,
         args_hash: r.get("args_hash"),
-        summary: json("summary")?,
+        summary: json(r, "summary")?,
         gate_report: r.get("gate_report"),
         verdict: r.get("verdict"),
         review_notes: r.get("review_notes"),
@@ -161,12 +162,12 @@ impl Store {
         &self,
         id: &str,
         head_commit: &str,
-        summary: &serde_json::Value,
+        summary: &botler_core::change::ChangeSummary,
         report: &str,
     ) -> Result<()> {
         sqlx::query("UPDATE proposals SET head_commit = ?, summary = ?, gate_report = ?, updated_at = ? WHERE id = ?")
             .bind(head_commit)
-            .bind(summary.to_string())
+            .bind(crate::encode("proposal summary", summary)?)
             .bind(report)
             .bind(ts(Utc::now()))
             .bind(id)

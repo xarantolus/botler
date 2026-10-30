@@ -243,7 +243,7 @@ async function refreshChat() {
   $("#title").textContent = chatTitle(i);
   $("#sub").innerHTML = `${esc(i.name)} · ${esc(i.definition)} · ${esc(i.state)}` +
     (s.busy ? ' · <span class="ok">working…</span>' : "") + (s.pending ? ` · ${s.pending} queued` : "") +
-    (s.phase ? ` · <span class="${s.phase.startsWith("could not") ? "bad" : "warn"}">${esc(s.phase)}</span>` : "");
+    (s.phase ? ` · <span class="${s.phase.phase === "failed" ? "bad" : "warn"}">${esc(s.phase.phase === "failed" ? s.phase.error : "starting: " + s.phase.step.replace(/_/g, " "))}</span>` : "");
   const archived = i.state === "archived";
   $("#archive").style.display = archived || i.name === FRONT_DOOR ? "none" : "";
   $("#forcearchive").style.display = i.archive_requested_at && !archived ? "" : "none";

@@ -4,7 +4,7 @@
 mod common;
 
 use botler_core::event::kinds;
-use botler_core::event::payload::{BreakerKind, BreakerTripped};
+use botler_core::payloads::{BreakerKind, BreakerTrippedPayload};
 use botler_core::{Event, FRONT_DOOR, Provenance, Source};
 use botler_hub::auth::Principal;
 use botler_hub::ops::{self, Caller, OpError};
@@ -89,7 +89,7 @@ async fn ping_pong_between_two_agents_trips_the_pair_breaker_until_resumed() {
         .unwrap();
     assert_eq!(tripped.len(), 1);
     assert_eq!(tripped[0].to.as_deref(), Some(FRONT_DOOR));
-    let p: BreakerTripped = serde_json::from_value(tripped[0].payload.clone()).unwrap();
+    let p: BreakerTrippedPayload = serde_json::from_value(tripped[0].payload.clone()).unwrap();
     assert_eq!(p.breaker, BreakerKind::Pair);
     assert!(p.pair.as_ref().unwrap().contains(&a) && p.pair.as_ref().unwrap().contains(&b));
     assert!(p.recent.last().unwrap().text.starts_with("round 8"), "{:?}", p.recent);

@@ -12,7 +12,7 @@ use crate::defs::{
 use crate::limits::default_limit;
 
 /// Why a change needs the user's approval (never auto-merged).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Escalation {
     ProtectedPath {
@@ -91,7 +91,7 @@ impl Escalation {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Added,
@@ -100,7 +100,7 @@ pub enum Status {
     Unchanged,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct TriggerPreview {
     pub id: String,
     pub status: Status,
@@ -116,20 +116,20 @@ pub struct TriggerPreview {
     pub before: Option<Before>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct Before {
     pub when: String,
     pub then: String,
 }
 
 /// Something that runs continuously (a service, an always-on agent) starting or stopping.
-#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct Activity {
     pub status: Status,
     pub what: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct ItemChange {
     pub kind: String,
     pub name: String,
@@ -137,7 +137,7 @@ pub struct ItemChange {
 }
 
 /// The full preview of applying `new` on top of `old`.
-#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct ChangeSummary {
     pub items: Vec<ItemChange>,
     #[serde(default)]

@@ -5,7 +5,7 @@ use botler_store::Dialog;
 
 use crate::hub::Hub;
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, ts_rs::TS)]
 pub struct DialogNotice {
     pub dialog_id: String,
     pub instance: String,

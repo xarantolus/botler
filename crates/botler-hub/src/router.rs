@@ -5,15 +5,12 @@
 
 use botler_core::catalog::touches;
 use botler_core::defs::{AgentKind, Target};
-use botler_core::event::kinds;
-use botler_core::event::payload::{BreakerKind, BreakerTripped};
+use botler_core::payloads::{BreakerKind, BreakerTrippedPayload, BuiltinPayload, DialogAbortedPayload, MessagePayload};
 use botler_core::routing::{Action, Dispatch, Routed, route};
-use botler_core::{Event, Provenance, Source};
+use botler_core::{Event, Source};
 use botler_store::{DialogStatus, InstanceState, NewInstance};
-use chrono::Utc;
-use serde_json::json;
 
-use crate::hub::{Hub, HubError, Result};
+use crate::hub::{Hub, HubError, Result, builtin};
 use crate::loops::AgentDelivery;
 
 /// Route every unrouted event. Returns how many were processed.
@@ -179,14 +176,8 @@ pub async fn spawn(
     let ev = match event {
         Some(e) => e.clone(),
         None => {
-            let e = Event::new(
-                kinds::MESSAGE,
-                parent.map_or(Source::Hub, |p| Source::Agent(p.into())),
-                Provenance::Trusted,
-                Utc::now(),
-            )
-            .to(name.clone())
-            .payload(json!({ "text": task.unwrap_or("") }));
+            let task = BuiltinPayload::Message(MessagePayload { text: task.unwrap_or("").into(), files: vec![] });
+            let e = builtin(task, parent.map_or(Source::Hub, |p| Source::Agent(p.into())))?.to(name.clone());
             hub.store.append_event(&e).await?;
             hub.store.mark_routed(&e.id.to_string()).await?;
             e
@@ -252,9 +243,12 @@ async fn abort_dialogs(hub: &Hub, ev: &Event) -> Result<()> {
         if let Some(hit) = d.about.iter().find(|a| targets.contains(a)) {
             let reason = format!("{} changed ({})", hit, ev.kind);
             if hub.store.close_dialog(&d.id, DialogStatus::Aborted, &reason).await? {
-                let abort = Event::new(kinds::DIALOG_ABORTED, Source::Hub, Provenance::Trusted, Utc::now())
-                    .to(d.instance.clone())
-                    .payload(json!({ "dialog_id": d.id, "question": d.question, "reason": reason }));
+                let payload = BuiltinPayload::DialogAborted(DialogAbortedPayload {
+                    dialog_id: d.id.clone(),
+                    question: d.question.clone(),
+                    reason,
+                });
+                let abort = builtin(payload, Source::Hub)?.to(d.instance.clone());
                 hub.emit(abort).await?;
             }
         }
@@ -268,7 +262,7 @@ async fn trip_cycle_breaker(hub: &Hub, ev: &Event, hops: u32) -> Result<()> {
     let reason = format!("conversation chain reached {hops} hops (last: {} from {})", ev.kind, ev.source.key());
     if hub.store.trip_breaker(&subject, "cycle", &reason).await? {
         tracing::warn!(%subject, %reason, "cycle breaker tripped");
-        let payload = BreakerTripped {
+        let payload = BreakerTrippedPayload {
             subject: subject.clone(),
             breaker: BreakerKind::Cycle,
             reason,
@@ -276,10 +270,8 @@ async fn trip_cycle_breaker(hub: &Hub, ev: &Event, hops: u32) -> Result<()> {
             pair: None,
             recent: Vec::new(),
         };
-        let alarm = Event::new(kinds::BREAKER_TRIPPED, Source::Hub, Provenance::Trusted, Utc::now())
-            .to(botler_core::FRONT_DOOR)
-            .urgent(true)
-            .payload(crate::loops::to_value(&payload)?);
+        let alarm =
+            builtin(BuiltinPayload::BreakerTripped(payload), Source::Hub)?.to(botler_core::FRONT_DOOR).urgent(true);
         hub.emit(alarm).await?;
     }
     Ok(())
@@ -293,9 +285,8 @@ async fn report_failure(hub: &Hub, ev: &Event, err: &HubError) -> Result<()> {
         _ if ev.to.as_deref() != Some(botler_core::FRONT_DOOR) => botler_core::FRONT_DOOR.into(),
         _ => return Ok(()),
     };
-    let note = Event::new(kinds::MESSAGE, Source::Hub, Provenance::Trusted, Utc::now())
-        .to(to)
-        .payload(json!({ "text": format!("Could not route event {} ({}): {err}", ev.id, ev.kind) }));
+    let text = format!("Could not route event {} ({}): {err}", ev.id, ev.kind);
+    let note = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![] }), Source::Hub)?.to(to);
     hub.emit(note).await?;
     Ok(())
 }

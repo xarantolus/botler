@@ -3,13 +3,12 @@
 
 use std::time::Duration;
 
+use botler_core::Source;
 use botler_core::defs::{Mode, TriggerKind};
-use botler_core::event::kinds;
+use botler_core::payloads::{BuiltinPayload, SchedulePayload, TimerPayload};
 use botler_core::trigger::plan;
-use botler_core::{Event, Provenance, Source};
 use botler_store::TimerStatus;
 use chrono::{DateTime, Utc};
-use serde_json::json;
 
 use crate::hub::{Hub, Result};
 use crate::router;
@@ -36,8 +35,8 @@ pub async fn tick(hub: &Hub, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>
                 if t.spec.mode == Mode::Shadow {
                     tracing::info!(trigger = %t.id, "shadow schedule due; not executing");
                 } else {
-                    let ev = Event::new("schedule", Source::Trigger(t.id.clone()), Provenance::Trusted, now)
-                        .payload(json!({ "trigger": t.id, "scheduled_for": mark, "skipped": p.skipped }));
+                    let fired = SchedulePayload { trigger: t.id.clone(), scheduled_for: mark, skipped: p.skipped };
+                    let ev = crate::hub::builtin(BuiltinPayload::Schedule(fired), Source::Trigger(t.id.clone()))?;
                     if let Err(e) = router::fire(hub, &t.target, t.spec.prompt.as_deref(), Some(&t.id), ev).await {
                         // Reported to the owner by `fire`; the schedule still advances so one
                         // broken target cannot make it fire in a tight loop.
@@ -58,13 +57,10 @@ pub async fn tick(hub: &Hub, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>
         if !hub.store.set_timer_status(&timer.id, TimerStatus::Fired).await? {
             continue;
         }
-        let mut payload = timer.payload.clone();
-        if let Some(obj) = payload.as_object_mut() {
-            obj.insert("timer_id".into(), json!(timer.id));
-        } else {
-            payload = json!({ "timer_id": timer.id, "data": payload });
-        }
-        let ev = Event::new(kinds::TIMER, Source::Hub, Provenance::Trusted, now).payload(payload);
+        // Timers carry what to do in their prompt; the stored payload holds at most a note.
+        let note = timer.payload.get("note").and_then(|n| n.as_str()).map(String::from);
+        let ev =
+            crate::hub::builtin(BuiltinPayload::Timer(TimerPayload { timer_id: timer.id.clone(), note }), Source::Hub)?;
         if let Err(e) = router::fire(hub, &timer.target, timer.prompt.as_deref(), None, ev).await {
             tracing::warn!(timer = %timer.id, error = %e, "timer fire failed");
         }

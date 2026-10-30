@@ -10,18 +10,25 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Extension, Json, Router};
-use botler_core::event::kinds;
-use botler_core::{Event, Provenance, Source};
-use botler_store::{DialogStatus, EventQuery};
+use botler_core::payloads::{
+    ArchiveRequestedPayload, BuiltinPayload, DialogAnsweredPayload, MessagePayload, SecretsOutcome,
+};
+use botler_core::{Event, Source};
+use botler_store::{ArchiveRecord, DialogStatus, EventQuery, Incident, Instance, Proposal, Run};
 use chrono::Utc;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
 use crate::ops::{self, Caller, OpError};
+use crate::wire::{
+    ApiErrorBody, ArchiveOutcome, BreakerCleared, BudgetView, ChatCreated, ChatRestored, DialogAnswer, DialogView,
+    Dialogs, EventPosted, HubStatus, PauseState, ReachedChat, Reverted, RuntimeInfo, Saved, SecretFieldView,
+    SecretGroupView, SessionAnchor, SessionView, Trace, Usage,
+};
 
 type AppState = Arc<Hub>;
 
@@ -45,6 +52,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .nest_service("/mcp", mcp)
         .route("/api/v1/ops/{name}", post(op))
         .route("/api/v1/status", get(status))
+        .route("/api/v1/usage", get(usage))
         .route("/api/v1/messages", post(user_message))
         .route("/api/v1/dialogs", get(dialogs))
         .route("/api/v1/dialogs/{id}/answer", post(answer_dialog))
@@ -69,9 +77,12 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .layer(middleware::from_fn_with_state(hub.clone(), authenticate));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
-        // The web app is public static content; every API call it makes carries the user token.
-        .route("/", get(web_index))
+        // The live stream authenticates itself (browsers cannot set headers on WebSockets).
+        .route("/api/v1/live", get(crate::live::socket))
         .merge(authed)
+        // The web app is public static content; every API call it makes carries the user token.
+        .route("/legacy", get(crate::web::legacy))
+        .fallback(crate::web::app)
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
         .with_state(hub)
 }
@@ -111,7 +122,7 @@ struct ApiError(StatusCode, String);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({ "error": self.1 }))).into_response()
+        (self.0, Json(ApiErrorBody { error: self.1 })).into_response()
     }
 }
 
@@ -176,24 +187,50 @@ async fn op(
     Ok(Json(ops::call(&hub, &caller, &name, input).await?))
 }
 
-async fn status(State(hub): State<AppState>) -> ApiResult {
+async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
     let applied = hub.applied().await;
     let info = hub.containers.info();
-    Ok(Json(json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "commit": applied.commit,
-        "paused": hub.paused().await?,
-        "timezone": applied.defs.timezone.name(),
-        "runtime": { "binary": info.binary, "version": info.version, "rootless": info.rootless },
-        "open_dialogs": hub.store.open_dialogs().await?.len(),
-        "open_incidents": hub.store.open_incidents().await?.len(),
-        "breakers": hub.store.breakers().await?,
-    })))
+    Ok(Json(HubStatus {
+        version: env!("CARGO_PKG_VERSION").into(),
+        commit: applied.commit.clone(),
+        paused: hub.paused().await?,
+        front_door: botler_core::FRONT_DOOR.into(),
+        timezone: applied.defs.timezone.name().into(),
+        runtime: RuntimeInfo { binary: info.binary.clone(), version: info.version.clone(), rootless: info.rootless },
+        open_dialogs: hub.store.open_dialogs().await?.len(),
+        open_incidents: hub.store.open_incidents().await?.len(),
+        breakers: hub.store.breakers().await?,
+    }))
 }
 
-#[derive(Deserialize)]
-struct UserMessage {
+/// Model spend today (in the hub's timezone) and all time, per chat.
+async fn usage(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Usage>> {
+    user_only(&p)?;
+    let applied = hub.applied().await;
+    let tz = applied.defs.timezone;
+    let now = Utc::now();
+    let day_start = now
+        .with_timezone(&tz)
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|t| t.and_local_timezone(tz).earliest())
+        .map_or(now - chrono::Duration::hours(24), |t| t.with_timezone(&Utc));
+    let budget = &applied.defs.instance.defaults.budget;
+    Ok(Json(Usage {
+        day_start,
+        timezone: tz.name().into(),
+        today: hub.store.usage_since(None, day_start).await?,
+        today_by_instance: hub.store.usage_by_instance(day_start).await?,
+        total_by_instance: hub.store.usage_by_instance(chrono::DateTime::<Utc>::UNIX_EPOCH).await?,
+        default_budget: BudgetView { usd_per_day: budget.usd_per_day, tokens_per_day: budget.tokens_per_day },
+    }))
+}
+
+#[derive(Deserialize, ts_rs::TS)]
+pub struct UserMessage {
+    /// The chat; defaults to the front door.
     #[serde(default = "main_instance")]
+    #[ts(optional, as = "Option<String>")]
     to: String,
     text: String,
 }
@@ -206,42 +243,44 @@ async fn user_message(
     State(hub): State<AppState>,
     Extension(p): Extension<Principal>,
     Json(m): Json<UserMessage>,
-) -> ApiResult {
+) -> ApiResult<Json<EventPosted>> {
     user_only(&p)?;
-    let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
-        .to(m.to)
-        .payload(json!({ "text": m.text }));
+    let ev = user_event(BuiltinPayload::Message(MessagePayload { text: m.text, files: vec![] }))?.to(m.to);
     let ev = hub.emit(ev).await?;
-    Ok(Json(json!({ "event_id": ev.id })))
+    Ok(Json(EventPosted { event_id: ev.id }))
 }
 
-async fn dialogs(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
+/// An event from the user.
+fn user_event(payload: BuiltinPayload) -> Result<Event, ApiError> {
+    Ok(crate::hub::builtin(payload, Source::User)?)
+}
+
+async fn dialogs(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Dialogs>> {
     user_only(&p)?;
     let applied = hub.applied().await;
-    let open: Vec<Value> = hub
-        .store
-        .open_dialogs()
-        .await?
-        .into_iter()
-        .map(|d| {
-            let mut v = json!(d);
-            if d.kind == botler_store::DialogKind::Credentials
-                && let Some(req) =
-                    d.spec.clone().and_then(|s| serde_json::from_value::<crate::secret_requests::SecretRequest>(s).ok())
-            {
-                v["form"] = json!(req.form(&applied.defs));
-                v["remove"] = json!(req.remove);
-                v["group"] = json!(req.group);
-                v["new_group"] = json!(!applied.defs.secret_groups.contains_key(&req.group));
-            }
-            v
-        })
-        .collect();
-    Ok(Json(json!({ "open": open, "recent": hub.store.recent_dialogs(50).await? })))
+    let mut open = Vec::new();
+    for d in hub.store.open_dialogs().await? {
+        let mut view = DialogView { dialog: d, form: None, remove: None, group: None, new_group: None };
+        if view.dialog.kind == botler_store::DialogKind::Credentials {
+            let spec = view.dialog.spec.clone().unwrap_or_default();
+            let req: crate::secret_requests::SecretRequest = serde_json::from_value(spec).map_err(|e| {
+                ApiError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("credentials request {} is unreadable: {e}", view.dialog.id),
+                )
+            })?;
+            view.form = Some(req.form(&applied.defs));
+            view.new_group = Some(!applied.defs.secret_groups.contains_key(&req.group));
+            view.remove = Some(req.remove);
+            view.group = Some(req.group);
+        }
+        open.push(view);
+    }
+    Ok(Json(Dialogs { open, recent: hub.store.recent_dialogs(50).await? }))
 }
 
-#[derive(Deserialize)]
-struct Answer {
+#[derive(Deserialize, ts_rs::TS)]
+pub struct Answer {
     answer: String,
 }
 
@@ -250,7 +289,7 @@ async fn answer_dialog(
     Extension(p): Extension<Principal>,
     Path(id): Path<String>,
     Json(a): Json<Answer>,
-) -> ApiResult {
+) -> ApiResult<Json<DialogAnswer>> {
     user_only(&p)?;
     if hub.store.dialog(&id).await?.kind == botler_store::DialogKind::Credentials {
         return Err(ApiError(
@@ -264,13 +303,19 @@ async fn answer_dialog(
         && let Some(pid) = &d.proposal_id
     {
         crate::transactions::on_approval(&hub, pid, a.answer == "approve").await?;
-        return Ok(Json(json!({ "dialog": d })));
+        return Ok(Json(DialogAnswer { dialog: d }));
     }
-    let ev = Event::new(kinds::DIALOG_ANSWERED, Source::User, Provenance::Trusted, Utc::now())
-        .to(d.instance.clone())
-        .payload(json!({ "dialog_id": d.id, "question": d.question, "answer": a.answer }));
+    let ev = user_event(BuiltinPayload::DialogAnswered(DialogAnsweredPayload {
+        dialog_id: d.id.clone(),
+        question: d.question.clone(),
+        answer: a.answer,
+        group: None,
+        outcome: None,
+        note: None,
+    }))?
+    .to(d.instance.clone());
     hub.emit(ev).await?;
-    Ok(Json(json!({ "dialog": d })))
+    Ok(Json(DialogAnswer { dialog: d }))
 }
 
 async fn submit_secrets(
@@ -278,23 +323,27 @@ async fn submit_secrets(
     Extension(p): Extension<Principal>,
     Path(id): Path<String>,
     Json(sub): Json<crate::secret_requests::Submission>,
-) -> ApiResult {
+) -> ApiResult<Json<SecretsOutcome>> {
     user_only(&p)?;
     use crate::secret_requests::RequestError as R;
     match crate::secret_requests::submit(&hub, &id, sub).await {
         Ok(v) => Ok(Json(v)),
         Err(R::Invalid(m)) => Err(ApiError(StatusCode::CONFLICT, m)),
+        Err(R::Input(e)) => Err(ApiError(StatusCode::BAD_REQUEST, e.to_string())),
         Err(R::MissingValue(n)) => Err(ApiError(StatusCode::BAD_REQUEST, format!("enter a value for {n}"))),
         Err(R::Toml(m)) => Err(ApiError(StatusCode::CONFLICT, format!("secrets.toml: {m}"))),
         Err(R::Hub(h)) => Err(h.into()),
     }
 }
 
-#[derive(Deserialize)]
-struct EventsQuery {
+#[derive(Deserialize, ts_rs::TS)]
+pub struct EventsQuery {
     #[serde(rename = "type")]
+    #[ts(optional)]
     kind: Option<String>,
+    #[ts(optional)]
     correlation: Option<String>,
+    #[ts(optional)]
     limit: Option<u32>,
 }
 
@@ -302,47 +351,42 @@ async fn events(
     State(hub): State<AppState>,
     Extension(p): Extension<Principal>,
     Query(q): Query<EventsQuery>,
-) -> ApiResult {
+) -> ApiResult<Json<Vec<Event>>> {
     user_only(&p)?;
     let q = EventQuery { kind: q.kind, correlation: q.correlation, since: None, limit: q.limit.unwrap_or(50) };
-    Ok(Json(json!(hub.store.events(&q).await?)))
+    Ok(Json(hub.store.events(&q).await?))
 }
 
 /// Everything an event caused: which chats it reached, runs it started, its thread.
-async fn trace(State(hub): State<AppState>, Extension(p): Extension<Principal>, Path(id): Path<String>) -> ApiResult {
+async fn trace(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Trace>> {
     user_only(&p)?;
     let event = hub.store.event(&id).await?;
     let mut reached = Vec::new();
     for d in hub.store.deliveries_for_event(&id).await? {
         let inst = hub.store.find_instance(&d.instance).await?;
-        reached.push(json!({
-            "instance": d.instance,
-            "title": inst.as_ref().and_then(|i| i.title.clone()),
-            "slug": inst.as_ref().and_then(|i| i.slug.clone()),
+        reached.push(ReachedChat {
+            instance: d.instance.clone(),
+            title: inst.as_ref().and_then(|i| i.title.clone()),
+            slug: inst.as_ref().and_then(|i| i.slug.clone()),
             // The session entry carrying this delivery id is where the web app scrolls to.
-            "session_anchor": { "custom_type": "botler.delivered", "delivery_id": d.id },
-            "delivery": d,
-        }));
+            session_anchor: SessionAnchor { custom_type: "botler.delivered".into(), delivery_id: d.id.clone() },
+            delivery: d,
+        });
     }
     let thread =
         hub.store.events(&EventQuery { correlation: Some(id.clone()), limit: 50, ..Default::default() }).await?;
-    Ok(Json(
-        json!({ "event": event, "reached": reached, "runs": hub.store.runs_for_event(&id).await?, "thread": thread }),
-    ))
-}
-
-async fn web_index() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")],
-        include_str!("../../../web/index.html"),
-    )
+    Ok(Json(Trace { event, reached, runs: hub.store.runs_for_event(&id).await?, thread }))
 }
 
 async fn session(
     State(hub): State<AppState>,
     Extension(p): Extension<Principal>,
     Path(instance): Path<String>,
-) -> ApiResult {
+) -> ApiResult<Json<SessionView>> {
     user_only(&p)?;
     let inst = hub
         .store
@@ -353,14 +397,15 @@ async fn session(
     let pending = hub.store.pending_deliveries(&inst.name).await?.len();
     let phase = hub.agents.phase(&inst.name).await;
     let items = crate::sessions::read(&hub, &inst.name).await?;
-    Ok(Json(json!({ "instance": inst, "busy": busy, "pending": pending, "phase": phase, "items": items })))
+    Ok(Json(SessionView { instance: inst, busy, pending, phase, items }))
 }
 
-#[derive(Deserialize)]
-struct NewChat {
+#[derive(Deserialize, ts_rs::TS)]
+pub struct NewChat {
     text: String,
     /// Agent definition; defaults to `chat`.
     #[serde(default)]
+    #[ts(optional)]
     definition: Option<String>,
 }
 
@@ -369,23 +414,23 @@ async fn new_chat(
     State(hub): State<AppState>,
     Extension(p): Extension<Principal>,
     Json(c): Json<NewChat>,
-) -> ApiResult {
+) -> ApiResult<Json<ChatCreated>> {
     user_only(&p)?;
     let def = c.definition.unwrap_or_else(|| "chat".into());
     let name = crate::router::new_instance(&hub, &def, None, None).await?;
-    let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
-        .to(name.clone())
-        .payload(json!({ "text": c.text }));
+    let ev = user_event(BuiltinPayload::Message(MessagePayload { text: c.text, files: vec![] }))?.to(name.clone());
     hub.emit(ev).await?;
-    Ok(Json(json!({ "instance": name })))
+    Ok(Json(ChatCreated { instance: name }))
 }
 
-#[derive(Deserialize, Default)]
-struct ArchiveRequest {
+#[derive(Deserialize, Default, ts_rs::TS)]
+pub struct ArchiveRequest {
     /// Archive without waiting for the agent's handover (e.g. it no longer answers).
     #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
     force: bool,
     #[serde(default)]
+    #[ts(optional)]
     reason: Option<String>,
 }
 
@@ -394,7 +439,7 @@ async fn archive_chat(
     Extension(p): Extension<Principal>,
     Path(instance): Path<String>,
     body: Option<Json<ArchiveRequest>>,
-) -> ApiResult {
+) -> ApiResult<Json<ArchiveOutcome>> {
     user_only(&p)?;
     let req = body.map(|Json(b)| b).unwrap_or_default();
     let inst = hub
@@ -409,24 +454,38 @@ async fn archive_chat(
         return Err(ApiError(StatusCode::CONFLICT, format!("{} is always on and cannot be archived", inst.name)));
     }
     if req.force {
-        let report = json!({ "forced": true, "confirmed_by_agent": false, "reason": req.reason, "at": Utc::now() });
+        let report = ArchiveRecord {
+            confirmed_by_agent: false,
+            forced: true,
+            reason: req.reason,
+            report: None,
+            handed_to: None,
+            at: Utc::now(),
+        };
         hub.store.archive_instance(&inst.name, &report).await?;
         crate::agents::stop_after_reply(&hub, &inst.name).await;
-        return Ok(Json(json!({ "archived": inst.name, "confirmed_by_agent": false })));
+        return Ok(Json(ArchiveOutcome {
+            instance: inst.name,
+            archived: true,
+            note: "Archived without the agent's handover.".into(),
+        }));
     }
     hub.store.request_archive(&inst.name).await?;
-    let ev = Event::new(kinds::ARCHIVE_REQUESTED, Source::User, Provenance::Trusted, Utc::now())
-        .to(inst.name.clone())
-        .payload(json!({ "reason": req.reason }));
+    let ev = user_event(BuiltinPayload::ArchiveRequested(ArchiveRequestedPayload { reason: req.reason }))?
+        .to(inst.name.clone());
     hub.emit(ev).await?;
-    Ok(Json(json!({ "requested": inst.name, "note": "The agent will hand over and then archive itself." })))
+    Ok(Json(ArchiveOutcome {
+        instance: inst.name,
+        archived: false,
+        note: "The agent will hand over and then archive itself.".into(),
+    }))
 }
 
 async fn restore_chat(
     State(hub): State<AppState>,
     Extension(p): Extension<Principal>,
     Path(instance): Path<String>,
-) -> ApiResult {
+) -> ApiResult<Json<ChatRestored>> {
     user_only(&p)?;
     let inst = hub
         .store
@@ -434,27 +493,30 @@ async fn restore_chat(
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no chat {instance}")))?;
     hub.store.restore_instance(&inst.name).await?;
-    Ok(Json(json!({ "restored": inst.name })))
+    Ok(Json(ChatRestored { restored: inst.name }))
 }
 
-async fn instances(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
+async fn instances(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Instance>>> {
     user_only(&p)?;
-    Ok(Json(json!(hub.store.all_instances(200).await?)))
+    Ok(Json(hub.store.all_instances(200).await?))
 }
 
-async fn runs(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
+async fn runs(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Run>>> {
     user_only(&p)?;
-    Ok(Json(json!(hub.store.recent_runs(100).await?)))
+    Ok(Json(hub.store.recent_runs(100).await?))
 }
 
-async fn incidents(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
+async fn incidents(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Incident>>> {
     user_only(&p)?;
-    Ok(Json(json!(hub.store.open_incidents().await?)))
+    Ok(Json(hub.store.open_incidents().await?))
 }
 
 /// Declared secret groups, each field with whether it has a value (never the values), and who
 /// is granted the group.
-async fn secrets(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
+async fn secrets(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<Vec<SecretGroupView>>> {
     user_only(&p)?;
     let applied = hub.applied().await;
     let set = hub.store.secret_names().await?;
@@ -474,30 +536,35 @@ async fn secrets(State(hub): State<AppState>, Extension(p): Extension<Principal>
             grantees.entry(sec.group.as_str()).or_default().push(format!("model route {r}"));
         }
     }
-    let groups: Vec<Value> = applied
+    let groups = applied
         .defs
         .secret_groups
         .values()
-        .map(|g| {
-            let fields: Vec<Value> = g
+        .map(|g| SecretGroupView {
+            name: g.name.clone(),
+            description: g.description.clone(),
+            class: g.class,
+            complete: g.secrets.iter().all(|n| set.contains(n)),
+            fields: g
                 .secrets
                 .iter()
                 .filter_map(|n| applied.defs.secrets.get(n))
-                .map(|s| json!({ "name": s.name, "description": s.description, "file": s.file, "has_value": set.contains(&s.name) }))
-                .collect();
-            let complete = g.secrets.iter().all(|n| set.contains(n));
-            json!({
-                "name": g.name, "description": g.description, "class": g.class, "complete": complete,
-                "fields": fields, "granted_to": grantees.get(g.name.as_str()).cloned().unwrap_or_default(),
-            })
+                .map(|s| SecretFieldView {
+                    name: s.name.clone(),
+                    description: s.description.clone(),
+                    file: s.file.clone(),
+                    has_value: set.contains(&s.name),
+                })
+                .collect(),
+            granted_to: grantees.get(g.name.as_str()).cloned().unwrap_or_default(),
         })
         .collect();
-    Ok(Json(json!(groups)))
+    Ok(Json(groups))
 }
 
-#[derive(Deserialize)]
-struct SecretValue {
-    value: String,
+#[derive(Deserialize, ts_rs::TS)]
+pub struct SecretValue {
+    value: crate::secret_requests::SecretInput,
 }
 
 async fn set_secret(
@@ -505,24 +572,26 @@ async fn set_secret(
     Extension(p): Extension<Principal>,
     Path(name): Path<String>,
     Json(v): Json<SecretValue>,
-) -> ApiResult {
+) -> ApiResult<Json<Saved>> {
     user_only(&p)?;
-    if !hub.applied().await.defs.secrets.contains_key(&name) {
+    let Some(decl) = hub.applied().await.defs.secrets.get(&name).cloned() else {
         return Err(ApiError(StatusCode::NOT_FOUND, format!("secret {name} is not declared in secrets.toml")));
-    }
-    hub.store.set_secret(&hub.secret_key, &name, &v.value).await?;
+    };
+    let bytes =
+        v.value.decode(&name, decl.file.is_some()).map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    hub.store.set_secret_bytes(&hub.secret_key, &name, &bytes).await?;
     // Deliveries waiting on a missing secret can proceed now.
     hub.dispatch_notify.notify_one();
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(Saved { ok: true }))
 }
 
-async fn proposals(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
+async fn proposals(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Proposal>>> {
     user_only(&p)?;
-    Ok(Json(json!(hub.store.recent_proposals(50).await?)))
+    Ok(Json(hub.store.recent_proposals(50).await?))
 }
 
-#[derive(Deserialize)]
-struct RevertRequest {
+#[derive(Deserialize, ts_rs::TS)]
+pub struct RevertRequest {
     commit: String,
 }
 
@@ -531,26 +600,27 @@ async fn revert(
     State(hub): State<AppState>,
     Extension(p): Extension<Principal>,
     Json(r): Json<RevertRequest>,
-) -> ApiResult {
+) -> ApiResult<Json<Reverted>> {
     user_only(&p)?;
     let head = crate::transactions::revert(&hub, &r.commit).await?;
-    Ok(Json(json!({ "reverted": r.commit, "commit": head })))
+    Ok(Json(Reverted { reverted: r.commit, commit: head }))
 }
 
-async fn pause(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
+async fn pause(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<PauseState>> {
     user_only(&p)?;
     crate::control::pause(&hub).await?;
-    Ok(Json(json!({ "paused": true })))
+    Ok(Json(PauseState { paused: true }))
 }
 
-async fn resume(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
+async fn resume(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<PauseState>> {
     user_only(&p)?;
     crate::control::resume(&hub).await?;
-    Ok(Json(json!({ "paused": false })))
+    Ok(Json(PauseState { paused: false }))
 }
 
-#[derive(Deserialize)]
-struct ClearBreaker {
+#[derive(Deserialize, ts_rs::TS)]
+pub struct ClearBreaker {
+    /// The breaker's subject, as in `HubStatus.breakers` (`chain:<id>`, `pair:<a>|<b>`).
     subject: String,
 }
 
@@ -559,10 +629,10 @@ async fn clear_breaker(
     State(hub): State<AppState>,
     Extension(p): Extension<Principal>,
     Json(c): Json<ClearBreaker>,
-) -> ApiResult {
+) -> ApiResult<Json<BreakerCleared>> {
     user_only(&p)?;
     let (cleared, released) = crate::loops::clear_breaker(&hub, &c.subject).await?;
-    Ok(Json(json!({ "cleared": cleared, "released": released })))
+    Ok(Json(BreakerCleared { cleared, released }))
 }
 
 /// git smart-HTTP through `git http-backend`. Agents authenticate with their token; the

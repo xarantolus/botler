@@ -53,16 +53,18 @@ pub async fn plumbing(
         if decl.class != SecretClass::Container {
             return Err(HubError::Forbidden(format!("hub-class secret {name} cannot enter a container")));
         }
-        let value =
-            hub.store.secret(&hub.secret_key, name).await?.ok_or_else(|| HubError::MissingSecret(name.clone()))?;
+        let missing = || HubError::MissingSecret(name.clone());
         match &decl.file {
             None => {
+                let value = hub.store.secret(&hub.secret_key, name).await?.ok_or_else(missing)?;
                 env.insert(name.clone(), value);
             }
             Some(dst) => {
+                // Files are written byte-exact: keystores and other binary secrets stay intact.
+                let value = hub.store.secret_bytes(&hub.secret_key, name).await?.ok_or_else(missing)?;
                 tokio::fs::create_dir_all(&secret_dir).await?;
                 let host = secret_dir.join(name);
-                write_private(&host, value.as_bytes()).await?;
+                write_private(&host, &value).await?;
                 mounts.push(Mount::Bind { src: host, dst: dst.clone(), read_only: true });
                 wrote_files = true;
             }

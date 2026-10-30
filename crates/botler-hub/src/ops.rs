@@ -4,7 +4,6 @@
 
 use botler_core::defs::{Capability, Target};
 use botler_core::duration::HumanDuration;
-use botler_core::event::kinds;
 use botler_core::limits::{RateLimit, default_limit};
 use botler_core::{Event, Provenance, Source};
 use botler_store::{DialogKind, EventQuery, NewDialog, NewTimer, Priority};
@@ -470,7 +469,28 @@ pub struct AskUser {
     pub expires_in: Option<String>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+/// A run with the tail of its output.
+#[derive(Debug, serde::Serialize, ts_rs::TS)]
+pub struct RunLogs {
+    pub run: botler_store::Run,
+    pub logs: String,
+}
+
+/// A proposal as agents and the user read it, with its deployment summary as markdown.
+#[derive(Debug, serde::Serialize, ts_rs::TS)]
+pub struct ProposalDetail {
+    pub id: String,
+    pub title: String,
+    pub status: botler_store::ProposalStatus,
+    pub branch: Option<String>,
+    pub summary: Option<String>,
+    pub gate_report: Option<String>,
+    pub verdict: Option<String>,
+    pub notes: Option<String>,
+    pub merged_commit: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, ts_rs::TS)]
 pub struct GetRunLogs {
     pub run_id: String,
     /// Last N lines (default 200).
@@ -478,7 +498,7 @@ pub struct GetRunLogs {
     pub tail: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema, ts_rs::TS)]
 pub struct IdArg {
     pub id: String,
 }
@@ -510,9 +530,14 @@ fn request_error(e: crate::secret_requests::RequestError) -> OpError {
     use crate::secret_requests::RequestError as R;
     match e {
         R::Invalid(m) | R::MissingValue(m) => OpError::BadRequest(m),
+        R::Input(e) => OpError::BadRequest(e.to_string()),
         R::Hub(h) => OpError::Hub(h),
         R::Toml(m) => OpError::Hub(HubError::Forbidden(format!("secrets.toml: {m}"))),
     }
+}
+
+fn to_json<T: serde::Serialize>(v: &T) -> Result<Value, OpError> {
+    serde_json::to_value(v).map_err(|e| OpError::Hub(HubError::Io(std::io::Error::other(e))))
 }
 
 fn args<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, OpError> {
@@ -582,16 +607,18 @@ pub async fn call(hub: &std::sync::Arc<Hub>, caller: &Caller, name: &str, input:
                 return Err(OpError::Forbidden("that proposal is not yours".into()));
             }
             let tz = hub.applied().await.defs.timezone;
-            let summary = p
-                .summary
-                .clone()
-                .and_then(|s| serde_json::from_value::<botler_core::change::ChangeSummary>(s).ok())
-                .map(|s| s.to_markdown(tz));
-            Ok(json!({
-                "id": p.id, "title": p.title, "status": p.status, "branch": p.branch,
-                "summary": summary, "gate_report": p.gate_report, "verdict": p.verdict,
-                "notes": p.review_notes, "merged_commit": p.merged_commit,
-            }))
+            let detail = ProposalDetail {
+                summary: p.summary.as_ref().map(|s| s.to_markdown(tz)),
+                id: p.id,
+                title: p.title,
+                status: p.status,
+                branch: p.branch,
+                gate_report: p.gate_report,
+                verdict: p.verdict,
+                notes: p.review_notes,
+                merged_commit: p.merged_commit,
+            };
+            to_json(&detail)
         }
         "submit_review" => {
             let Some(instance) = caller.instance() else {
@@ -693,10 +720,15 @@ async fn send_message(hub: &Hub, caller: &Caller, a: SendMessage) -> OpResult {
     }
     // Messages between agents are trusted as messages; content an agent relays from outside is
     // marked by the event it came from (replies inherit the lower provenance of their parent).
-    let mut ev = Event::new(kinds::MESSAGE, caller.source(), Provenance::Trusted, Utc::now())
-        .to(to.clone())
-        .urgent(a.urgent)
-        .payload(json!({ "text": a.text }));
+    let mut ev = crate::hub::builtin(
+        botler_core::payloads::BuiltinPayload::Message(botler_core::payloads::MessagePayload {
+            text: a.text,
+            files: vec![],
+        }),
+        caller.source(),
+    )?
+    .to(to.clone())
+    .urgent(a.urgent);
     if let Some(parent) = &a.reply_to {
         let parent = hub.store.event(parent).await?;
         ev = ev.in_reply_to(&parent);
@@ -764,7 +796,19 @@ async fn archive_ready(hub: &Hub, caller: &Caller, a: ArchiveReady) -> OpResult 
             _ => return Err(OpError::BadRequest("handoff needs exactly one of `to` or `spawn`".into())),
         });
     }
-    let report = json!({ "report": a, "handed_to": handed_to, "confirmed_by_agent": true, "at": Utc::now() });
+    let report = botler_store::ArchiveRecord {
+        confirmed_by_agent: true,
+        forced: false,
+        reason: None,
+        report: Some(botler_store::HandoverReport {
+            summary: a.summary,
+            outstanding: a.outstanding,
+            state: a.state,
+            handoff: a.handoff.map(|h| botler_store::Handoff { to: h.to, spawn: h.spawn, message: h.message }),
+        }),
+        handed_to: handed_to.clone(),
+        at: Utc::now(),
+    };
     hub.store.archive_instance(name, &report).await?;
     crate::agents::stop_after_reply(hub, name).await;
     tracing::info!(instance = name, handed_to = ?handed_to, "chat archived");
@@ -974,5 +1018,5 @@ async fn get_run_logs(hub: &Hub, a: GetRunLogs) -> OpResult {
         }
         Err(e) => return Err(HubError::Io(e).into()),
     };
-    Ok(json!({ "run": run, "logs": crate::failures::tail(&logs, a.tail.unwrap_or(200)) }))
+    to_json(&RunLogs { run, logs: crate::failures::tail(&logs, a.tail.unwrap_or(200)) })
 }

@@ -212,7 +212,11 @@ async fn secrets_roundtrip_and_bind_name() {
     s.set_secret(&key, "GITLAB_TOKEN", "glpat-123").await.unwrap();
     assert_eq!(s.secret(&key, "GITLAB_TOKEN").await.unwrap().as_deref(), Some("glpat-123"));
     assert_eq!(s.secret(&key, "MISSING").await.unwrap(), None);
-    assert_eq!(s.secret_names().await.unwrap(), vec!["GITLAB_TOKEN"]);
+    let binary = [0u8, 159, 146, 150, 255];
+    s.set_secret_bytes(&key, "KEYSTORE", &binary).await.unwrap();
+    assert_eq!(s.secret_bytes(&key, "KEYSTORE").await.unwrap().as_deref(), Some(&binary[..]));
+    assert!(matches!(s.secret(&key, "KEYSTORE").await, Err(Error::NotUtf8(_))));
+    assert_eq!(s.secret_names().await.unwrap(), vec!["GITLAB_TOKEN", "KEYSTORE"]);
 
     // Moving a ciphertext to another name must not decrypt.
     sqlx::query("INSERT INTO secrets (name, nonce, ciphertext, updated_at) SELECT 'OTHER', nonce, ciphertext, updated_at FROM secrets WHERE name = 'GITLAB_TOKEN'")
@@ -255,6 +259,9 @@ async fn kv_usage_breakers_meta() {
     let main = s.usage_since(Some("main"), t - Duration::hours(1)).await.unwrap();
     assert_eq!((main.tokens, main.calls), (150, 2));
     assert!((s.usage_since(None, t - Duration::hours(1)).await.unwrap().cost_usd - 0.53).abs() < 1e-9);
+    let by = s.usage_by_instance(t - Duration::hours(1)).await.unwrap();
+    assert!((by.values().map(|u| u.cost_usd).sum::<f64>() - 0.53).abs() < 1e-9);
+    assert_eq!(by["main"], main);
 
     assert!(s.trip_breaker("agent:a", "cycle", "ping-pong").await.unwrap());
     assert!(!s.trip_breaker("agent:a", "cycle", "again").await.unwrap());

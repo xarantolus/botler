@@ -31,7 +31,7 @@ text_enum!(Priority {
     Info = "info",
 });
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct Dialog {
     pub id: String,
     pub instance: String,

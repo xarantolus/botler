@@ -5,7 +5,7 @@ use sqlx::Row;
 
 use crate::{Result, Store, ts};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct UsageTotals {
     pub tokens: i64,
     pub cost_usd: f64,
@@ -52,5 +52,22 @@ impl Store {
             }
         };
         Ok(UsageTotals { tokens: r.get("t"), cost_usd: r.get("c"), calls: r.get("n") })
+    }
+
+    /// Totals since `since` for every instance that used a model, by instance name.
+    pub async fn usage_by_instance(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<std::collections::BTreeMap<String, UsageTotals>> {
+        let rows = sqlx::query(
+            "SELECT instance, SUM(tokens) AS t, SUM(cost_usd) AS c, COUNT(*) AS n FROM usage WHERE at >= ? GROUP BY instance",
+        )
+        .bind(ts(since))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("instance"), UsageTotals { tokens: r.get("t"), cost_usd: r.get("c"), calls: r.get("n") }))
+            .collect())
     }
 }

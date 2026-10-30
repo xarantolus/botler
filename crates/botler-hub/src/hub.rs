@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use botler_core::payloads::{BuiltinPayload, MessagePayload};
 use botler_core::{Definitions, Diagnostic, Event, Provenance, Source};
 use botler_repo::Repo;
 use botler_runtime::Containers;
@@ -61,7 +62,7 @@ pub struct Applied {
 pub enum Live {
     Event { event: Event },
     Pi { instance: String, event: serde_json::Value },
-    Instance { instance: String, state: String },
+    Instance { instance: String, status: crate::phase::AgentStatus },
     Dialog { notice: crate::notify::DialogNotice },
 }
 
@@ -138,15 +139,13 @@ impl Hub {
                     return Err(HubError::InvalidDefinitions { commit, diagnostics });
                 };
                 tracing::error!(%commit, fallback = %last, problems = diagnostics.len(), "main does not load; staying on last applied commit");
-                let ev = Event::new(botler_core::event::kinds::MESSAGE, Source::Hub, Provenance::Trusted, Utc::now())
+                let text = format!(
+                    "The monorepo's main ({commit}) does not load, so botler is still running {last}. Problems:\n{}",
+                    diagnostics.iter().map(|d| format!("- {d}")).collect::<Vec<_>>().join("\n")
+                );
+                let ev = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![] }), Source::Hub)?
                     .to(botler_core::FRONT_DOOR)
-                    .urgent(true)
-                    .payload(serde_json::json!({
-                        "text": format!(
-                            "The monorepo's main ({commit}) does not load, so botler is still running {last}. Problems:\n{}",
-                            diagnostics.iter().map(|d| format!("- {d}")).collect::<Vec<_>>().join("\n")
-                        )
-                    }));
+                    .urgent(true);
                 store.append_event(&ev).await?;
                 load_at(repo, &last).await
             }
@@ -194,6 +193,11 @@ impl Hub {
     pub async fn paused(&self) -> Result<bool> {
         Ok(self.store.paused().await?)
     }
+}
+
+/// A built-in event from `source` with its typed payload (the only way the hub builds one).
+pub fn builtin(payload: BuiltinPayload, source: Source) -> Result<Event> {
+    Event::builtin(payload, source, Provenance::Trusted, Utc::now()).map_err(|e| HubError::Io(std::io::Error::other(e)))
 }
 
 /// Load and validate definitions at `commit`.
