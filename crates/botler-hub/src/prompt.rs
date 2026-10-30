@@ -37,7 +37,9 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          - `send_message(to, text)` messages another agent; replies come back as messages to you.\n\
          - `ask_user(question, options, about)` asks the user and waits for an answer as an event. Use it \
            for decisions that are theirs; never guess at them.\n\
-         - Your plain reply text is shown to the user when they are the one talking to you.\n\n\
+         - Your plain reply text is shown to the user when they are the one talking to you.\n\
+         - After `ask_user`, `request_secrets` or `propose_change`, end your turn. Do not poll or wait: \
+           the result arrives as an event and wakes you, even if you were asleep.\n\n\
          ## Doing things later\n\
          - `set_timer(at or in, prompt)` wakes you (or another chat) once, later.\n\
          - Anything recurring is a trigger file in the monorepo, never a promise you try to remember. \

@@ -733,7 +733,20 @@ async fn record_crash(hub: &Hub, instance: &str, code: Option<i32>, stderr: Stri
     Ok(())
 }
 
-/// Put idle agents to sleep (they wake on their next message).
+/// How long an idle agent stays up when all it waits for is the user (or a proposal). The answer
+/// arrives as an event and wakes it with its session and home, so waiting asleep loses nothing.
+const WAITING_GRACE_SECS: i64 = 120;
+
+/// Whether everything `instance` still waits for is outside it: open questions, credential
+/// requests or approvals it created, or unfinished proposals (and nothing queued for it).
+async fn waiting_on_user(hub: &Hub, instance: &str) -> Result<bool> {
+    let dialogs = hub.store.open_dialogs().await?.into_iter().any(|d| d.instance == instance);
+    let proposals = hub.store.unfinished_proposals().await?.into_iter().any(|p| p.instance == instance);
+    Ok(dialogs || proposals)
+}
+
+/// Put idle agents to sleep (they wake on their next message). Agents that only wait for the
+/// user sleep after a short grace period instead of their full idle timeout.
 pub async fn reap_idle(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
     let applied = hub.applied().await;
     for agent in hub.agents.all().await {
@@ -750,10 +763,15 @@ pub async fn reap_idle(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
             .get(&instance.definition)
             .and_then(|d| d.spec.idle_timeout)
             .unwrap_or(applied.defs.instance.defaults.idle_timeout);
-        if now - agent.last_active() > idle.as_chrono()
-            && hub.store.pending_deliveries(&agent.instance).await?.is_empty()
-        {
+        if !hub.store.pending_deliveries(&agent.instance).await?.is_empty() {
+            continue;
+        }
+        let idle_for = now - agent.last_active();
+        if idle_for > idle.as_chrono() {
             tracing::info!(instance = %agent.instance, "idle; stopping");
+            agent.stop().await;
+        } else if idle_for > Duration::seconds(WAITING_GRACE_SECS) && waiting_on_user(hub, &agent.instance).await? {
+            tracing::info!(instance = %agent.instance, "waiting on the user; sleeping until the answer arrives");
             agent.stop().await;
         }
     }

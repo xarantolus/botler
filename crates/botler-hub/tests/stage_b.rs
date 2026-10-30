@@ -512,3 +512,50 @@ async fn secret_requests_are_async_and_declare_on_submit() {
     assert!(!e.hub.applied().await.defs.secrets.contains_key("GITLAB_SSH_KEY"));
     assert_eq!(e.hub.store.secret(&e.hub.secret_key, "GITLAB_SSH_KEY").await.unwrap(), None, "value deleted");
 }
+
+#[tokio::test]
+async fn waiting_on_the_user_sleeps_after_a_grace_and_the_answer_wakes_it() {
+    use botler_hub::auth::Principal;
+    use botler_hub::ops::{self, Caller};
+    let e = env().await;
+    with_key(&e).await;
+    let chat = router::spawn(&e.hub, "dev", Some("main"), Some("ask the user"), None, None).await.unwrap();
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    let wake = e.hub.agents.get(&chat).await.unwrap().wake.clone();
+    let me = Caller::resolve(&e.hub, Principal::Agent { instance: chat.clone(), wake }).await.unwrap();
+    let asked = ops::call(&e.hub, &me, "ask_user", json!({"question": "Which colour?", "options": ["red", "blue"]}))
+        .await
+        .unwrap();
+    let dialog = asked["dialog_id"].as_str().unwrap().to_string();
+
+    // Well inside the idle timeout, but past the grace: it only waits for the user, so it sleeps.
+    agents::reap_idle(&e.hub, Utc::now() + Duration::seconds(30)).await.unwrap();
+    settle().await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running, "grace not over yet");
+    agents::reap_idle(&e.hub, Utc::now() + Duration::minutes(3)).await.unwrap();
+    settle().await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Dormant);
+
+    // The answer wakes it and is delivered.
+    let d = e.hub.store.answer_dialog(&dialog, "blue").await.unwrap();
+    e.hub
+        .emit(
+            Event::new(kinds::DIALOG_ANSWERED, Source::User, Provenance::Trusted, Utc::now())
+                .to(d.instance.clone())
+                .payload(json!({"dialog_id": d.id, "question": d.question, "answer": "blue"})),
+        )
+        .await
+        .unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running);
+    let prompts = e.fake.prompts(&agents::container_name(&chat));
+    assert!(prompts.last().unwrap().contains("dialog.answered") && prompts.last().unwrap().contains("blue"));
+
+    // Without anything to wait for, the same idle time does not stop it.
+    agents::reap_idle(&e.hub, Utc::now() + Duration::minutes(3)).await.unwrap();
+    settle().await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running);
+}
