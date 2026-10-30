@@ -11,7 +11,7 @@ use crate::router;
 #[derive(Clone, Debug)]
 pub struct Failure {
     pub runnable: String,
-    /// exit | timeout | oom | unhealthy | crashloop | start
+    /// exit | timeout | oom | unhealthy | crashloop | start | build (an image; `runnable` is its Dockerfile)
     pub kind: &'static str,
     pub exit_code: Option<i64>,
     pub run_id: Option<String>,

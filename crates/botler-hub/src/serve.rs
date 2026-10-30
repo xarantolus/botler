@@ -46,6 +46,7 @@ pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()
     tokio::spawn(supervisor::run(hub.clone()));
     tokio::spawn(services::run(hub.clone()));
     tokio::spawn(images::collect_garbage_loop(hub.clone()));
+    tokio::spawn(images::prebuild_loop(hub.clone()));
     tokio::spawn(agents::run(hub.clone()));
     tokio::spawn(crate::search::run(hub.clone()));
 
