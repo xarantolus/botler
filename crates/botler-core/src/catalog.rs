@@ -231,6 +231,23 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         follow_up: &[],
         guidance: "Do what the timer was set for.",
     },
+    BuiltinEvent {
+        kind: kinds::ACCESS_CHANGED,
+        summary: "Something this chat may use changed: a grant was given without asking (policy `auto`) or revoked.",
+        fields: &[
+            ("grant_id", "the grant"),
+            ("resource", "what it is about, e.g. `secret:github`"),
+            ("change", "granted | revoked"),
+            ("note", "what it means for you"),
+        ],
+        follow_up: &[FollowUp {
+            tool: "list_connections",
+            args: &[],
+            why: "everything this chat holds and is subscribed to",
+        }],
+        guidance: "A grant is applied to your container when you are next woken; a revoked one is gone from then \
+                   on. Carry on with what needed it, or stop using it.",
+    },
 ];
 
 pub fn builtin(kind: &str) -> Option<&'static BuiltinEvent> {
@@ -345,6 +362,7 @@ mod tests {
             kinds::TIMER,
             kinds::ARCHIVE_REQUESTED,
             kinds::AGENT_IDLE,
+            kinds::ACCESS_CHANGED,
         ] {
             assert!(builtin(k).is_some(), "{k} missing from catalog");
         }

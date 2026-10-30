@@ -234,6 +234,19 @@ pub struct SchedulePayload {
     pub skipped: u32,
 }
 
+/// `access.changed`: a grant of this chat was added without a request dialog (an `auto`
+/// policy) or revoked. Its container changes on the next wake.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct AccessChangedPayload {
+    pub grant_id: String,
+    /// `<kind>:<name>`, e.g. `secret:github`.
+    pub resource: String,
+    /// `granted` or `revoked`.
+    pub change: String,
+    /// What it means for the agent.
+    pub note: String,
+}
+
 /// What the hub sends pi for one delivery (`botler:delivery <json>`); the botler pi extension
 /// parses it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -291,6 +304,8 @@ pub enum BuiltinPayload {
     Timer(TimerPayload),
     #[serde(rename = "schedule")]
     Schedule(SchedulePayload),
+    #[serde(rename = "access.changed")]
+    AccessChanged(AccessChangedPayload),
 }
 
 impl BuiltinPayload {
@@ -310,6 +325,7 @@ impl BuiltinPayload {
             Self::AgentIdle(_) => kinds::AGENT_IDLE,
             Self::Timer(_) => kinds::TIMER,
             Self::Schedule(_) => kinds::SCHEDULE,
+            Self::AccessChanged(_) => kinds::ACCESS_CHANGED,
         }
     }
 
@@ -328,6 +344,7 @@ impl BuiltinPayload {
             Self::AgentIdle(p) => serde_json::to_value(p),
             Self::Timer(p) => serde_json::to_value(p),
             Self::Schedule(p) => serde_json::to_value(p),
+            Self::AccessChanged(p) => serde_json::to_value(p),
         }
     }
 
@@ -335,6 +352,30 @@ impl BuiltinPayload {
     pub fn of(event: &Event) -> Option<Result<Self, serde_json::Error>> {
         crate::catalog::builtin(&event.kind)?;
         Some(serde_json::from_value(serde_json::json!({ "type": event.kind, "payload": event.payload })))
+    }
+}
+
+/// The JSON Schema of a built-in event type's payload.
+pub fn builtin_schema(kind: &str) -> Option<serde_json::Value> {
+    fn s<T: JsonSchema>() -> Option<serde_json::Value> {
+        serde_json::to_value(schemars::schema_for!(T)).ok()
+    }
+    match kind {
+        kinds::MESSAGE => s::<MessagePayload>(),
+        kinds::RUNNABLE_FAILED => s::<RunnableFailedPayload>(),
+        kinds::RUNNABLE_FINISHED => s::<RunnableFinishedPayload>(),
+        kinds::DIALOG_ANSWERED => s::<DialogAnsweredPayload>(),
+        kinds::DIALOG_ABORTED => s::<DialogAbortedPayload>(),
+        kinds::PROPOSAL_UPDATED => s::<ProposalUpdatedPayload>(),
+        kinds::ACTION_RESULT => s::<ActionResultPayload>(),
+        kinds::BREAKER_TRIPPED => s::<BreakerTrippedPayload>(),
+        kinds::ARCHIVE_REQUESTED => s::<ArchiveRequestedPayload>(),
+        kinds::AGENT_IDLE => s::<AgentIdlePayload>(),
+        kinds::TIMER => s::<TimerPayload>(),
+        kinds::SCHEDULE => s::<SchedulePayload>(),
+        kinds::TRIAL_FINISHED => s::<TrialFinishedPayload>(),
+        kinds::ACCESS_CHANGED => s::<AccessChangedPayload>(),
+        _ => None,
     }
 }
 
@@ -380,7 +421,11 @@ mod tests {
             (kinds::AGENT_IDLE, fields::<AgentIdlePayload>()),
             (kinds::TIMER, fields::<TimerPayload>()),
             (kinds::SCHEDULE, fields::<SchedulePayload>()),
+            (kinds::ACCESS_CHANGED, fields::<AccessChangedPayload>()),
         ];
+        for b in BUILTIN {
+            assert!(builtin_schema(b.kind).is_some(), "{} has no schema", b.kind);
+        }
         assert_eq!(typed.len(), BUILTIN.len(), "every built-in event type has a payload type");
         for (kind, typed_fields) in typed {
             let entry = crate::catalog::builtin(kind).unwrap_or_else(|| panic!("{kind} is not in the catalog"));

@@ -147,6 +147,12 @@ def monorepo(tmp_path: Path) -> Path:
                 type: ClassVar[str] = "demo.greeted"
                 name: str
 
+            class Whispered(botler.Event):
+                """A secret was whispered."""
+                type: ClassVar[str] = "demo.whispered"
+                restricted: ClassVar[bool] = True
+                text: str
+
             @botler.tool(effects=["network"])
             def greet(name: str, times: int = 1) -> dict[str, str]:
                 """Greet someone."""
@@ -179,7 +185,19 @@ def test_manifests(tmp_path: Path) -> None:
                 "title": "Greeted",
                 "type": "object",
             },
-        }
+        },
+        {
+            "type": "demo.whispered",
+            "description": "A secret was whispered.",
+            "schema": {
+                "description": "A secret was whispered.",
+                "properties": {"text": {"title": "Text", "type": "string"}},
+                "required": ["text"],
+                "title": "Whispered",
+                "type": "object",
+            },
+            "restricted": True,
+        },
     ]
     tools = json.loads((root / "tools.manifest.json").read_text())
     assert tools == [

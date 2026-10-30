@@ -403,7 +403,7 @@ async fn emit_answer(hub: &Hub, d: &Dialog, req: &SecretRequest, outcome: Secret
         answer: if outcome.declined { "declined" } else { "provided" }.into(),
         group: Some(req.group.clone()),
         outcome: Some(outcome),
-        note: Some("Values are stored by the hub and never shown to agents. To use the group in a container, grant it in an agent or job definition (`secrets = [\"<group>\"]`) and propose the change.".into()),
+        note: Some("Values are stored by the hub and never shown to agents. To use the group in a container, `request_access(\"secret:<group>\")` for this chat, or grant it in an agent or job definition (`secrets = [\"<group>\"]`) and propose the change.".into()),
     });
     let ev = crate::hub::builtin(payload, Source::User)?.to(d.instance.clone());
     hub.emit(ev).await?;

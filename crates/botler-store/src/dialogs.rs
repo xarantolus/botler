@@ -14,6 +14,8 @@ text_enum!(DialogKind {
     Approval = "approval",
     /// Enter, add or remove secret values (a form defined by `spec`).
     Credentials = "credentials",
+    /// Give a chat a resource (a grant; `spec` names it).
+    Access = "access",
 });
 
 text_enum!(DialogStatus {

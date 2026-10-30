@@ -10,6 +10,7 @@ pub mod control;
 pub mod embedded;
 pub mod environment;
 pub mod failures;
+pub mod grants;
 pub mod health;
 pub mod hub;
 pub mod images;

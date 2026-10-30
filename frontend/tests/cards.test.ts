@@ -92,6 +92,34 @@ describe("DialogCard", () => {
     });
   });
 
+  it("offers an access request's three answers and names SSH keys", async () => {
+    const w = await mountInApp(DialogCard, {
+      dialog: dialog({
+        kind: "access",
+        question: "Give `secret:github-ssh` to Repo sync?",
+        detail: "push to GitHub",
+        ctas: ["allow for this chat", "always allow", "deny"],
+      }),
+    });
+    expect(w.text()).toContain("Access");
+    const allow = w.findAll("button").find((b) => b.text() === "allow for this chat")!;
+    await allow.trigger("click");
+    await flushPromises();
+    expect(calls[0]).toEqual({
+      name: "answer_dialog",
+      args: { params: { id: "d1" }, body: { answer: "allow for this chat" } },
+    });
+    const key = await mountInApp(DialogCard, {
+      dialog: dialog({
+        kind: "credentials",
+        ctas: [],
+        group: "github-ssh",
+        form: [{ name: "GITHUB_SSH_KEY", description: "deploy key", file: "/home/agent/.ssh/id_ed25519" }],
+      }),
+    });
+    expect(key.text()).toContain("SSH private key at /home/agent/.ssh/id_ed25519");
+  });
+
   it("renders an approval's change summary", async () => {
     const w = await mountInApp(DialogCard, {
       dialog: dialog({

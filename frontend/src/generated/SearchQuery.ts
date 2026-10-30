@@ -5,6 +5,6 @@
  */
 export type SearchQuery = { q: string, 
 /**
- * Comma-separated sources (`session,memory,event,repo`); default all.
+ * Comma-separated sources (`session,memory,event,repo,event_type`); default all.
  */
 sources?: string, limit?: number, raw?: boolean, };

@@ -279,7 +279,7 @@ impl Store {
             crate::encode("timer target", &serde_json::json!({ "resume": new }))?,
         );
         let (old_prefix, new_prefix) = (format!("agents/{old}/"), format!("agents/{new}/"));
-        let renames: [(&str, &str, &str); 14] = [
+        let renames: [(&str, &str, &str); 16] = [
             ("UPDATE instances SET name = ? WHERE name = ?", new, old),
             ("UPDATE instances SET definition = ? WHERE definition = ?", new, old),
             ("UPDATE instances SET parent = ? WHERE parent = ?", new, old),
@@ -287,6 +287,8 @@ impl Store {
             ("UPDATE dialogs SET instance = ? WHERE instance = ?", new, old),
             ("UPDATE proposals SET instance = ? WHERE instance = ?", new, old),
             ("UPDATE usage SET instance = ? WHERE instance = ?", new, old),
+            ("UPDATE grants SET holder = ? WHERE holder = ?", new, old),
+            ("UPDATE subscriptions SET instance = ? WHERE instance = ?", new, old),
             ("UPDATE timers SET created_by = ? WHERE created_by = ?", &new_agent, &old_agent),
             ("UPDATE timers SET target = ? WHERE target = ?", &new_target, &old_target),
             ("UPDATE kv SET owner = ? WHERE owner = ?", &new_agent, &old_agent),
