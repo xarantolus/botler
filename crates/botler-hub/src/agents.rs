@@ -35,6 +35,9 @@ pub struct LiveAgent {
     pub wake: String,
     pub container: String,
     pub pi: PiClient,
+    /// The grants applied to this container: when the chat's grants change, it is restarted
+    /// before its next delivery.
+    grants: Vec<String>,
     busy: AtomicBool,
     last_active: std::sync::Mutex<DateTime<Utc>>,
     /// Set when the hub stops the agent on purpose (idle, kill switch), so the exit is not a crash.
@@ -154,6 +157,17 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
     }
     if let Some(b) = hub.store.breaker(&format!("instance:{name}")).await? {
         tracing::debug!(instance = %name, reason = %b.reason, "instance paused by breaker; deliveries wait");
+        return Ok(());
+    }
+    if let Some(agent) = hub.agents.get(name).await
+        && agent.grants != crate::grants::environment(hub, name).await?.1
+    {
+        // Granted or revoked since it woke: restart it (once its turn is over) so the container
+        // has exactly what it holds now. The exit wakes the dispatcher again.
+        if !agent.busy() {
+            tracing::info!(instance = %name, "grants changed; restarting the container");
+            agent.stop().await;
+        }
         return Ok(());
     }
     let agent = ensure_awake(hub, &instance).await?;
@@ -285,7 +299,10 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     }
     set_phase(hub, &instance.name, WakeStep::StartingContainer).await;
     let wake = uuid::Uuid::now_v7().simple().to_string();
-    let spec = container_spec(hub, instance, def, &applied, image, branch.as_deref(), &wake).await?;
+    // The definition's environment plus what the chat holds, on every wake.
+    let (granted, grants) = crate::grants::environment(hub, &instance.name).await?;
+    let (env, _) = def.spec.env.extend(&granted);
+    let spec = container_spec(hub, instance, def, &env, &applied, image, branch.as_deref(), &wake).await?;
     tracing::info!(instance = %instance.name, %wake, "waking agent");
     hub.agents.wakes.lock().await.insert(instance.name.clone(), wake.clone());
     let attached = match hub.containers.run_attached(&spec).await {
@@ -301,6 +318,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         wake,
         container: spec.name.clone(),
         pi,
+        grants,
         busy: AtomicBool::new(false),
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
@@ -388,10 +406,12 @@ async fn git_fresh(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn container_spec(
     hub: &Hub,
     instance: &Instance,
     def: &AgentDef,
+    env: &Environment,
     applied: &crate::hub::Applied,
     image: String,
     branch: Option<&str>,
@@ -435,14 +455,14 @@ async fn container_spec(
 
     let route_key: Vec<String> = route.api_key_secret.iter().cloned().collect();
     let what = Runnable::Agent { instance, wake };
-    let mut spec = environment::container_spec(hub, &def.spec.env, what, image, command, &route_key).await?;
-    let env = &mut spec.env;
-    env.insert("PI_OFFLINE".into(), "1".into());
-    env.insert("BOTLER_INSTANCE".into(), instance.name.clone());
+    let mut spec = environment::container_spec(hub, env, what, image, command, &route_key).await?;
+    let vars = &mut spec.env;
+    vars.insert("PI_OFFLINE".into(), "1".into());
+    vars.insert("BOTLER_INSTANCE".into(), instance.name.clone());
     // Lets git in the workspace push to the hub without storing the token in .git/config.
-    env.insert("GIT_CONFIG_COUNT".into(), "1".into());
-    env.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
-    env.insert("GIT_CONFIG_VALUE_0".into(), format!("Authorization: Bearer {}", env["BOTLER_TOKEN"]));
+    vars.insert("GIT_CONFIG_COUNT".into(), "1".into());
+    vars.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
+    vars.insert("GIT_CONFIG_VALUE_0".into(), format!("Authorization: Bearer {}", vars["BOTLER_TOKEN"]));
 
     // Rendered pi config: a tmpfs agent dir with read-only files on top (pi needs to write locks).
     let dir = hub.paths.agent_dir(&instance.name);
@@ -469,7 +489,7 @@ async fn container_spec(
             "toolExposure": ops::turn_ending().map(|n| (n, "hidden")).collect::<BTreeMap<_, _>>(),
         }),
     );
-    servers.extend(mcp_servers(applied, def));
+    servers.extend(mcp_servers(applied, env));
     // Python tools this agent is granted (`tools` globs); the extension registers them.
     let tools = applied.defs.tools_for(&def.spec.env);
     // Hub ops that end the turn; the extension registers them with `terminate: true`.
@@ -514,15 +534,15 @@ async fn container_spec(
 
 /// `mcp.json` entries besides the hub: granted services, reached directly on the services network
 /// (they get no botler token), and stdio servers pi starts inside the container.
-fn mcp_servers(applied: &crate::hub::Applied, def: &AgentDef) -> serde_json::Map<String, serde_json::Value> {
+fn mcp_servers(applied: &crate::hub::Applied, env: &Environment) -> serde_json::Map<String, serde_json::Value> {
     let mut servers = serde_json::Map::new();
-    for svc in &def.spec.env.mcp {
+    for svc in &env.mcp {
         // Validation guarantees a service with a port.
         let Some(port) = applied.defs.jobs.get(svc).and_then(|j| j.spec.env.port) else { continue };
         let url = format!("http://{svc}:{port}/mcp"); // the service's alias on the network
         servers.insert(svc.clone(), json!({ "url": url }));
     }
-    for (name, s) in &def.spec.env.mcp_stdio {
+    for (name, s) in &env.mcp_stdio {
         let Some((command, args)) = s.command.split_first() else { continue };
         servers.insert(name.clone(), json!({ "command": command, "args": args, "env": s.env }));
     }

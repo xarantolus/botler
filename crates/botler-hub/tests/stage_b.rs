@@ -6,7 +6,7 @@ use botler_hub::{agents, router};
 use botler_store::InstanceState;
 use chrono::{Duration, Utc};
 use common::env;
-use serde_json::json;
+use serde_json::{Value, json};
 
 async fn with_key(e: &common::Env) {
     e.hub.store.set_secret(&e.hub.secret_key, "OPENROUTER_API_KEY", "sk-test").await.unwrap();
@@ -50,7 +50,7 @@ async fn message_wakes_botler_and_is_delivered_once() {
     let names: Vec<&str> = turn.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["propose_change", "trial_run", "request_secrets", "archive_ready", "ask_user"],
+        ["propose_change", "trial_run", "request_secrets", "request_access", "archive_ready", "ask_user"],
         "botler is no reviewer"
     );
     let ask = turn.as_array().unwrap().iter().find(|t| t["name"] == "ask_user").unwrap();
@@ -211,9 +211,9 @@ async fn emit_event_validates_and_explains() {
         other => panic!("{other:?}"),
     }
     let types = ops::call(&e.hub, &caller, "list_event_types", json!({})).await.unwrap();
-    let declared: Vec<&str> = types["declared"].as_array().unwrap().iter().filter_map(|d| d["type"].as_str()).collect();
-    assert!(declared.contains(&"mail.received"), "{declared:?}");
-    assert!(declared.contains(&"example.greeting"), "pydantic events (events.manifest.json) too: {declared:?}");
+    let declared: Vec<&Value> = types["types"].as_array().unwrap().iter().filter(|t| t["builtin"] == false).collect();
+    assert!(declared.iter().any(|t| t["type"] == "mail.received"), "{declared:?}");
+    assert!(declared.iter().any(|t| t["type"] == "example.greeting"), "pydantic events (events.manifest.json) too");
 }
 
 #[tokio::test]

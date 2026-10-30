@@ -20,7 +20,7 @@ use crate::api::{
     UserMessage,
 };
 use crate::memory::{MemoryConflict, MemoryHistory, MemoryList, MemoryRead, MemoryWrite};
-use crate::ops::{GetProposal, GetRunLogs, Op};
+use crate::ops::{GetProposal, GetRunLogs, ListConnections, Op, RevokeAccess, Unsubscribe};
 use crate::phase::WakePhase;
 use crate::review::ProposalDiff;
 use crate::search::{SearchQuery, SearchResults};
@@ -202,7 +202,10 @@ pub struct SecretGroupView {
     pub class: SecretClass,
     pub complete: bool,
     pub fields: Vec<SecretFieldView>,
+    /// Definitions and model routes it is granted to.
     pub granted_to: Vec<String>,
+    /// Chats holding it through a grant (also archived ones, whose grants are suspended).
+    pub held_by: Vec<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -324,6 +327,9 @@ routes! {
         memory_read: MemoryRead;
         memory_write: MemoryWrite;
         memory_history: MemoryHistory;
+        connections: ListConnections;
+        revoke_access: RevokeAccess;
+        unsubscribe: Unsubscribe;
     }
     status: GET "/api/v1/status" => HubStatus;
     usage: GET "/api/v1/usage" => Usage;

@@ -54,6 +54,7 @@ const ICONS: Record<SearchSource, string> = {
   memory: "i-lucide-brain",
   event: "i-lucide-activity",
   repo: "i-lucide-folder-git-2",
+  event_type: "i-lucide-radio",
 };
 
 const input = useTemplateRef<{ inputRef: HTMLInputElement | null }>("input");

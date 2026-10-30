@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The chat's title bar: its name and what it is doing, what it cost, and its actions.
 import type { DropdownMenuItem } from "@nuxt/ui";
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { call } from "../../api/client";
 import { confirm } from "../../confirm";
@@ -13,12 +13,14 @@ import { notifyError, notifySuccess } from "../../notify";
 import { inFlight, stageLabel } from "../../lib/proposals";
 import { frontDoorName, refreshInstances, refreshSession, state } from "../../store";
 import PhaseBadge from "../common/PhaseBadge.vue";
+import ConnectionsSlideover from "./ConnectionsSlideover.vue";
 
 const props = defineProps<{ name: string; instance: Instance | null; badge: Badge | null; cost?: number; pending?: number }>();
 const router = useRouter();
 
 const title = computed(() => (props.instance ? chatTitle(props.instance, frontDoorName.value) : props.name));
 const isFrontDoor = computed(() => props.name === frontDoorName.value);
+const connections = ref(false);
 /** This chat's proposals still in flight, linked to their review pages. */
 const proposals = computed(() => (state.proposals ?? []).filter((p) => p.instance === props.name && inFlight(p)));
 
@@ -132,6 +134,10 @@ const menu = computed((): DropdownMenuItem[][] => {
         class="hidden sm:inline-flex"
         @click="restore"
       />
+      <UTooltip text="Connections: access, subscriptions, related chats">
+        <UButton icon="i-lucide-waypoints" color="neutral" variant="ghost" aria-label="Connections" @click="connections = true" />
+      </UTooltip>
+      <ConnectionsSlideover v-model:open="connections" :name="name" />
       <UDropdownMenu :items="menu" :content="{ align: 'end' }">
         <UButton icon="i-lucide-ellipsis-vertical" color="neutral" variant="ghost" aria-label="Chat actions" />
       </UDropdownMenu>
