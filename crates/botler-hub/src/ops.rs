@@ -27,6 +27,9 @@ pub enum OpError {
     Forbidden(String),
     #[error("unknown operation {0}")]
     Unknown(String),
+    /// The event was rejected; the message says what to fix.
+    #[error("{0}")]
+    InvalidEvent(String),
 }
 
 impl From<botler_store::Error> for OpError {
@@ -185,10 +188,16 @@ pub const OPS: &[OpSpec] = &[
         visible: spawners,
     },
     OpSpec {
-        name: "list_agents",
-        description: "Agent definitions and live instances with their state.",
+        name: "list_chats",
+        description: "Every chat (agent instance), running or asleep, with its title, slug and what it was doing, plus the agent definitions you can spawn. Messaging a sleeping chat wakes it with its conversation and workspace intact.",
         schema: schema::<Empty>,
         visible: agents,
+    },
+    OpSpec {
+        name: "list_event_types",
+        description: "Declared event types with their payload schemas. emit_event validates payloads against these.",
+        schema: schema::<Empty>,
+        visible: everyone,
     },
     OpSpec {
         name: "read_session",
@@ -412,7 +421,8 @@ pub async fn call(hub: &Hub, caller: &Caller, name: &str, input: Value) -> OpRes
         "list_timers" => list_timers(hub, caller).await,
         "set_chat_title" => set_chat_title(hub, caller, args(input)?).await,
         "spawn_agent" => spawn_agent(hub, caller, args(input)?).await,
-        "list_agents" => list_agents(hub).await,
+        "list_chats" => list_chats(hub).await,
+        "list_event_types" => list_event_types(hub).await,
         "read_session" => read_session(hub, args(input)?).await,
         "get_events" => get_events(hub, args(input)?).await,
         "ask_user" => ask_user(hub, caller, args(input)?).await,
@@ -481,8 +491,29 @@ async fn emit_event(hub: &Hub, caller: &Caller, a: EmitEvent) -> OpResult {
         (false, Some(Provenance::Untrusted)) => Provenance::Untrusted,
         (false, _) => Provenance::External,
     };
+    let applied = hub.applied().await;
+    let check = botler_core::event_check::check(&applied.defs, &a.kind, &a.payload);
+    let feedback = check.feedback(&a.kind);
+    if !check.accepted() {
+        tracing::info!(kind = %a.kind, caller = %caller.subject(), "rejected invalid event");
+        return Err(OpError::InvalidEvent(feedback.unwrap_or_else(|| format!("event {} rejected", a.kind))));
+    }
     let ev = hub.emit(Event::new(a.kind, caller.source(), provenance, Utc::now()).payload(a.payload)).await?;
-    Ok(json!({ "event_id": ev.id }))
+    Ok(match feedback {
+        Some(warning) => json!({ "event_id": ev.id, "warning": warning }),
+        None => json!({ "event_id": ev.id }),
+    })
+}
+
+async fn list_event_types(hub: &Hub) -> OpResult {
+    let applied = hub.applied().await;
+    let declared: Vec<Value> = applied
+        .defs
+        .events
+        .values()
+        .map(|e| json!({ "type": e.kind, "description": e.description, "schema": e.schema }))
+        .collect();
+    Ok(json!({ "declared": declared, "undeclared_policy": applied.defs.instance.events.undeclared }))
 }
 
 fn parse_when(at: Option<&str>, after: Option<&str>, now: DateTime<Utc>) -> Result<DateTime<Utc>, OpError> {
@@ -572,7 +603,7 @@ async fn spawn_agent(hub: &Hub, caller: &Caller, a: SpawnAgent) -> OpResult {
     Ok(json!({ "instance": name }))
 }
 
-async fn list_agents(hub: &Hub) -> OpResult {
+async fn list_chats(hub: &Hub) -> OpResult {
     let applied = hub.applied().await;
     let defs: Vec<Value> = applied
         .defs
@@ -584,13 +615,21 @@ async fn list_agents(hub: &Hub) -> OpResult {
     let mut instances = Vec::new();
     for i in live {
         let busy = hub.agents.get(&i.name).await.is_some_and(|a| a.busy());
-        instances.push(json!({ "instance": i.name, "definition": i.definition, "state": i.state, "busy": busy, "task": i.task, "last_active": i.last_active }));
+        instances.push(json!({
+            "chat": i.name, "title": i.title, "slug": i.slug, "definition": i.definition,
+            "state": if busy { "working" } else if i.state == botler_store::InstanceState::Running { "idle" } else { "asleep" },
+            "task": i.task, "last_active": i.last_active,
+        }));
     }
-    Ok(json!({ "definitions": defs, "instances": instances }))
+    Ok(json!({ "chats": instances, "agent_definitions": defs }))
 }
 
 async fn read_session(hub: &Hub, a: ReadSession) -> OpResult {
-    let inst = hub.store.instance(&a.instance).await?;
+    let inst = hub
+        .store
+        .resolve_instance(&a.instance)
+        .await?
+        .ok_or_else(|| OpError::BadRequest(format!("no chat named {}", a.instance)))?;
     let path = hub.paths.sessions(&inst.name).join(&inst.session_file);
     let last = a.last.unwrap_or(20).min(200) as usize;
     let text = match tokio::fs::read_to_string(&path).await {

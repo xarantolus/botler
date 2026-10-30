@@ -73,7 +73,7 @@ async fn message_wakes_main_and_is_delivered_once() {
 }
 
 #[tokio::test]
-async fn idle_ephemeral_ends_and_always_on_main_stays() {
+async fn idle_chats_sleep_and_always_on_main_stays() {
     let e = env().await;
     with_key(&e).await;
     let child = router::spawn(&e.hub, "dev", Some("main"), Some("build a thing"), None, None).await.unwrap();
@@ -94,7 +94,11 @@ async fn idle_ephemeral_ends_and_always_on_main_stays() {
     settle().await;
     // `main` is always_on in the template, so it is never reaped.
     assert_eq!(e.hub.store.instance("main").await.unwrap().state, InstanceState::Running);
-    assert_eq!(e.hub.store.instance(&child).await.unwrap().state, InstanceState::Ended);
+    assert_eq!(
+        e.hub.store.instance(&child).await.unwrap().state,
+        InstanceState::Dormant,
+        "idle chats sleep, never end"
+    );
     assert_eq!(e.hub.agents.all().await.len(), 1);
 }
 
@@ -140,4 +144,63 @@ async fn crashing_always_on_agent_backs_off_and_opens_an_incident() {
         settle().await;
     }
     assert!(starts <= 2, "backoff must stop a hot restart loop (started {starts} times)");
+}
+
+#[tokio::test]
+async fn emit_event_validates_and_explains() {
+    use botler_hub::auth::Principal;
+    use botler_hub::ops::{self, Caller, OpError};
+    let e = env().await;
+    e.commit(&[(
+        "events/mail.toml",
+        "[[event]]\ntype = \"mail.received\"\nschema = { type = \"object\", required = [\"subject\"], properties = { subject = { type = \"string\" } } }\n",
+    )])
+    .await;
+    let caller = Caller::resolve(&e.hub, Principal::User).await.unwrap();
+    let ok = ops::call(&e.hub, &caller, "emit_event", json!({"type": "mail.received", "payload": {"subject": "hi"}}))
+        .await
+        .unwrap();
+    assert!(ok.get("event_id").is_some());
+    match ops::call(&e.hub, &caller, "emit_event", json!({"type": "mail.received", "payload": {"subject": 5}})).await {
+        Err(OpError::InvalidEvent(msg)) => {
+            assert!(msg.contains("`/subject`") && msg.contains("Expected schema"), "{msg}")
+        }
+        other => panic!("{other:?}"),
+    }
+    match ops::call(&e.hub, &caller, "emit_event", json!({"type": "mail.recieved", "payload": {}})).await {
+        Err(OpError::InvalidEvent(msg)) => assert!(msg.contains("Did you mean: `mail.received`"), "{msg}"),
+        other => panic!("{other:?}"),
+    }
+    let types = ops::call(&e.hub, &caller, "list_event_types", json!({})).await.unwrap();
+    assert_eq!(types["declared"][0]["type"], "mail.received");
+}
+
+#[tokio::test]
+async fn sleeping_chat_is_woken_by_a_message_with_its_workspace() {
+    let e = env().await;
+    with_key(&e).await;
+    let chat = router::spawn(&e.hub, "dev", Some("main"), Some("start"), None, None).await.unwrap();
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    let marker = e.hub.paths.workspace(&chat).join("notes.txt");
+    std::fs::write(&marker, "work in progress").unwrap();
+    agents::reap_idle(&e.hub, Utc::now() + Duration::hours(2)).await.unwrap();
+    settle().await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Dormant);
+
+    e.hub
+        .emit(
+            Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+                .to(chat.clone())
+                .payload(json!({"text": "continue"})),
+        )
+        .await
+        .unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running);
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "work in progress", "workspace survives sleep");
+    let prompts = e.fake.prompts(&agents::container_name(&chat));
+    assert!(prompts.last().unwrap().contains("continue"));
 }

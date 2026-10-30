@@ -240,7 +240,7 @@ pub async fn ensure_awake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<Liv
     hub.store.set_instance_state(&instance.name, InstanceState::Running, Some(&spec.name)).await?;
     broadcast_state(hub, &instance.name, "running");
     tokio::spawn(pump(hub.clone(), agent.clone(), events));
-    tokio::spawn(watch_exit(hub.clone(), agent.clone(), instance.persistent, attached.exited, attached.stderr));
+    tokio::spawn(watch_exit(hub.clone(), agent.clone(), attached.exited, attached.stderr));
     Ok(agent)
 }
 
@@ -569,7 +569,6 @@ async fn meter(hub: &Hub, agent: &LiveAgent, u: &botler_runtime::Usage) -> Resul
 async fn watch_exit(
     hub: Arc<Hub>,
     agent: Arc<LiveAgent>,
-    persistent: bool,
     exited: oneshot::Receiver<Option<i32>>,
     stderr: botler_runtime::StderrTail,
 ) {
@@ -594,7 +593,9 @@ async fn watch_exit(
             wakes.remove(&agent.instance);
         }
     }
-    let state = if deliberate && !persistent { InstanceState::Ended } else { InstanceState::Dormant };
+    // Idle or crashed, every instance only goes to sleep: it is woken by its next message with
+    // its session and workspace intact. Ending a chat is an explicit act (archiving).
+    let state = InstanceState::Dormant;
     if let Err(e) = hub.store.set_instance_state(&agent.instance, state, None).await {
         tracing::error!(instance = %agent.instance, error = %e, "could not record agent exit");
     }
@@ -642,7 +643,7 @@ async fn record_crash(hub: &Hub, instance: &str, code: Option<i32>, stderr: Stri
     Ok(())
 }
 
-/// Stop idle agents: persistent ones go dormant, ephemeral ones end.
+/// Put idle agents to sleep (they wake on their next message).
 pub async fn reap_idle(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
     let applied = hub.applied().await;
     for agent in hub.agents.all().await {

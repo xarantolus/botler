@@ -6,6 +6,7 @@ pub mod change;
 pub mod defs;
 pub mod duration;
 pub mod event;
+pub mod event_check;
 pub mod limits;
 pub mod routing;
 pub mod trigger;

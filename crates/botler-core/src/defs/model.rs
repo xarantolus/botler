@@ -31,6 +31,8 @@ pub struct Instance {
     #[serde(default)]
     pub defaults: Defaults,
     #[serde(default)]
+    pub events: EventsPolicy,
+    #[serde(default)]
     pub mirror: Option<Mirror>,
     #[serde(default)]
     pub push: Option<Push>,
@@ -38,6 +40,25 @@ pub struct Instance {
 
 fn default_tz() -> String {
     "UTC".into()
+}
+
+/// How emitted events are checked against declarations.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventsPolicy {
+    #[serde(default)]
+    pub undeclared: Undeclared,
+}
+
+/// What happens to an event type that no file declares.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Undeclared {
+    /// Reject it: every event type must be declared (with a schema to be validated).
+    #[default]
+    Reject,
+    /// Accept it with a warning, for prototyping.
+    Warn,
 }
 
 /// The model routing table. Agents name a route, never a model.

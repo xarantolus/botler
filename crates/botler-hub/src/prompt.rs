@@ -15,7 +15,7 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
         def.name,
         match def.spec.kind {
             AgentKind::Persistent => "persistent: you keep this conversation across restarts",
-            AgentKind::Ephemeral => "ephemeral: you exist for one task and end when idle",
+            AgentKind::Ephemeral => "started for a task: you sleep when idle and are woken, with this conversation and your workspace intact, when someone messages you",
         }
     ));
     if instance.slug.is_none() && def.spec.kind == botler_core::defs::AgentKind::Ephemeral {

@@ -364,6 +364,32 @@ pub fn load(tree: &dyn Tree) -> LoadReport {
         }
     }
 
+    // Generated from pydantic models by the SDK (`python -m botler.events manifest`).
+    match tree.read("events.manifest.json") {
+        Ok(Some(bytes)) => match serde_json::from_slice::<Vec<EventDecl>>(&bytes) {
+            Ok(events) => {
+                for e in events {
+                    if defs.events.insert(e.kind.clone(), e.clone()).is_some() {
+                        l.err("events.manifest.json", format!("event type {} is declared twice", e.kind));
+                    }
+                }
+            }
+            Err(e) => l.err("events.manifest.json", e.to_string()),
+        },
+        Ok(None) => {}
+        Err(e) => l.err("events.manifest.json", format!("could not read: {e}")),
+    }
+    for e in defs.events.values() {
+        if crate::catalog::builtin(&e.kind).is_some() {
+            l.err("events", format!("{} is a built-in hub event type and cannot be redeclared", e.kind));
+        }
+        if let Some(schema) = &e.schema
+            && let Err(err) = crate::event_check::compile(schema)
+        {
+            l.err("events", format!("schema of {} is invalid: {err}", e.kind));
+        }
+    }
+
     match tree.read("tools.manifest.json") {
         Ok(Some(bytes)) => match serde_json::from_slice::<Vec<ToolDecl>>(&bytes) {
             Ok(tools) => {

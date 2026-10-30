@@ -115,6 +115,7 @@ impl From<OpError> for ApiError {
             OpError::BadRequest(_) => StatusCode::BAD_REQUEST,
             OpError::Forbidden(_) => StatusCode::FORBIDDEN,
             OpError::Unknown(_) => StatusCode::NOT_FOUND,
+            OpError::InvalidEvent(_) => StatusCode::UNPROCESSABLE_ENTITY,
             OpError::Hub(h) => return h.into(),
         };
         Self(code, e.to_string())
