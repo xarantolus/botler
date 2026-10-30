@@ -66,6 +66,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/chats/{instance}/archive", post(archive_chat))
         .route("/api/v1/chats/{instance}/restore", post(restore_chat))
         .route("/api/v1/runs", get(runs))
+        .route("/api/v1/system", get(system))
         .route("/api/v1/incidents", get(incidents))
         .route("/api/v1/secrets", get(secrets))
         .route("/api/v1/secrets/{name}", put(set_secret))
@@ -133,6 +134,7 @@ impl From<OpError> for ApiError {
             OpError::BadRequest(_) => StatusCode::BAD_REQUEST,
             OpError::Forbidden(_) => StatusCode::FORBIDDEN,
             OpError::Unknown(_) => StatusCode::NOT_FOUND,
+            OpError::Conflict(_) => StatusCode::CONFLICT,
             OpError::InvalidEvent(_) => StatusCode::UNPROCESSABLE_ENTITY,
             OpError::Hub(h) => return h.into(),
         };
@@ -209,6 +211,7 @@ async fn op(
 async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
     let applied = hub.applied().await;
     let info = hub.containers.info();
+    let services = crate::services::status(&hub).await?;
     Ok(Json(HubStatus {
         version: env!("CARGO_PKG_VERSION").into(),
         commit: applied.commit.clone(),
@@ -219,7 +222,8 @@ async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
         open_dialogs: hub.store.open_dialogs().await?.len(),
         open_incidents: hub.store.open_incidents().await?.len(),
         breakers: hub.store.breakers().await?,
-        services: crate::services::status(&hub).await?,
+        attention: crate::system::attention(&hub, &services).await?,
+        services,
     }))
 }
 
@@ -531,9 +535,32 @@ async fn instances(State(hub): State<AppState>, Extension(p): Extension<Principa
     Ok(Json(hub.store.all_instances(200).await?))
 }
 
-async fn runs(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Run>>> {
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(optional_fields)]
+pub struct RunsQuery {
+    /// Only the runs of this job, service or agent.
+    runnable: Option<String>,
+}
+
+async fn runs(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Query(q): Query<RunsQuery>,
+) -> ApiResult<Json<Vec<Run>>> {
     user_only(&p)?;
-    Ok(Json(hub.store.recent_runs(100).await?))
+    Ok(Json(match q.runnable {
+        Some(r) => hub.store.runs_for(&r, 100).await?,
+        None => hub.store.recent_runs(100).await?,
+    }))
+}
+
+/// Everything defined, what happens next, and how it went.
+async fn system(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<crate::system::SystemView>> {
+    user_only(&p)?;
+    Ok(Json(crate::system::view(&hub).await?))
 }
 
 async fn incidents(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Incident>>> {

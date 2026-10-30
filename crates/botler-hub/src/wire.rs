@@ -55,19 +55,34 @@ pub struct HubStatus {
     pub open_incidents: usize,
     pub breakers: Vec<Breaker>,
     pub services: Vec<ServiceStatus>,
+    /// What needs attention, for the sidebar's counts.
+    pub attention: crate::system::Attention,
 }
 
 /// A service of the applied definitions and where it can be reached.
 #[derive(Debug, Serialize, TS)]
 pub struct ServiceStatus {
     pub name: String,
-    pub running: bool,
-    /// Crash-looping: not restarted until its incident is resolved.
-    pub failed: bool,
+    pub state: ServiceState,
     /// Its address for agents granted it, on the services network (`http://<name>:<port>`).
     pub internal_url: Option<String>,
     /// Ports published on the host, reachable from outside.
     pub published: Vec<PublishedPort>,
+}
+
+/// Where a service is in its life, as the reconciler sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceState {
+    Running,
+    /// About to start (or being started).
+    Starting,
+    /// Exited; restarted once its backoff is over.
+    Backoff,
+    /// Crash-looping: not restarted until its incident is resolved.
+    Failed,
+    /// botler is paused.
+    Paused,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -313,6 +328,8 @@ routes! {
         memory_read: MemoryRead;
         memory_write: MemoryWrite;
         memory_history: MemoryHistory;
+        run_job: crate::ops::RunJob;
+        restart_service: crate::ops::RestartService;
     }
     status: GET "/api/v1/status" => HubStatus;
     usage: GET "/api/v1/usage" => Usage;
@@ -328,7 +345,8 @@ routes! {
     new_chat: POST "/api/v1/chats", body: NewChat => ChatCreated;
     archive_chat: POST "/api/v1/chats/{instance}/archive", body: ArchiveRequest => ArchiveOutcome;
     restore_chat: POST "/api/v1/chats/{instance}/restore" => ChatRestored;
-    runs: GET "/api/v1/runs" => Vec<Run>;
+    runs: GET "/api/v1/runs", query: crate::api::RunsQuery => Vec<Run>;
+    system: GET "/api/v1/system" => crate::system::SystemView;
     incidents: GET "/api/v1/incidents" => Vec<Incident>;
     secrets: GET "/api/v1/secrets" => Vec<SecretGroupView>;
     set_secret: PUT "/api/v1/secrets/{name}", body: SecretValue => Saved;

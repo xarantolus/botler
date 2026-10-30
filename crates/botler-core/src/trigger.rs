@@ -121,7 +121,7 @@ impl ScheduleSpec {
     pub fn describe(&self) -> String {
         match self {
             Self::Every(d) => format!("Every {d}"),
-            Self::Cron(c) => format!("{} ({})", c.cron.describe(), c.tz.name()),
+            Self::Cron(c) => format!("{} ({})", c.cron.describe().trim_end_matches('.'), c.tz.name()),
         }
     }
 }

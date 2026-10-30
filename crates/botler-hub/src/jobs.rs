@@ -34,11 +34,35 @@ pub fn run_container(hub: &Hub, run: &Run) -> String {
 /// policy.
 pub async fn start(hub: &Hub, job: &str, trigger: Option<&str>, event: Option<&Event>) -> Result<Option<String>> {
     let applied = hub.applied().await;
+    let overlap = trigger.and_then(|t| applied.defs.triggers.get(t)).map_or(Overlap::Allow, |t| t.spec.overlap);
+    let Some(admitted) = admit(hub, job, trigger, event, overlap).await? else { return Ok(None) };
+    if admitted.launch {
+        launch(hub, &admitted.run, event).await?;
+    }
+    Ok(Some(admitted.run.id))
+}
+
+/// A run [`admit`] created.
+pub struct Admitted {
+    pub run: Run,
+    /// Start it now; otherwise it is queued behind the active run.
+    pub launch: bool,
+}
+
+/// Create a run of oneshot job `job` as `overlap` allows, without starting its container;
+/// `None` if skipped.
+pub async fn admit(
+    hub: &Hub,
+    job: &str,
+    trigger: Option<&str>,
+    event: Option<&Event>,
+    overlap: Overlap,
+) -> Result<Option<Admitted>> {
+    let applied = hub.applied().await;
     let def = applied.defs.jobs.get(job).ok_or_else(|| HubError::Undefined { kind: "job", name: job.into() })?;
     if def.spec.lifetime != Lifetime::Oneshot {
         return Err(HubError::Forbidden(format!("{job} is a service; services are not triggered")));
     }
-    let overlap = trigger.and_then(|t| applied.defs.triggers.get(t)).map_or(Overlap::Allow, |t| t.spec.overlap);
     let busy = hub.store.runs_for(job, 20).await?.iter().any(|r| !r.status.is_terminal());
     if busy && overlap == Overlap::Skip {
         tracing::info!(job, trigger, "previous run still active; skipped (overlap = skip)");
@@ -54,12 +78,11 @@ pub async fn start(hub: &Hub, job: &str, trigger: Option<&str>, event: Option<&E
             commit_id: Some(applied.commit.clone()),
         })
         .await?;
-    if busy && overlap == Overlap::Queue {
+    let queued = busy && overlap == Overlap::Queue;
+    if queued {
         tracing::info!(job, run = %run.id, "queued behind the active run");
-        return Ok(Some(run.id));
     }
-    launch(hub, &run, event).await?;
-    Ok(Some(run.id))
+    Ok(Some(Admitted { run, launch: !queued }))
 }
 
 /// Start the container for a queued run. Start failures finish the run and are reported.

@@ -204,6 +204,13 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         follow_up: &[],
         guidance: "Do what the timer was set for.",
     },
+    BuiltinEvent {
+        kind: kinds::MANUAL,
+        summary: "The user started a job by hand (Run now).",
+        fields: &[("runnable", "the job")],
+        follow_up: &[],
+        guidance: "Nothing to do: it only starts the job.",
+    },
 ];
 
 pub fn builtin(kind: &str) -> Option<&'static BuiltinEvent> {

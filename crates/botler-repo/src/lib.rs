@@ -301,6 +301,18 @@ impl Repo {
         self.git(&["diff", "--no-color", "--stat", "--patch", base, head]).await
     }
 
+    /// A commit's subject line and commit time.
+    pub async fn commit_info(&self, commit: &str) -> Result<(String, chrono::DateTime<chrono::Utc>)> {
+        let out = self.git(&["log", "-1", "--format=%ct %s", commit]).await?;
+        let (secs, subject) = out.split_once(' ').unwrap_or((&out, ""));
+        let at = secs
+            .parse::<i64>()
+            .ok()
+            .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+            .ok_or_else(|| Error::Malformed(format!("commit time of {commit}: {out:?}")))?;
+        Ok((subject.to_string(), at))
+    }
+
     pub async fn log_subjects(&self, base: &str, head: &str) -> Result<Vec<String>> {
         let out = self.git(&["log", "--format=%h %s", &format!("{base}..{head}")]).await?;
         Ok(out.lines().map(String::from).collect())

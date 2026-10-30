@@ -118,7 +118,9 @@ function onMessage(msg: ServerMessage) {
       addEvent(msg.event);
       const t = msg.event.type;
       if (t.startsWith("dialog.") || t === "proposal.updated") soon("dialogs", refreshDialogs);
-      if (t === "proposal.updated" || t === "breaker.tripped") soon("status", refreshStatus);
+      if (t === "proposal.updated" || t === "breaker.tripped" || t.startsWith("runnable.") || t === "manual") {
+        soon("status", refreshStatus);
+      }
       // New chats, titles and activity show up in the list.
       soon("instances", refreshInstances, 1000);
       if (watched && (msg.event.to === watched || msg.event.source.kind === "user")) {

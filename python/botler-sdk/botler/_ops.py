@@ -280,3 +280,13 @@ def health(*, ok: bool, reason: str | None = None) -> dict[str, Any]:
         reason: Why it is unhealthy (with `ok = false`).
     """
     return call("health", {"ok": ok, "reason": reason})
+
+
+def run_job(*, job: str) -> dict[str, Any]:
+    """Start a oneshot job now, with a `manual` event. Honours pause and the overlap policy of the job's trigger (skip by default)."""
+    return call("run_job", {"job": job})
+
+
+def restart_service(*, service: str) -> dict[str, Any]:
+    """Stop a service; the reconciler starts it again right away."""
+    return call("restart_service", {"service": service})

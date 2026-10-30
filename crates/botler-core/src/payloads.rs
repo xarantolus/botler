@@ -180,6 +180,13 @@ pub struct SchedulePayload {
     pub skipped: u32,
 }
 
+/// The user started a job by hand ("Run now" in the web app).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct ManualPayload {
+    /// The job.
+    pub runnable: String,
+}
+
 /// What the hub sends pi for one delivery (`botler:delivery <json>`); the botler pi extension
 /// parses it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -235,6 +242,8 @@ pub enum BuiltinPayload {
     Timer(TimerPayload),
     #[serde(rename = "schedule")]
     Schedule(SchedulePayload),
+    #[serde(rename = "manual")]
+    Manual(ManualPayload),
 }
 
 impl BuiltinPayload {
@@ -253,6 +262,7 @@ impl BuiltinPayload {
             Self::AgentIdle(_) => kinds::AGENT_IDLE,
             Self::Timer(_) => kinds::TIMER,
             Self::Schedule(_) => kinds::SCHEDULE,
+            Self::Manual(_) => kinds::MANUAL,
         }
     }
 
@@ -270,6 +280,7 @@ impl BuiltinPayload {
             Self::AgentIdle(p) => serde_json::to_value(p),
             Self::Timer(p) => serde_json::to_value(p),
             Self::Schedule(p) => serde_json::to_value(p),
+            Self::Manual(p) => serde_json::to_value(p),
         }
     }
 
@@ -321,6 +332,7 @@ mod tests {
             (kinds::AGENT_IDLE, fields::<AgentIdlePayload>()),
             (kinds::TIMER, fields::<TimerPayload>()),
             (kinds::SCHEDULE, fields::<SchedulePayload>()),
+            (kinds::MANUAL, fields::<ManualPayload>()),
         ];
         assert_eq!(typed.len(), BUILTIN.len(), "every built-in event type has a payload type");
         for (kind, typed_fields) in typed {

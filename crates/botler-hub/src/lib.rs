@@ -33,6 +33,7 @@ pub mod serve;
 pub mod services;
 pub mod sessions;
 pub mod supervisor;
+pub mod system;
 pub mod template;
 pub mod transactions;
 pub mod web;

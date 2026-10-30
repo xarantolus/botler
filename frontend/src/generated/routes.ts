@@ -17,6 +17,7 @@ import type { GetRunLogs } from "./GetRunLogs";
 import type { HubStatus } from "./HubStatus";
 import type { Incident } from "./Incident";
 import type { Instance } from "./Instance";
+import type { JobStarted } from "./JobStarted";
 import type { MemoryCommit } from "./MemoryCommit";
 import type { MemoryEntry } from "./MemoryEntry";
 import type { MemoryFile } from "./MemoryFile";
@@ -29,18 +30,23 @@ import type { NewChat } from "./NewChat";
 import type { PauseState } from "./PauseState";
 import type { Proposal } from "./Proposal";
 import type { ProposalDetail } from "./ProposalDetail";
+import type { RestartService } from "./RestartService";
 import type { RevertRequest } from "./RevertRequest";
 import type { Reverted } from "./Reverted";
 import type { Run } from "./Run";
+import type { RunJob } from "./RunJob";
 import type { RunLogs } from "./RunLogs";
+import type { RunsQuery } from "./RunsQuery";
 import type { Saved } from "./Saved";
 import type { SearchQuery } from "./SearchQuery";
 import type { SearchResults } from "./SearchResults";
 import type { SecretGroupView } from "./SecretGroupView";
 import type { SecretValue } from "./SecretValue";
 import type { SecretsOutcome } from "./SecretsOutcome";
+import type { ServiceRestarted } from "./ServiceRestarted";
 import type { SessionView } from "./SessionView";
 import type { Submission } from "./Submission";
+import type { SystemView } from "./SystemView";
 import type { Trace } from "./Trace";
 import type { Usage } from "./Usage";
 import type { UserMessage } from "./UserMessage";
@@ -61,7 +67,8 @@ export interface Routes {
   new_chat: { method: "POST"; path: "/api/v1/chats"; params: Record<string, never>; query: never; body: NewChat; response: ChatCreated };
   archive_chat: { method: "POST"; path: "/api/v1/chats/{instance}/archive"; params: { instance: string }; query: never; body: ArchiveRequest; response: ArchiveOutcome };
   restore_chat: { method: "POST"; path: "/api/v1/chats/{instance}/restore"; params: { instance: string }; query: never; body: never; response: ChatRestored };
-  runs: { method: "GET"; path: "/api/v1/runs"; params: Record<string, never>; query: never; body: never; response: Array<Run> };
+  runs: { method: "GET"; path: "/api/v1/runs"; params: Record<string, never>; query: RunsQuery; body: never; response: Array<Run> };
+  system: { method: "GET"; path: "/api/v1/system"; params: Record<string, never>; query: never; body: never; response: SystemView };
   incidents: { method: "GET"; path: "/api/v1/incidents"; params: Record<string, never>; query: never; body: never; response: Array<Incident> };
   secrets: { method: "GET"; path: "/api/v1/secrets"; params: Record<string, never>; query: never; body: never; response: Array<SecretGroupView> };
   set_secret: { method: "PUT"; path: "/api/v1/secrets/{name}"; params: { name: string }; query: never; body: SecretValue; response: Saved };
@@ -76,6 +83,8 @@ export interface Routes {
   memory_read: { method: "POST"; path: "/api/v1/ops/memory_read"; params: Record<string, never>; query: never; body: MemoryRead; response: MemoryFile };
   memory_write: { method: "POST"; path: "/api/v1/ops/memory_write"; params: Record<string, never>; query: never; body: MemoryWrite; response: MemoryWritten };
   memory_history: { method: "POST"; path: "/api/v1/ops/memory_history"; params: Record<string, never>; query: never; body: MemoryHistory; response: Array<MemoryCommit> };
+  run_job: { method: "POST"; path: "/api/v1/ops/run_job"; params: Record<string, never>; query: never; body: RunJob; response: JobStarted };
+  restart_service: { method: "POST"; path: "/api/v1/ops/restart_service"; params: Record<string, never>; query: never; body: RestartService; response: ServiceRestarted };
 }
 
 export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path: Routes[K]["path"] } } = {
@@ -94,6 +103,7 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   archive_chat: { method: "POST", path: "/api/v1/chats/{instance}/archive" },
   restore_chat: { method: "POST", path: "/api/v1/chats/{instance}/restore" },
   runs: { method: "GET", path: "/api/v1/runs" },
+  system: { method: "GET", path: "/api/v1/system" },
   incidents: { method: "GET", path: "/api/v1/incidents" },
   secrets: { method: "GET", path: "/api/v1/secrets" },
   set_secret: { method: "PUT", path: "/api/v1/secrets/{name}" },
@@ -108,4 +118,6 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   memory_read: { method: "POST", path: "/api/v1/ops/memory_read" },
   memory_write: { method: "POST", path: "/api/v1/ops/memory_write" },
   memory_history: { method: "POST", path: "/api/v1/ops/memory_history" },
+  run_job: { method: "POST", path: "/api/v1/ops/run_job" },
+  restart_service: { method: "POST", path: "/api/v1/ops/restart_service" },
 };
