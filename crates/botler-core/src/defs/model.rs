@@ -287,6 +287,10 @@ pub struct Job {
     pub description: String,
     #[serde(default)]
     pub lifetime: Lifetime,
+    /// `false` keeps it defined but never run: a service is not started, triggers skip it.
+    /// `trial_run` still runs it. Enabling a service needs the user's approval once.
+    #[serde(default = "enabled_default")]
+    pub enabled: bool,
     /// Command run inside the image built from this directory's Dockerfile.
     pub command: Vec<String>,
     #[serde(default)]
@@ -307,6 +311,17 @@ pub struct Job {
     /// Declared event types this job or service emits (listed as their producer).
     #[serde(default)]
     pub emits: Vec<String>,
+}
+
+fn enabled_default() -> bool {
+    true
+}
+
+impl Job {
+    /// An enabled service: the hub keeps it running.
+    pub fn is_service(&self) -> bool {
+        self.enabled && self.lifetime == Lifetime::Service
+    }
 }
 
 /// A service port published on the host: `<bind>:<host_port>` forwards to `port` in the container.

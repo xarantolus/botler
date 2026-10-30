@@ -144,7 +144,8 @@ New request kinds count as core features under rule 3 of the test. Everything el
 | a new event type | pydantic model in `packages/`, which generates the manifest |
 | agent behaviour | `agents/<x>/AGENTS.md`, pi skills and extensions in `pi/` |
 | something periodic | `triggers/*.toml` |
-| a poller or long-running helper | `jobs/<x>` with `lifetime = "service"` |
+| a poller or long-running helper | `jobs/<x>` with `lifetime = "service"` (skill `background-service`; its first deployment asks the user) |
+| trying a job or service before proposing it | `trial_run(job, branch, minutes ≤ 10)`: branch code, held secrets only, own `state`; emits recorded, never routed; `trial.finished` reports |
 | something reachable from the user's network | a service with `publish` (escalation) |
 | an integration that sends to others | a hub-held action job (approval per call) |
 

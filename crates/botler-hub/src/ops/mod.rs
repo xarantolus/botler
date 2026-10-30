@@ -12,6 +12,7 @@ mod requests;
 mod state;
 mod subscriptions;
 mod timers;
+mod trial;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -36,6 +37,7 @@ pub use requests::*;
 pub use state::*;
 pub use subscriptions::*;
 pub use timers::*;
+pub use trial::*;
 
 use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
@@ -238,6 +240,7 @@ pub static OPS: &[OpSpec] = &[
     op::<ListChats>(),
     op::<ProposeChange>(),
     op::<PreviewChange>(),
+    op::<TrialRun>(),
     op::<GetProposal>(),
     op::<SubmitReview>(),
     op::<secret_requests::SecretRequest>(),

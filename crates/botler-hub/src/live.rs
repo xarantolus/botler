@@ -16,6 +16,7 @@ use axum::extract::State;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use botler_core::Event;
+use botler_store::Proposal;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -59,6 +60,8 @@ pub enum ServerMessage {
     Instance { instance: String, status: AgentStatus },
     /// A dialog opened.
     Dialog { notice: DialogNotice },
+    /// A proposal moved (stage, status, decision).
+    Proposal { proposal: Box<Proposal> },
     /// A raw pi RPC event of the watched chat (`message_update`, `tool_execution_end`, ...).
     Pi {
         instance: String,
@@ -131,6 +134,7 @@ async fn serve(hub: Arc<Hub>, mut socket: WebSocket) -> Result<(), LiveError> {
                     Ok(Live::Event { event }) => ServerMessage::Event { event },
                     Ok(Live::Instance { instance, status }) => ServerMessage::Instance { instance, status },
                     Ok(Live::Dialog { notice }) => ServerMessage::Dialog { notice },
+                    Ok(Live::Proposal { proposal }) => ServerMessage::Proposal { proposal },
                     Ok(Live::Pi { instance, event }) => {
                         if watched.as_deref() != Some(instance.as_str()) {
                             continue;

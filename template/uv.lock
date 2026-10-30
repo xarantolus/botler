@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 members = [
     "botler-monorepo",
     "example",
+    "example-watcher",
     "shared",
     "web",
     "web-health",
@@ -267,6 +268,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2.6" }]
+
+[[package]]
+name = "example-watcher"
+version = "0.1.0"
+source = { editable = "jobs/example-watcher" }
+dependencies = [
+    { name = "shared" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "shared", editable = "packages/shared" }]
 
 [[package]]
 name = "h11"

@@ -112,6 +112,7 @@ pub const BUILTIN: &[BuiltinEvent] = &[
             ("status", "gating | reviewing | awaiting_user | merged | rejected | failed"),
             ("detail", "gate failures, reviewer notes, or the reason for the decision"),
             ("summary", "the deployment summary of the change"),
+            ("reason", "the user's reason for rejecting it (or comment on approving it)"),
         ],
         follow_up: &[FollowUp {
             tool: "get_proposal",
@@ -121,7 +122,26 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         guidance: "If the gate failed, fix the reported problems on your branch and call `propose_change` again. \
                    `gate/run` and everything the gate checks are files on your branch: a gate failure is always \
                    fixable there (changes to `gate/` need the user's approval). \
-                   If it was rejected, read the reason before trying anything else.",
+                   If it was rejected, read `reason` (the user's words) or the reviewer's notes in `detail` \
+                   before trying anything else, and address them in the next proposal.",
+    },
+    BuiltinEvent {
+        kind: kinds::TRIAL_FINISHED,
+        summary: "A `trial_run` you started ended. Nothing it emitted, sent or scheduled took effect.",
+        fields: &[
+            ("run_id", "the trial run"),
+            ("job", "the job or service tried"),
+            ("branch", "the branch it ran from"),
+            ("outcome", "succeeded | failed | time_up (a service still running when its minutes were up)"),
+            ("exit_code", "process exit code, if it exited"),
+            ("reason", "why it ended, if not a clean exit"),
+            ("logs_tail", "the last lines of output"),
+            ("effects", "the events, messages and timers it would have produced"),
+            ("withheld_secrets", "secret groups it declares that you do not hold, so it ran without them"),
+        ],
+        follow_up: &[FollowUp { tool: "get_run_logs", args: &[("run_id", "run_id")], why: "full output" }],
+        guidance: "Check the effects are the events you expect, with sensible payloads, and the logs are clean. \
+                   Fix and `trial_run` again, or `propose_change` once it behaves.",
     },
     BuiltinEvent {
         kind: kinds::ACTION_RESULT,

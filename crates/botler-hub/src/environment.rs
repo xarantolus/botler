@@ -29,6 +29,11 @@ pub enum Runnable<'a> {
     Gate { id: &'a str },
 }
 
+/// The name of the container running the gate for proposal `id`.
+pub fn gate_container(hub: &Hub, id: &str) -> String {
+    format!("botler-{}-gate-{id}", hub.id)
+}
+
 /// The container for `what` in `env`, running `command` in `image`. `extra_secrets` are single
 /// secrets besides the environment's groups (a model route's API key).
 pub async fn container_spec(
@@ -69,7 +74,11 @@ pub async fn container_spec(
         Runnable::Run { run, ttl } => {
             service = run.kind == RunKind::Service;
             spec.name = crate::jobs::run_container(hub, run);
-            spec.labels = hub.labels(if service { "service" } else { "job" });
+            spec.labels = hub.labels(match run.kind {
+                RunKind::Service => "service",
+                RunKind::Trial => "trial",
+                _ => "job",
+            });
             spec.labels.insert(RUN_LABEL.into(), run.id.clone());
             spec.labels.insert(RUNNABLE_LABEL.into(), run.runnable.clone());
             // Agents reach a service by its plain name on the network.
@@ -78,14 +87,19 @@ pub async fn container_spec(
             }
             vars.insert("BOTLER_RUN_ID".into(), run.id.clone());
             vars.insert("BOTLER_RUNNABLE".into(), run.runnable.clone());
-            if env.volume {
-                mounts.push(Mount::Volume { name: format!("botler-job-{}", run.runnable), dst: "/data".into() });
+            // A trial never touches the production volume: it gets an empty, throwaway `/data`.
+            match (env.volume, run.kind) {
+                (true, RunKind::Trial) => mounts.push(Mount::Tmpfs { dst: "/data".into() }),
+                (true, _) => {
+                    mounts.push(Mount::Volume { name: format!("botler-job-{}", run.runnable), dst: "/data".into() });
+                }
+                (false, _) => {}
             }
             let secrets = hub.paths.root.join("runs").join(&run.id).join("secrets");
             Some((Principal::Run { run_id: run.id.clone() }, ttl, secrets))
         }
         Runnable::Gate { id } => {
-            spec.name = format!("botler-{}-gate-{id}", hub.id);
+            spec.name = gate_container(hub, id);
             spec.labels = hub.labels("gate");
             spec.remove_on_exit = true;
             None

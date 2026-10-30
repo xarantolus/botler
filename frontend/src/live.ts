@@ -14,6 +14,7 @@ import {
   refreshUsage,
   state,
   trackWake,
+  upsertProposal,
 } from "./store";
 
 let socket: WebSocket | null = null;
@@ -138,6 +139,9 @@ function onMessage(msg: ServerMessage) {
       return;
     case "pi":
       onPi(msg.instance, msg.event);
+      return;
+    case "proposal":
+      upsertProposal(msg.proposal);
       return;
   }
 }

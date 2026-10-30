@@ -35,6 +35,10 @@ pub struct MessageSent {
     pub event_id: Uuid,
     /// The recipient's instance name.
     pub to: String,
+    /// A trial run: recorded, not carried out.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, as = "Option<bool>")]
+    pub dry_run: bool,
 }
 
 impl Op for SendMessage {
@@ -67,13 +71,17 @@ impl Op for SendMessage {
             let parent = hub.store.event(parent).await?;
             ev = ev.in_reply_to(&parent);
         }
+        if let Some(trial) = crate::trials::of_caller(hub, caller).await? {
+            crate::trials::record(hub, &trial, Self::NAME, &ev).await?;
+            return Ok(MessageSent { event_id: ev.id, to, dry_run: true });
+        }
         let ev = hub.emit(ev).await?;
         if let Some(me) = caller.instance()
             && let Some(live) = hub.agents.get(me).await
         {
             live.record_message(&to);
         }
-        Ok(MessageSent { event_id: ev.id, to })
+        Ok(MessageSent { event_id: ev.id, to, dry_run: false })
     }
 }
 
@@ -99,6 +107,10 @@ pub struct EventEmitted {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub warning: Option<String>,
+    /// A trial run: recorded, not carried out.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, as = "Option<bool>")]
+    pub dry_run: bool,
 }
 
 impl Op for EmitEvent {
@@ -123,14 +135,26 @@ impl Op for EmitEvent {
             (false, _) => Provenance::External,
         };
         let applied = hub.applied().await;
-        let check = botler_core::event_check::check(&applied.defs, &self.kind, &self.payload);
+        // A trial checks against its branch, where a new event type is declared.
+        let trial = crate::trials::of_caller(hub, caller).await?;
+        let branch_defs = match &trial {
+            Some(run_id) => Some(crate::trials::definitions(hub, run_id).await?),
+            None => None,
+        };
+        let defs = branch_defs.as_ref().unwrap_or(&applied.defs);
+        let check = botler_core::event_check::check(defs, &self.kind, &self.payload);
         let warning = check.feedback(&self.kind);
         if !check.accepted() {
             tracing::info!(kind = %self.kind, caller = %caller.subject(), "rejected invalid event");
             return Err(OpError::InvalidEvent(warning.unwrap_or_else(|| format!("event {} rejected", self.kind))));
         }
-        let ev = hub.emit(Event::new(self.kind, caller.source(), provenance, Utc::now()).payload(self.payload)).await?;
-        Ok(EventEmitted { event_id: ev.id, warning })
+        let ev = Event::new(self.kind, caller.source(), provenance, Utc::now()).payload(self.payload);
+        if let Some(trial) = trial {
+            crate::trials::record(hub, &trial, Self::NAME, &ev).await?;
+            return Ok(EventEmitted { event_id: ev.id, warning, dry_run: true });
+        }
+        let ev = hub.emit(ev).await?;
+        Ok(EventEmitted { event_id: ev.id, warning, dry_run: false })
     }
 }
 

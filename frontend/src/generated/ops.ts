@@ -76,6 +76,8 @@ import type { Subscriptions } from "./Subscriptions";
 import type { Timer } from "./Timer";
 import type { TimerCancelled } from "./TimerCancelled";
 import type { TimerSet } from "./TimerSet";
+import type { TrialRun } from "./TrialRun";
+import type { TrialStarted } from "./TrialStarted";
 import type { Unsubscribe } from "./Unsubscribe";
 import type { Unsubscribed } from "./Unsubscribed";
 
@@ -91,6 +93,7 @@ export interface Ops {
   list_chats: { input: ListChats; output: Chats };
   propose_change: { input: ProposeChange; output: Proposed };
   preview_change: { input: PreviewChange; output: ChangePreview };
+  trial_run: { input: TrialRun; output: TrialStarted };
   get_proposal: { input: GetProposal; output: ProposalDetail };
   submit_review: { input: SubmitReview; output: ReviewRecorded };
   request_secrets: { input: SecretRequest; output: RequestOpened };

@@ -32,6 +32,9 @@ import type { NewChat } from "./NewChat";
 import type { PauseState } from "./PauseState";
 import type { Proposal } from "./Proposal";
 import type { ProposalDetail } from "./ProposalDetail";
+import type { ProposalDiff } from "./ProposalDiff";
+import type { ProposalVerdict } from "./ProposalVerdict";
+import type { ProposalView } from "./ProposalView";
 import type { RevertRequest } from "./RevertRequest";
 import type { Reverted } from "./Reverted";
 import type { RevokeAccess } from "./RevokeAccess";
@@ -72,6 +75,9 @@ export interface Routes {
   secrets: { method: "GET"; path: "/api/v1/secrets"; params: Record<string, never>; query: never; body: never; response: Array<SecretGroupView> };
   set_secret: { method: "PUT"; path: "/api/v1/secrets/{name}"; params: { name: string }; query: never; body: SecretValue; response: Saved };
   proposals: { method: "GET"; path: "/api/v1/proposals"; params: Record<string, never>; query: never; body: never; response: Array<Proposal> };
+  proposal_view: { method: "GET"; path: "/api/v1/proposals/{id}"; params: { id: string }; query: never; body: never; response: ProposalView };
+  proposal_diff: { method: "GET"; path: "/api/v1/proposals/{id}/diff"; params: { id: string }; query: never; body: never; response: ProposalDiff };
+  decide_proposal: { method: "POST"; path: "/api/v1/proposals/{id}/decision"; params: { id: string }; query: never; body: ProposalVerdict; response: ProposalView };
   revert: { method: "POST"; path: "/api/v1/revert"; params: Record<string, never>; query: never; body: RevertRequest; response: Reverted };
   pause: { method: "POST"; path: "/api/v1/pause"; params: Record<string, never>; query: never; body: never; response: PauseState };
   resume: { method: "POST"; path: "/api/v1/resume"; params: Record<string, never>; query: never; body: never; response: PauseState };
@@ -107,6 +113,9 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   secrets: { method: "GET", path: "/api/v1/secrets" },
   set_secret: { method: "PUT", path: "/api/v1/secrets/{name}" },
   proposals: { method: "GET", path: "/api/v1/proposals" },
+  proposal_view: { method: "GET", path: "/api/v1/proposals/{id}" },
+  proposal_diff: { method: "GET", path: "/api/v1/proposals/{id}/diff" },
+  decide_proposal: { method: "POST", path: "/api/v1/proposals/{id}/decision" },
   revert: { method: "POST", path: "/api/v1/revert" },
   pause: { method: "POST", path: "/api/v1/pause" },
   resume: { method: "POST", path: "/api/v1/resume" },

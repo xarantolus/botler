@@ -4,6 +4,7 @@
 // outcome read-only.
 import { computed, reactive, ref } from "vue";
 import { call } from "../../api/client";
+import { confirmDecision } from "../../confirm";
 import type { Dialog, DialogView, SecretInput } from "../../generated";
 import { dialogStatusColor } from "../../lib/runs";
 import { notifyError, notifySuccess } from "../../notify";
@@ -34,12 +35,12 @@ async function done() {
   await Promise.all([refreshDialogs(), refreshStatus()]);
 }
 
-async function answer(text: string) {
+async function answer(text: string, reason?: string) {
   const answer = text.trim();
   if (!answer || busy.value) return;
   busy.value = answer;
   try {
-    await call("answer_dialog", { params: { id: d.value.id }, body: { answer } });
+    await call("answer_dialog", { params: { id: d.value.id }, body: { answer, reason } });
     notifySuccess("Answered", `${d.value.question} → ${answer}`);
     free.value = "";
     await done();
@@ -69,6 +70,13 @@ async function submitSecrets(decline: boolean) {
 function fieldKind(file: string | null | undefined): string {
   if (!file) return "Environment variable";
   return file.includes("/.ssh/") ? `SSH private key at ${file}` : `File ${file}`;
+}
+
+/** Approving a change takes an optional comment, rejecting it a reason (the agent reads both). */
+async function onCta(c: string) {
+  if (d.value.kind !== "approval" || (c !== "approve" && c !== "reject")) return answer(c);
+  const ok = await confirmDecision(c === "approve");
+  if (ok) await answer(c, ok.reason || undefined);
 }
 
 const formComplete = computed(() => (view.value.form ?? []).every((f) => values[f.name]));
@@ -124,6 +132,9 @@ function onFreeKey(e: KeyboardEvent) {
       <template v-if="!open">
         <p v-if="d.answer" class="text-sm">
           <span class="text-muted">Answer:</span> <strong class="text-highlighted">{{ d.answer }}</strong>
+          <ULink v-if="d.proposal_id" :to="`/proposals/${d.proposal_id}`" class="ms-2 text-primary hover:underline">
+            Review
+          </ULink>
         </p>
         <p v-if="d.abort_reason" class="text-sm text-muted">
           {{ d.status === "expired" ? "Expired" : "Withdrawn" }}: {{ d.abort_reason }}
@@ -178,6 +189,15 @@ function onFreeKey(e: KeyboardEvent) {
       <!-- Approvals and questions with choices. -->
       <div v-else-if="d.ctas.length" class="flex flex-wrap justify-end gap-2">
         <UButton
+          v-if="d.proposal_id"
+          :to="`/proposals/${d.proposal_id}`"
+          icon="i-lucide-file-diff"
+          label="Review changes"
+          color="neutral"
+          variant="outline"
+          class="me-auto"
+        />
+        <UButton
           v-for="c in d.ctas"
           :key="c"
           v-bind="ctaButton(c)"
@@ -185,7 +205,7 @@ function onFreeKey(e: KeyboardEvent) {
           class="capitalize"
           :loading="busy === c"
           :disabled="!!busy && busy !== c"
-          @click="answer(c)"
+          @click="onCta(c)"
         />
       </div>
 

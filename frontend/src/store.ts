@@ -9,6 +9,7 @@ import type {
   Dialogs,
   HubStatus,
   Instance,
+  Proposal,
   SessionView,
   Usage,
 } from "./generated";
@@ -24,6 +25,8 @@ export interface AppState {
   usage: Usage | null;
   instances: Instance[];
   dialogs: Dialogs | null;
+  /** The latest proposals, newest first; patched live as they move. */
+  proposals: Proposal[] | null;
   events: BotlerEvent[];
   /** Latest known status per chat: from the live stream, or the wake phase of a fetch. */
   liveStatus: Record<string, AgentStatus>;
@@ -48,6 +51,7 @@ export const state = plainReactive<AppState>({
   usage: null,
   instances: [],
   dialogs: null,
+  proposals: null,
   events: [],
   liveStatus: {},
   outbox: {},
@@ -114,6 +118,21 @@ export function refreshDialogs() {
   return guarded("Loading requests", async () => {
     state.dialogs = await call("dialogs", {});
   });
+}
+
+export function refreshProposals() {
+  return guarded("Loading proposals", async () => {
+    state.proposals = await call("proposals", {});
+  });
+}
+
+/** A proposal moved (live): replace or add it. */
+export function upsertProposal(p: Proposal) {
+  const list = state.proposals ?? [];
+  const i = list.findIndex((x) => x.id === p.id);
+  if (i >= 0) list.splice(i, 1, p);
+  else list.unshift(p);
+  state.proposals = list;
 }
 
 export function refreshEvents() {
@@ -185,6 +204,7 @@ export function refreshAll() {
     refreshUsage(),
     refreshInstances(),
     refreshDialogs(),
+    refreshProposals(),
     refreshEvents(),
     sessionFor ? refreshSession(sessionFor) : Promise.resolve(),
   ]);

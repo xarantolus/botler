@@ -26,6 +26,7 @@ pub mod ops;
 pub mod phase;
 
 pub mod prompt;
+pub mod review;
 pub mod router;
 pub mod scheduler;
 pub mod search;
@@ -36,6 +37,7 @@ pub mod sessions;
 pub mod supervisor;
 pub mod template;
 pub mod transactions;
+pub mod trials;
 pub mod web;
 pub mod wire;
 

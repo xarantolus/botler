@@ -90,6 +90,17 @@ def preview_change(*, branch: str) -> dict[str, Any]:
     return call("preview_change", {"branch": branch})
 
 
+def trial_run(*, branch: str, job: str, minutes: int | None = None) -> dict[str, Any]:
+    """Try a job or service from your pushed branch (agents/<you>/...) for a few minutes before proposing it: its definition and image from the branch, only secret groups you hold, its own empty `state`. emit_event, send_message and set_timer are recorded, not carried out (they return dry_run: true). When it exits or its minutes are up, a trial.finished event brings the outcome, logs tail and the events it would have emitted.
+
+    Args:
+        branch: Your pushed branch, e.g. `agents/botler/mail-watch`.
+        job: The job or service (`jobs/<job>/` on the branch).
+        minutes: How long it may run, 1 to 10 (default 3). Then it is stopped: the normal end of a service.
+    """
+    return call("trial_run", {"branch": branch, "job": job, "minutes": minutes})
+
+
 def get_proposal(*, id: str) -> dict[str, Any]:
     """A proposal's status, deployment summary, gate report and review notes."""
     return call("get_proposal", {"id": id})

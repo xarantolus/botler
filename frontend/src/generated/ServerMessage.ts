@@ -2,8 +2,9 @@
 import type { AgentStatus } from "./AgentStatus";
 import type { BotlerEvent } from "./BotlerEvent";
 import type { DialogNotice } from "./DialogNotice";
+import type { Proposal } from "./Proposal";
 
 /**
  * Server to client.
  */
-export type ServerMessage = { "kind": "ready" } | { "kind": "error", error: string, } | { "kind": "lagged", missed: number, } | { "kind": "event", event: BotlerEvent, } | { "kind": "instance", instance: string, status: AgentStatus, } | { "kind": "dialog", notice: DialogNotice, } | { "kind": "pi", instance: string, event: Record<string, unknown>, };
+export type ServerMessage = { "kind": "ready" } | { "kind": "error", error: string, } | { "kind": "lagged", missed: number, } | { "kind": "event", event: BotlerEvent, } | { "kind": "instance", instance: string, status: AgentStatus, } | { "kind": "dialog", notice: DialogNotice, } | { "kind": "proposal", proposal: Proposal, } | { "kind": "pi", instance: string, event: Record<string, unknown>, };

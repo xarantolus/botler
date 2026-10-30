@@ -73,6 +73,7 @@ async fn reviewed_change_without_escalations_merges_and_applies() {
     assert!(transactions::submit_review(&e.hub, "someone-else", &p.id, Verdict::Approve, "ok").await.is_err());
     transactions::submit_review(&e.hub, &reviewer, &p.id, Verdict::Approve, "Does what it says.").await.unwrap();
     let p = wait_for(&e, &p.id, &[ProposalStatus::Merged]).await;
+    assert!(p.decision.unwrap().starts_with("merged without asking you"), "the user sees why they were not asked");
     assert_eq!(e.hub.repo.main().await.unwrap(), p.merged_commit.unwrap());
     assert!(e.hub.applied().await.defs.triggers.keys().any(|k| k.ends_with("#digest")), "applied");
     e.route().await;
@@ -117,8 +118,44 @@ async fn capability_changes_go_to_the_user() {
         .find(|d| d.proposal_id.as_deref() == Some(p.id.as_str()))
         .unwrap();
     assert!(dialog.detail.unwrap().contains("secret `OPENROUTER_API_KEY`"));
-    transactions::on_approval(&e.hub, &p.id, true).await.unwrap();
-    wait_for(&e, &p.id, &[ProposalStatus::Merged]).await;
+    assert!(p.decision.unwrap().contains("need your approval"));
+    transactions::on_approval(&e.hub, &p.id, true, Some("ok, needed for the digest")).await.unwrap();
+    let p = wait_for(&e, &p.id, &[ProposalStatus::Merged]).await;
+    assert_eq!(p.decided_by.as_deref(), Some(transactions::USER));
+    assert_eq!(p.decision_reason.as_deref(), Some("ok, needed for the digest"));
+}
+
+#[tokio::test]
+async fn the_user_rejects_in_flight_with_a_reason_the_agent_reads() {
+    let e = env().await;
+    with_key(&e).await;
+    push_branch(&e, "agents/botler/digest", &[("triggers/digest.toml", TRIGGER)]);
+    let p = transactions::propose(&e.hub, "botler", "agents/botler/digest", "Morning digest").await.unwrap();
+    let p = wait_for(&e, &p.id, &[ProposalStatus::Reviewing]).await;
+    // Approving needs the checks to finish; rejecting needs a reason.
+    assert!(transactions::on_approval(&e.hub, &p.id, true, None).await.is_err());
+    assert!(transactions::on_approval(&e.hub, &p.id, false, Some("  ")).await.is_err());
+    transactions::on_approval(&e.hub, &p.id, false, Some("Not on weekdays, I sleep in.")).await.unwrap();
+    let p = e.hub.store.proposal(&p.id).await.unwrap();
+    assert_eq!(p.status, ProposalStatus::Rejected);
+    assert_eq!(p.decision.as_deref(), Some("rejected by you while it was being reviewed"));
+
+    // The reviewer's late verdict is recorded but changes nothing.
+    transactions::submit_review(&e.hub, &p.reviewer.unwrap(), &p.id, Verdict::Approve, "fine").await.unwrap();
+    assert_eq!(e.hub.store.proposal(&p.id).await.unwrap().status, ProposalStatus::Rejected);
+    assert!(transactions::on_approval(&e.hub, &p.id, false, Some("again")).await.is_err(), "decided once");
+
+    e.route().await;
+    let updates = e
+        .hub
+        .store
+        .events(&botler_store::EventQuery { kind: Some("proposal.updated".into()), limit: 20, ..Default::default() })
+        .await
+        .unwrap();
+    let rejected = updates.iter().find(|u| u.payload["status"] == "rejected").expect("a rejected update");
+    assert_eq!(rejected.to.as_deref(), Some("botler"));
+    assert_eq!(rejected.payload["reason"], "Not on weekdays, I sleep in.");
+    assert!(!updates.iter().any(|u| u.payload["status"] == "merged"));
 }
 
 #[tokio::test]
