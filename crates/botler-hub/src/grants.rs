@@ -31,8 +31,8 @@ pub struct AccessSpec {
     pub mode: Option<MountMode>,
 }
 
-/// Whether `def`'s chats can hold `r` at all. Errors say what to fix.
-pub fn check(defs: &Definitions, def: &AgentDef, r: &Resource) -> Result<(), OpError> {
+/// Whether `def`'s chats can hold `r` (a mount in `mode`) at all. Errors say what to fix.
+pub fn check(defs: &Definitions, def: &AgentDef, r: &Resource, mode: Option<MountMode>) -> Result<(), OpError> {
     let bad = |m: String| Err(OpError::BadRequest(m));
     match r.kind {
         ResourceKind::Secret => match defs.secret_groups.get(&r.name) {
@@ -51,8 +51,16 @@ pub fn check(defs: &Definitions, def: &AgentDef, r: &Resource) -> Result<(), OpE
             }
             _ => bad(format!("{} is not a service with a `port` in jobs/", r.name)),
         },
-        ResourceKind::Mount if botler_core::defs::valid_name(&r.name) => Ok(()),
-        ResourceKind::Mount => bad(format!("mount name {:?} is not valid", r.name)),
+        ResourceKind::Mount => match defs.mounts.get(&r.name) {
+            None => bad(format!("no share {} in mounts/; define mounts/{}.toml first", r.name, r.name)),
+            Some(m) if m.spec.read_only && mode == Some(MountMode::ReadWrite) => {
+                bad(format!("share {} is read_only = true in mounts/{}.toml", r.name, r.name))
+            }
+            Some(_) if def.spec.env.network() == Network::None => {
+                bad(format!("agent {} has no network, so it cannot reach shares", def.name))
+            }
+            Some(_) => Ok(()),
+        },
         ResourceKind::Event => match defs.events.get(&r.name) {
             Some(e) if e.restricted => Ok(()),
             Some(_) => bad(format!("event type {} is not restricted; subscribe without a grant", r.name)),
@@ -65,18 +73,21 @@ pub fn check(defs: &Definitions, def: &AgentDef, r: &Resource) -> Result<(), OpE
 /// notice when they change).
 pub async fn environment(hub: &Hub, instance: &str) -> Result<(Environment, Vec<String>), HubError> {
     let grants = hub.store.live_grants(instance).await?;
-    let held: Vec<Resource> = grants.iter().map(Grant::resource).collect();
-    Ok((botler_core::defs::environment_of(&held), grants.into_iter().map(|g| g.id).collect()))
+    let held: Vec<(Resource, Option<MountMode>)> = grants.iter().map(|g| (g.resource(), g.mode)).collect();
+    let env = botler_core::defs::environment_of(held.iter().map(|(r, m)| (r, *m)));
+    Ok((env, grants.into_iter().map(|g| g.id).collect()))
 }
 
-/// Whether `instance` (its definition or a live grant) has `r`.
-pub async fn holds(hub: &Hub, instance: &str, r: &Resource) -> Result<bool, HubError> {
+/// Whether `instance` (its definition or a live grant) has `r` (a mount at least in `mode`).
+pub async fn holds(hub: &Hub, instance: &str, r: &Resource, mode: Option<MountMode>) -> Result<bool, HubError> {
     let Some(inst) = hub.store.find_instance(instance).await? else { return Ok(false) };
     let applied = hub.applied().await;
-    if applied.defs.agents.get(&inst.definition).is_some_and(|d| botler_core::defs::env_gives(&d.spec.env, r)) {
+    if applied.defs.agents.get(&inst.definition).is_some_and(|d| botler_core::defs::env_gives(&d.spec.env, r, mode)) {
         return Ok(true);
     }
-    Ok(hub.store.live_grants(instance).await?.iter().any(|g| g.resource() == *r))
+    let wide_enough =
+        |g: &Grant| r.kind != ResourceKind::Mount || g.mode.unwrap_or_default() >= mode.unwrap_or_default();
+    Ok(hub.store.live_grants(instance).await?.iter().any(|g| g.resource() == *r && wide_enough(g)))
 }
 
 /// Record a grant and tell the holder when nobody asked it (`notify`).
@@ -135,7 +146,7 @@ pub async fn request(
     if reason.trim().is_empty() {
         return Err(OpError::BadRequest("give a reason the user can judge".into()));
     }
-    if holds(hub, instance, r).await? {
+    if holds(hub, instance, r, mode).await? {
         return Ok(Requested::Held);
     }
     let inst = hub.store.instance(instance).await?;
@@ -145,7 +156,7 @@ pub async fn request(
         .agents
         .get(&inst.definition)
         .ok_or_else(|| HubError::Undefined { kind: "agent", name: inst.definition.clone() })?;
-    check(&applied.defs, def, r)?;
+    check(&applied.defs, def, r, mode)?;
     if applied.defs.grant_policy.mode(r) == GrantMode::Auto && mode != Some(MountMode::ReadWrite) {
         return Ok(Requested::Granted(give(hub, instance, r, mode, "policy", true).await?));
     }

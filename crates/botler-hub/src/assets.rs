@@ -6,6 +6,8 @@ use std::path::Path;
 use crate::config::Paths;
 
 pub const AGENT_BASE_DOCKERFILE: &str = include_str!("../../../images/agent-base/Dockerfile");
+/// The entrypoint of containers with network shares (bind-mounted, see `mounts.rs`).
+pub const MOUNTS_ENTRYPOINT: &str = include_str!("../../../images/mounts/botler-mounts");
 
 /// Image tag of the agent base image built from [`AGENT_BASE_DOCKERFILE`]: a hash of it (the
 /// whole build context), so a changed Dockerfile rolls out without a version bump.
@@ -22,6 +24,7 @@ pub const AGENT_BASE_LATEST: &str = "localhost/botler/agent-base:latest";
 pub fn unpack(paths: &Paths) -> std::io::Result<()> {
     let root = paths.assets();
     write(&root.join("agent-base/Dockerfile"), AGENT_BASE_DOCKERFILE)?;
+    write(&root.join("mounts/botler-mounts"), MOUNTS_ENTRYPOINT)?;
     // Mount sources must exist even while a package ships no files.
     std::fs::create_dir_all(root.join("extension"))?;
     std::fs::create_dir_all(root.join("sdk"))?;

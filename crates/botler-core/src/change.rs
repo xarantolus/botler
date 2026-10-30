@@ -72,6 +72,16 @@ pub enum Escalation {
         server: String,
         command: String,
     },
+    /// A network share is defined, or its definition (secrets, path, mode) changes.
+    MountDefined {
+        mount: String,
+    },
+    /// An agent or job definition mounts a share (or now read-write).
+    MountGranted {
+        mount: String,
+        to: String,
+        mode: crate::defs::MountMode,
+    },
     /// `policies/grants.toml` lets chats get a resource without asking the user.
     GrantAuto {
         resource: String,
@@ -105,6 +115,11 @@ impl Escalation {
             Self::McpStdioAdded { agent, server, command } => {
                 format!("runs MCP server `{server}` (`{command}`) inside agent `{agent}`'s container")
             }
+            Self::MountDefined { mount } => format!("defines network share `{mount}` (mounts/{mount}.toml)"),
+            Self::MountGranted { mount, to, mode } => format!(
+                "mounts share `{mount}` {} into {to}",
+                if *mode == crate::defs::MountMode::ReadWrite { "read-write" } else { "read-only" }
+            ),
             Self::GrantAuto { resource } => format!("lets any chat get `{resource}` without asking you"),
             Self::InvalidPolicy { detail } => {
                 format!("cannot evaluate protected paths ({detail}); treating all paths as protected")
@@ -262,6 +277,9 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         for e in prev.map_or(&none, |p| &p.spec.env).escalations(&a.spec.env) {
             let agent = a.name.clone();
             esc.insert(match e {
+                EnvEscalation::Mount { name, mode } => {
+                    Escalation::MountGranted { mount: name, to: format!("agent `{agent}`"), mode }
+                }
                 EnvEscalation::Network => Escalation::NetworkOpened { agent },
                 EnvEscalation::Service(service) => Escalation::McpAccessAdded { agent, service },
                 EnvEscalation::McpStdio { server, command } => Escalation::McpStdioAdded { agent, server, command },
@@ -296,6 +314,11 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
                 }
             }
         }
+        for e in prev.map_or(&none, |p| &p.spec.env).escalations(&j.spec.env) {
+            if let EnvEscalation::Mount { name, mode } = e {
+                esc.insert(Escalation::MountGranted { mount: name, to: format!("job `{}`", j.name), mode });
+            }
+        }
         for (op, lim) in &j.spec.limits {
             let baseline = prev.and_then(|p| p.spec.limits.get(op)).copied().unwrap_or_else(|| default_limit(op));
             if !lim.is_at_most(&baseline) {
@@ -314,6 +337,12 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         }
         if prev.is_some_and(|p| p.approval) && !t.approval {
             esc.insert(Escalation::ApprovalRemoved { tool: t.name.clone() });
+        }
+    }
+
+    for m in new.mounts.values() {
+        if old.mounts.get(&m.name).is_none_or(|o| o.spec != m.spec) {
+            esc.insert(Escalation::MountDefined { mount: m.name.clone() });
         }
     }
 
@@ -336,6 +365,7 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
     diff_items(&mut items, "secret", &old.secrets, &new.secrets);
     diff_items(&mut items, "tool", &old.tools, &new.tools);
     diff_items(&mut items, "event type", &old.events, &new.events);
+    diff_items(&mut items, "mount", &old.mounts, &new.mounts);
 
     let mut triggers = Vec::new();
     for t in new.triggers.values() {
@@ -957,5 +987,41 @@ mod tests {
         let t = base().with("policies/grants.toml", "[resources]\n\"disk:x\" = \"auto\"\n");
         let bad: Vec<String> = load(&t).errors().map(|d| d.message.clone()).collect();
         assert!(bad.iter().any(|m| m.contains("unknown resource kind")), "{bad:?}");
+    }
+
+    #[test]
+    fn mounts_are_validated_and_escalate() {
+        use crate::defs::MountMode;
+        let nas = "[[group]]\nname = \"gitlab\"\nclass = \"container\"\n[[group.secret]]\nname = \"GITLAB_TOKEN\"\n\
+                   [[group]]\nname = \"nas\"\nclass = \"container\"\n[[group.secret]]\nname = \"NAS_HOST\"\n\
+                   [[group.secret]]\nname = \"NAS_USER\"\n[[group.secret]]\nname = \"NAS_PASS\"\n";
+        let tree = |agent: &str, mount: &str| {
+            base()
+                .with("secrets.toml", nas)
+                .with("mounts/photos.toml", mount)
+                .with("agents/main/agent.toml", format!("kind = \"persistent\"\n{agent}"))
+        };
+        let share = "type = \"smb\"\nsecrets = \"nas\"\nremote_path = \"photos\"\npath = \"/mnt/photos\"\n";
+        let old = defs(&base().with("secrets.toml", nas));
+        let new = defs(&tree("mounts = { photos = \"ro\" }\n", share));
+        let s = preview(&old, &new, &[], Utc::now());
+        assert!(s.escalations.contains(&Escalation::MountDefined { mount: "photos".into() }), "{s:?}");
+        let granted =
+            Escalation::MountGranted { mount: "photos".into(), to: "agent `main`".into(), mode: MountMode::ReadOnly };
+        assert!(s.escalations.contains(&granted), "{s:?}");
+        assert!(s.items.iter().any(|i| i.kind == "mount" && i.name == "photos"));
+        // Unchanged: nothing to approve again.
+        assert!(preview(&new, &new, &[], Utc::now()).escalations.is_empty());
+
+        let errors = |t: &MemTree| load(t).errors().map(|d| d.message.clone()).collect::<Vec<_>>();
+        let rw = errors(&tree("mounts = { photos = \"rw\" }\n", share));
+        assert!(rw.iter().any(|e| e.contains("read_only = true") && e.contains("cannot be \"rw\"")), "{rw:?}");
+        let missing = errors(&tree("mounts = { other = \"ro\" }\n", share));
+        assert!(missing.iter().any(|e| e.contains("mount \"other\" is not defined")), "{missing:?}");
+        let webdav = errors(&tree("", "type = \"webdav\"\nsecrets = \"nas\"\npath = \"/mnt/photos\"\n"));
+        assert!(webdav.iter().any(|e| e.contains("NAS_HOST") && e.contains("_URL")), "{webdav:?}");
+        assert!(webdav.iter().any(|e| e.contains("no secret ending in _URL")), "{webdav:?}");
+        let hub = errors(&tree("", "type = \"smb\"\nsecrets = \"gitlab-x\"\npath = \"/mnt/photos\"\n"));
+        assert!(hub.iter().any(|e| e.contains("secret group gitlab-x is not declared")), "{hub:?}");
     }
 }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use botler_core::catalog;
-use botler_core::defs::{AgentDef, Budget, Environment, Workspace};
+use botler_core::defs::{AgentDef, Budget, Environment, MountMode, Workspace};
 use botler_core::loops::TurnLog;
 use botler_core::payloads::{
     AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, EnvironmentUpdatedPayload, MessagePayload, SendMode,
@@ -58,6 +58,10 @@ pub struct LiveAgent {
     /// it before looking up the delivery that started the turn.
     delivering: Mutex<()>,
     kill: Mutex<Option<oneshot::Sender<()>>>,
+    /// Set when it mounts a share read-write: pending uploads are drained through it before a stop.
+    drain: Option<Arc<dyn botler_runtime::Containers>>,
+    /// Shares that failed to mount have been reported (once per wake).
+    mounts_reported: AtomicBool,
 }
 
 impl LiveAgent {
@@ -88,6 +92,9 @@ impl LiveAgent {
 
     async fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
+        if let Some(containers) = &self.drain {
+            crate::mounts::drain(containers, &self.container).await;
+        }
         if let Some(k) = self.kill.lock().await.take()
             && k.send(()).is_err()
         {
@@ -186,6 +193,14 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
         return Ok(());
     }
     let agent = ensure_awake(hub, &instance).await?;
+    if !agent.env.env.mounts.is_empty() && !agent.mounts_reported.load(Ordering::SeqCst) {
+        // pi answers only once the mount entrypoint has handed over to it.
+        agent.pi.is_busy().await?;
+        let failed = crate::mounts::failures(hub, &agent.container, &agent.env.env).await?;
+        let notes = crate::mounts::report(hub, name, &failed).await?;
+        agent.changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(notes);
+        agent.mounts_reported.store(true, Ordering::SeqCst);
+    }
     // A turn this loop started may not show as busy yet: queued messages wait for it too.
     let mut started = false;
     let changes = std::mem::take(&mut *agent.changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
@@ -374,6 +389,8 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         error: std::sync::Mutex::default(),
         delivering: Mutex::default(),
         kill: Mutex::new(Some(attached.kill)),
+        drain: env.mounts.values().any(|m| *m == MountMode::ReadWrite).then(|| hub.containers.clone()),
+        mounts_reported: AtomicBool::new(false),
     });
     hub.agents.live.lock().await.insert(instance.name.clone(), agent.clone());
     hub.store.set_instance_state(&instance.name, InstanceState::Running, Some(&spec.name)).await?;

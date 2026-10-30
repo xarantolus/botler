@@ -455,6 +455,11 @@ async fn grants_and_subscriptions_follow_the_chat() {
     assert_eq!(s.add_grant("dev-1", &nas, None, "policy").await.unwrap().id, g.id, "holding it twice is one grant");
     let m = s.add_grant("dev-1", &"mount:photos".parse().unwrap(), Some(MountMode::ReadOnly), "user").await.unwrap();
     assert_eq!(m.mode, Some(MountMode::ReadOnly));
+    // Read-write over read-only widens the same grant; read-only again changes nothing.
+    let photos = "mount:photos".parse().unwrap();
+    let w = s.add_grant("dev-1", &photos, Some(MountMode::ReadWrite), "user").await.unwrap();
+    assert_eq!((w.id.as_str(), w.mode), (m.id.as_str(), Some(MountMode::ReadWrite)));
+    assert_eq!(s.add_grant("dev-1", &photos, None, "user").await.unwrap().mode, Some(MountMode::ReadWrite));
     assert_eq!(s.live_grants("dev-1").await.unwrap().len(), 2);
     let sub = s
         .add_subscription(&NewSubscription {

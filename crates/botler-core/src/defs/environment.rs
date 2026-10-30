@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{Network, Publish, StdioMcp, Workspace};
+use super::{MountMode, Network, Publish, StdioMcp, Workspace};
 
 /// A runnable's container: image, home, secrets, network and what it may reach. `agent.toml` and
 /// `job.toml` hold these keys directly; keys that only apply to one kind are rejected on the
@@ -30,6 +30,9 @@ pub struct Environment {
     /// Secret groups (from `secrets.toml`) delivered into the container.
     #[serde(default)]
     pub secrets: Vec<String>,
+    /// Network shares from `mounts/`, by name, and how: `mounts = { nas-photos = "ro" }`.
+    #[serde(default)]
+    pub mounts: BTreeMap<String, MountMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<Network>,
     /// Agents: services (jobs with `lifetime = "service"` and a `port`) whose MCP server this
@@ -71,6 +74,11 @@ pub enum EnvEscalation {
     Home(String),
     /// A port published on the host.
     Port(Publish),
+    /// A share mounted where it was not, or now read-write.
+    Mount {
+        name: String,
+        mode: MountMode,
+    },
 }
 
 impl Environment {
@@ -126,6 +134,10 @@ impl Environment {
         add(&mut env.tools, &with.tools);
         add(&mut env.publish, &with.publish);
         env.mcp_stdio.extend(with.mcp_stdio.clone());
+        for (name, mode) in &with.mounts {
+            let m = env.mounts.entry(name.clone()).or_insert(*mode);
+            *m = (*m).max(*mode);
+        }
         let escalations = self.escalations(&env);
         (env, escalations)
     }
@@ -150,6 +162,11 @@ impl Environment {
             out.push(EnvEscalation::Home(home.clone()));
         }
         out.extend(new.publish.iter().filter(|p| !self.publish.contains(p)).cloned().map(EnvEscalation::Port));
+        for (name, mode) in &new.mounts {
+            if self.mounts.get(name).is_none_or(|old| old < mode) {
+                out.push(EnvEscalation::Mount { name: name.clone(), mode: *mode });
+            }
+        }
         out
     }
 }
@@ -170,6 +187,7 @@ mod tests {
             mcp = ["notes"]
             tools = ["web.*"]
             mcp_stdio = { fs = { command = ["fs-server"] } }
+            mounts = { nas = "ro", docs = "rw" }
             "#);
         let (merged, esc) = def.extend(&env(r#"
             secrets = ["github", "gitlab"]
@@ -179,12 +197,15 @@ mod tests {
             home = "groundstation"
             mcp_stdio = { fs = { command = ["fs-server", "--write"] }, git = { command = ["git-mcp"] } }
             publish = [{ port = 80, host_port = 8080 }]
+            mounts = { nas = "rw" }
             "#));
         assert_eq!(merged.secrets, ["github", "gitlab"]);
         assert_eq!(merged.mcp, ["notes", "calendar"]);
         assert_eq!(merged.network(), Network::Default);
         assert_eq!(merged.home.as_deref(), Some("groundstation"));
         assert_eq!(merged.mcp_stdio["fs"].command, ["fs-server", "--write"]);
+        // Mounts it does not name stay as they were.
+        assert_eq!(merged.mounts["docs"], MountMode::ReadWrite);
         let publish = Publish { port: 80, host_port: 8080, bind: "0.0.0.0".into() };
         assert_eq!(
             esc,
@@ -197,6 +218,7 @@ mod tests {
                 EnvEscalation::Tools("github.*".into()),
                 EnvEscalation::Home("groundstation".into()),
                 EnvEscalation::Port(publish),
+                EnvEscalation::Mount { name: "nas".into(), mode: MountMode::ReadWrite },
             ]
         );
     }

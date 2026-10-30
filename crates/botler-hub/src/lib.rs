@@ -22,6 +22,7 @@ pub mod loops;
 pub mod mcp;
 pub mod memory;
 pub mod migrate;
+pub mod mounts;
 pub mod notify;
 pub mod ops;
 pub mod phase;

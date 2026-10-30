@@ -53,6 +53,10 @@ struct State {
     networks: HashSet<String>,
     /// Attached containers that are not pi (e.g. the gate) print this and exit with this code.
     script: (String, i32),
+    /// `exec`s run, as (container, command).
+    execs: Vec<(String, Vec<String>)>,
+    /// Shares the fake mount entrypoint reports as failed, with the error.
+    mount_failures: BTreeMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -148,6 +152,48 @@ impl Fake {
         self.lock().script = (output.to_string(), code);
     }
 
+    pub fn execs(&self) -> Vec<(String, Vec<String>)> {
+        self.lock().execs.clone()
+    }
+
+    /// The mount entrypoint reports share `name` as unavailable with `error` (until cleared).
+    pub fn set_mount_failure(&self, name: &str, error: Option<&str>) {
+        let mut st = self.lock();
+        match error {
+            Some(e) => st.mount_failures.insert(name.into(), e.into()),
+            None => st.mount_failures.remove(name),
+        };
+    }
+
+    /// The command after the mount entrypoint (`sh .../botler-mounts up -- <command>`), and, if
+    /// there is one, play the entrypoint: report each listed share in the status directory
+    /// mounted at `/botler/mounts`, as ok or as set by [`Fake::set_mount_failure`].
+    fn unwrap_mounts(&self, spec: &ContainerSpec) -> Result<Vec<String>> {
+        let Some(dashes) = spec.command.iter().position(|c| c == "--") else { return Ok(spec.command.clone()) };
+        if !spec.command.iter().any(|c| c.ends_with("botler-mounts")) {
+            return Ok(spec.command.clone());
+        }
+        let dir = spec.mounts.iter().find_map(|m| match m {
+            crate::container::Mount::Bind { src, dst, .. } if dst == "/botler/mounts" => Some(src.clone()),
+            _ => None,
+        });
+        let io = |e: std::io::Error| ContainerError::Io { binary: "fake".into(), source: e };
+        if let Some(dir) = dir {
+            let list = std::fs::read_to_string(dir.join("list")).map_err(io)?;
+            let failures = self.lock().mount_failures.clone();
+            for name in list.lines().filter_map(|l| l.split('|').next()).filter(|n| !n.is_empty()) {
+                match failures.get(name) {
+                    Some(e) => {
+                        std::fs::write(dir.join(format!("{name}.state")), "failed\n").map_err(io)?;
+                        std::fs::write(dir.join(format!("{name}.error")), format!("{e}\n")).map_err(io)?;
+                    }
+                    None => std::fs::write(dir.join(format!("{name}.state")), "ok\n").map_err(io)?,
+                }
+            }
+        }
+        Ok(spec.command[dashes + 1..].to_vec())
+    }
+
     /// Make attached containers exit immediately with code 125, like a failed `podman run`.
     pub fn set_crash_on_start(&self, crash: bool) {
         self.lock().crash_on_start = crash;
@@ -239,6 +285,7 @@ impl Containers for Fake {
 
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {
         Self::check_mounts(spec)?;
+        self.unwrap_mounts(spec)?;
         let mut st = self.lock();
         let fail = |stderr: String| ContainerError::Command {
             binary: "fake".into(),
@@ -269,7 +316,8 @@ impl Containers for Fake {
 
     async fn run_attached(&self, spec: &ContainerSpec) -> Result<Attached> {
         Self::check_mounts(spec)?;
-        if spec.command.first().is_some_and(|c| c != "pi") {
+        let command = self.unwrap_mounts(spec)?;
+        if command.first().is_some_and(|c| c != "pi") {
             let (output, code) = self.lock().script.clone();
             let (hub_w, _pi_r) = tokio::io::duplex(64);
             let (mut pi_w, hub_r) = tokio::io::duplex(1 << 16);
@@ -438,6 +486,15 @@ impl Containers for Fake {
     async fn ensure_network(&self, name: &str) -> Result<()> {
         self.lock().networks.insert(name.into());
         Ok(())
+    }
+
+    async fn exec(&self, name: &str, command: &[String]) -> Result<String> {
+        let mut st = self.lock();
+        if !st.containers.get(name).is_some_and(|c| c.running) {
+            return Err(ContainerError::NotFound(name.into()));
+        }
+        st.execs.push((name.into(), command.to_vec()));
+        Ok(String::new())
     }
 }
 

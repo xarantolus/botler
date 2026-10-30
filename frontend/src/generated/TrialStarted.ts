@@ -2,6 +2,7 @@
 
 export type TrialStarted = { run_id: string, minutes: number, 
 /**
- * Secret groups the job declares that you do not hold: it runs without them.
+ * Secret groups (and `mount:<name>` shares) the job declares that you do not hold: it runs
+ * without them. Shares you hold are mounted read-only.
  */
 withheld_secrets: Array<string>, note: string, };

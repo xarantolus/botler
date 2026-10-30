@@ -36,7 +36,7 @@ async fn held_secret_groups(hub: &Hub, instance: &str) -> Result<Vec<String>> {
 
 /// Start a trial of `def` (from commit `head` of `branch`) for `instance`, stopped after `minutes`.
 /// The image builds in the background; the outcome arrives as `trial.finished`. Returns the run
-/// and the secret groups withheld.
+/// and the secret groups (and `mount:<name>` shares) withheld.
 pub async fn start(
     hub: &Arc<Hub>,
     instance: &str,
@@ -64,9 +64,18 @@ pub async fn start(
         applied.defs.secrets_for(std::slice::from_ref(g), &[]).iter().all(|s| s.class == SecretClass::Container)
     };
     let mut env = def.spec.env.clone();
-    let (given, withheld): (Vec<String>, Vec<String>) =
+    let (given, mut withheld): (Vec<String>, Vec<String>) =
         env.secrets.drain(..).partition(|g| held.contains(g) && container_only(g));
     env.secrets = given;
+    // Shares the caller holds, read-only: a trial never writes to them.
+    for name in std::mem::take(&mut env.mounts).into_keys() {
+        let r = botler_core::defs::Resource::new(botler_core::defs::ResourceKind::Mount, name.clone());
+        if crate::grants::holds(hub, instance, &r, None).await? {
+            env.mounts.insert(name, botler_core::defs::MountMode::ReadOnly);
+        } else {
+            withheld.push(r.to_string());
+        }
+    }
     // Not reachable as the service, nor from the network: those belong to the deployed one.
     env.port = None;
     env.publish.clear();

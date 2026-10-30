@@ -28,6 +28,13 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION
 
 RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
+# Network shares (mounts/): rclone and fusermount3 for the hub's `botler-mounts` entrypoint. The
+# hub adds `--device /dev/fuse --cap-add SYS_ADMIN` only to containers that hold a share.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fuse3 \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=docker.io/rclone/rclone:1.75.2 /usr/local/bin/rclone /usr/local/bin/rclone
+
 # Fixed paths the hub mounts into every agent container.
 #   /botler/agent-dir   rendered pi config (models.json, mcp.json, tools.json, AGENTS.md)  ro
 #   /botler/extension   botler pi extension                                                    ro
@@ -37,6 +44,8 @@ RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | env UV_INSTALL_DI
 #   /home/agent         the agent's persistent home ($HOME, working directory)                 rw
 #   /home/agent/monorepo  the agent's monorepo clone (workspace = "monorepo")                  rw
 #   /inbox/files        uploads delivered to this instance                                     ro
+#   /opt/botler/botler-mounts  entrypoint mounting the shares the container holds              ro
+#   /botler/mounts      their list and status (with shares only)                               rw
 # Everything else (including /tmp) is wiped when the agent sleeps: containers are removed.
 ENV PI_CODING_AGENT_DIR=/botler/agent-dir \
     PI_TELEMETRY=0 \
