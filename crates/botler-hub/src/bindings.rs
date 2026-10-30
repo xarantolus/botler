@@ -144,8 +144,8 @@ fn ops_ts(cfg: &Config, names: &Names) -> String {
     let ops: Vec<(&str, String, String)> = OPS
         .iter()
         .map(|o| {
-            let (input, output) = o.ts_names(cfg);
-            (o.name(), input, output)
+            let (input, output) = (o.ts_names)(cfg);
+            (o.name, input, output)
         })
         .collect();
     let types: Vec<&str> = ops.iter().flat_map(|(_, i, o)| [i.as_str(), o.as_str()]).collect();
@@ -178,7 +178,7 @@ pub fn generate(dir: &Path) -> Result<(), BindingsError> {
     let mut ex = Exporter { cfg: &cfg, names: BTreeMap::new(), seen: HashSet::new(), error: None };
     route_types(&mut ex);
     for op in OPS {
-        op.export_types(&mut ex);
+        (op.export_types)(&mut ex);
     }
     ex.add::<crate::live::ClientMessage>();
     ex.add::<crate::live::ServerMessage>();

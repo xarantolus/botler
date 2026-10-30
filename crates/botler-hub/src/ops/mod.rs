@@ -12,7 +12,6 @@ mod state;
 mod timers;
 
 use std::future::Future;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use botler_core::defs::Capability;
@@ -180,116 +179,97 @@ pub trait Op: DeserializeOwned + JsonSchema + TS + Send + 'static {
     fn call(self, hub: &Arc<Hub>, caller: &Caller) -> impl Future<Output = Result<Self::Output, OpError>> + Send;
 }
 
-/// An [`Op`] with its types erased, as [`OPS`] holds it.
-pub trait AnyOp: Sync {
-    fn name(&self) -> &'static str;
-    fn description(&self) -> &'static str;
-    fn who(&self) -> Who;
-    fn ends_turn(&self) -> bool;
+/// An [`Op`] with its types erased, as [`OPS`] lists it.
+pub struct OpSpec {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub who: Who,
+    pub ends_turn: bool,
     /// JSON Schema of the input.
-    fn schema(&self) -> Value;
+    pub schema: fn() -> Value,
     /// TypeScript names of the input and output types.
-    fn ts_names(&self, cfg: &ts_rs::Config) -> (String, String);
+    pub ts_names: fn(&ts_rs::Config) -> (String, String),
     /// Export the input and output types with their dependencies.
-    fn export_types(&self, ex: &mut crate::bindings::Exporter<'_>);
-    fn run<'a>(&'a self, hub: &'a Arc<Hub>, caller: &'a Caller, input: Value) -> BoxFuture<'a, OpResult>;
+    pub export_types: fn(&mut crate::bindings::Exporter<'_>),
+    run: for<'a> fn(&'a Arc<Hub>, &'a Caller, Value) -> BoxFuture<'a, OpResult>,
 }
 
-struct Registered<T>(PhantomData<fn() -> T>);
-
-const fn op<T: Op>() -> Registered<T> {
-    Registered(PhantomData)
+const fn op<T: Op>() -> OpSpec {
+    OpSpec {
+        name: T::NAME,
+        description: T::DESCRIPTION,
+        who: T::WHO,
+        ends_turn: T::ENDS_TURN,
+        schema: schema::<T>,
+        ts_names: |cfg| (T::name(cfg), T::Output::name(cfg)),
+        export_types: |ex| {
+            ex.export::<T>();
+            ex.export::<T::Output>();
+        },
+        run: run::<T>,
+    }
 }
 
-impl<T: Op> AnyOp for Registered<T> {
-    fn name(&self) -> &'static str {
-        T::NAME
-    }
-    fn description(&self) -> &'static str {
-        T::DESCRIPTION
-    }
-    fn who(&self) -> Who {
-        T::WHO
-    }
-    fn ends_turn(&self) -> bool {
-        T::ENDS_TURN
-    }
-    fn schema(&self) -> Value {
-        schema::<T>()
-    }
-    fn ts_names(&self, cfg: &ts_rs::Config) -> (String, String) {
-        (T::name(cfg), T::Output::name(cfg))
-    }
-    fn export_types(&self, ex: &mut crate::bindings::Exporter<'_>) {
-        ex.export::<T>();
-        ex.export::<T::Output>();
-    }
-    fn run<'a>(&'a self, hub: &'a Arc<Hub>, caller: &'a Caller, input: Value) -> BoxFuture<'a, OpResult> {
-        Box::pin(async move {
-            let input: T = serde_json::from_value(if input.is_null() { json!({}) } else { input })
-                .map_err(|e| OpError::BadRequest(e.to_string()))?;
-            to_json(&input.call(hub, caller).await?)
-        })
-    }
+fn run<'a, T: Op>(hub: &'a Arc<Hub>, caller: &'a Caller, input: Value) -> BoxFuture<'a, OpResult> {
+    Box::pin(async move {
+        let input: T = serde_json::from_value(if input.is_null() { json!({}) } else { input })
+            .map_err(|e| OpError::BadRequest(e.to_string()))?;
+        to_json(&input.call(hub, caller).await?)
+    })
 }
 
 /// Every op, in the order agents see them.
-pub static OPS: &[&dyn AnyOp] = &[
-    &op::<SendMessage>(),
-    &op::<EmitEvent>(),
-    &op::<SetTimer>(),
-    &op::<CancelTimer>(),
-    &op::<ListTimers>(),
-    &op::<SetChatTitle>(),
-    &op::<SpawnAgent>(),
-    &op::<ListChats>(),
-    &op::<ProposeChange>(),
-    &op::<PreviewChange>(),
-    &op::<GetProposal>(),
-    &op::<SubmitReview>(),
-    &op::<secret_requests::SecretRequest>(),
-    &op::<ListRequests>(),
-    &op::<CancelRequest>(),
-    &op::<ArchiveReady>(),
-    &op::<ListEventTypes>(),
-    &op::<ReadSession>(),
-    &op::<memory::MemoryWrite>(),
-    &op::<memory::MemoryAppend>(),
-    &op::<memory::MemoryDelete>(),
-    &op::<memory::MemoryRead>(),
-    &op::<memory::MemoryList>(),
-    &op::<memory::MemoryHistory>(),
-    &op::<GetEvents>(),
-    &op::<AskUser>(),
-    &op::<GetRunLogs>(),
-    &op::<GetIncident>(),
-    &op::<GetIncidentHistory>(),
-    &op::<ResolveIncident>(),
-    &op::<StateGet>(),
-    &op::<StateSet>(),
-    &op::<health::Health>(),
+pub static OPS: &[OpSpec] = &[
+    op::<SendMessage>(),
+    op::<EmitEvent>(),
+    op::<SetTimer>(),
+    op::<CancelTimer>(),
+    op::<ListTimers>(),
+    op::<SetChatTitle>(),
+    op::<SpawnAgent>(),
+    op::<ListChats>(),
+    op::<ProposeChange>(),
+    op::<PreviewChange>(),
+    op::<GetProposal>(),
+    op::<SubmitReview>(),
+    op::<secret_requests::SecretRequest>(),
+    op::<ListRequests>(),
+    op::<CancelRequest>(),
+    op::<ArchiveReady>(),
+    op::<ListEventTypes>(),
+    op::<ReadSession>(),
+    op::<memory::MemoryWrite>(),
+    op::<memory::MemoryAppend>(),
+    op::<memory::MemoryDelete>(),
+    op::<memory::MemoryRead>(),
+    op::<memory::MemoryList>(),
+    op::<memory::MemoryHistory>(),
+    op::<GetEvents>(),
+    op::<AskUser>(),
+    op::<GetRunLogs>(),
+    op::<GetIncident>(),
+    op::<GetIncidentHistory>(),
+    op::<ResolveIncident>(),
+    op::<StateGet>(),
+    op::<StateSet>(),
+    op::<health::Health>(),
 ];
 
-/// The op called `name`.
-pub fn find(name: &str) -> Option<&'static dyn AnyOp> {
-    OPS.iter().copied().find(|o| o.name() == name)
-}
-
 /// The ops `caller` may call.
-pub fn visible(caller: &Caller) -> impl Iterator<Item = &'static dyn AnyOp> + '_ {
-    OPS.iter().copied().filter(|o| o.who().admits(caller))
+pub fn visible(caller: &Caller) -> impl Iterator<Item = &'static OpSpec> + '_ {
+    OPS.iter().filter(|o| o.who.admits(caller))
 }
 
 /// Names of the ops that end the agent's turn ([`Op::ENDS_TURN`]).
 pub fn turn_ending() -> impl Iterator<Item = &'static str> {
-    OPS.iter().filter(|o| o.ends_turn()).map(|o| o.name())
+    OPS.iter().filter(|o| o.ends_turn).map(|o| o.name)
 }
 
 /// The turn-ending ops `caller` may call, as `{name, description, parameters}`.
 pub fn turn_ending_tools(caller: &Caller) -> Value {
     visible(caller)
-        .filter(|o| o.ends_turn())
-        .map(|o| json!({ "name": o.name(), "description": o.description(), "parameters": o.schema() }))
+        .filter(|o| o.ends_turn)
+        .map(|o| json!({ "name": o.name, "description": o.description, "parameters": (o.schema)() }))
         .collect()
 }
 
@@ -319,12 +299,21 @@ async fn limit(hub: &Hub, caller: &Caller, op: &str) -> Result<(), OpError> {
 
 /// Run operation `name` for `caller`.
 pub async fn call(hub: &Arc<Hub>, caller: &Caller, name: &str, input: Value) -> OpResult {
-    let op = find(name).ok_or_else(|| OpError::Unknown(name.into()))?;
-    if !op.who().admits(caller) {
+    let op = OPS.iter().find(|o| o.name == name).ok_or_else(|| OpError::Unknown(name.into()))?;
+    if !op.who.admits(caller) {
         return Err(OpError::Forbidden(format!("{name} is not available to you")));
     }
     limit(hub, caller, name).await?;
-    op.run(hub, caller, input).await
+    (op.run)(hub, caller, input).await
+}
+
+/// The instance a chat name or slug refers to (or a definition's, for one not started yet).
+async fn resolve_chat(hub: &Hub, name: &str) -> Result<String, OpError> {
+    match hub.store.resolve_instance(name).await? {
+        Some(i) => Ok(i.name),
+        None if hub.applied().await.defs.agents.contains_key(name) => Ok(name.into()),
+        None => Err(OpError::BadRequest(format!("no agent instance or chat named {name}"))),
+    }
 }
 
 /// A time given as exactly one of an RFC 3339 `at` or a delay `after` from `now`.

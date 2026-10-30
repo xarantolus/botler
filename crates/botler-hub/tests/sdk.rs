@@ -49,7 +49,7 @@ fn generate() -> String {
          from ._client import call\n",
     );
     for op in OPS {
-        let schema = op.schema();
+        let schema = (op.schema)();
         let empty = serde_json::Map::new();
         // A schema without properties is either an empty struct or a union (`oneOf`).
         let union = schema.get("oneOf").is_some() || schema.get("anyOf").is_some();
@@ -96,13 +96,13 @@ fn generate() -> String {
         let call_args = if props.is_some() { format!("{{{}}}", body.join(", ")) } else { "args".into() };
         let args_section = if arg_docs.is_empty() { String::new() } else { format!("\n\n    Args:{arg_docs}\n    ") };
         // Every op returns a JSON object or a list of them.
-        let (_, output) = op.ts_names(&ts_rs::Config::new());
+        let (_, output) = (op.ts_names)(&ts_rs::Config::new());
         let ret = if output.starts_with("Array<") { "list[dict[str, Any]]" } else { "dict[str, Any]" };
         let _ = write!(
             out,
             "\n\ndef {name}({sig}) -> {ret}:\n    \"\"\"{desc}{args_section}\"\"\"\n    return call(\"{name}\", {call_args})\n",
-            name = op.name(),
-            desc = doc(op.description()),
+            name = op.name,
+            desc = doc(op.description),
         );
     }
     out

@@ -12,7 +12,7 @@ use serde_json::Value;
 use ts_rs::TS;
 use uuid::Uuid;
 
-use super::{Caller, Op, OpError, Who};
+use super::{Caller, Op, OpError, Who, resolve_chat};
 use crate::auth::Principal;
 use crate::hub::Hub;
 
@@ -45,11 +45,7 @@ impl Op for SendMessage {
     type Output = MessageSent;
 
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<MessageSent, OpError> {
-        let to = match hub.store.resolve_instance(&self.to).await? {
-            Some(i) => i.name,
-            None if hub.applied().await.defs.agents.contains_key(&self.to) => self.to.clone(),
-            None => return Err(OpError::BadRequest(format!("no agent instance or chat named {}", self.to))),
-        };
+        let to = resolve_chat(hub, &self.to).await?;
         if caller.instance() == Some(to.as_str()) {
             return Err(OpError::BadRequest(
                 "that is you: a message to yourself would only wake you again. To remember something, write it to a \

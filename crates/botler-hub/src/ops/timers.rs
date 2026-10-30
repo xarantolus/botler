@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use ts_rs::TS;
 
-use super::{Caller, Op, OpError, Who, parse_when};
+use super::{Caller, Op, OpError, Who, parse_when, resolve_chat};
 use crate::auth::Principal;
 use crate::hub::Hub;
 
@@ -50,15 +50,8 @@ impl Op for SetTimer {
         if fire_at < now - chrono::Duration::minutes(1) {
             return Err(OpError::BadRequest(format!("{fire_at} is in the past")));
         }
-        let target = match self.instance.or_else(|| caller.instance().map(String::from)) {
-            Some(i) => {
-                let i = match hub.store.resolve_instance(&i).await? {
-                    Some(inst) => inst.name,
-                    None if hub.applied().await.defs.agents.contains_key(&i) => i,
-                    None => return Err(OpError::BadRequest(format!("no agent instance or chat named {i}"))),
-                };
-                Target::Resume(i)
-            }
+        let target = match self.instance.as_deref().or(caller.instance()) {
+            Some(i) => Target::Resume(resolve_chat(hub, i).await?),
             None => return Err(OpError::BadRequest("`instance` is required".into())),
         };
         let t = hub
