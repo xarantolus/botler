@@ -102,13 +102,10 @@ export function eventSummary(ev: BotlerEvent): string {
       return `timer ${b.payload.timer_id}${b.payload.note ? `: ${b.payload.note}` : ""}`;
     case "schedule":
       return `schedule ${b.payload.trigger}${b.payload.skipped ? ` (${b.payload.skipped} missed)` : ""}`;
-<<<<<<< HEAD
     case "chat.restored":
       return `restored; changed while archived: ${b.payload.changes.join("; ")}`;
-=======
     case "manual":
       return `${b.payload.runnable} started by hand`;
->>>>>>> 145861c
     case "access.changed":
       return `${b.payload.resource} ${b.payload.change}`;
     case "environment.updated":

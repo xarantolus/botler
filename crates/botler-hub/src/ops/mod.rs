@@ -162,8 +162,6 @@ pub enum Who {
     Capable(Capability),
     /// Only agents with this capability.
     AgentsWith(Capability),
-    /// Only the user.
-    User,
 }
 
 impl Who {
@@ -177,7 +175,6 @@ impl Who {
             Self::Runs => run,
             Self::Capable(cap) => c.may(cap),
             Self::AgentsWith(cap) => c.capabilities.contains(&cap),
-            Self::User => matches!(c.principal, Principal::User),
         }
     }
 }
@@ -285,15 +282,12 @@ pub static OPS: &[OpSpec] = &[
     op::<StateGet>(),
     op::<StateSet>(),
     op::<health::Health>(),
-<<<<<<< HEAD
     op::<StorageUsage>(),
     op::<ClearChatCaches>(),
     op::<DeleteChat>(),
     op::<CollectGarbage>(),
-=======
     op::<RunJob>(),
     op::<RestartService>(),
->>>>>>> 145861c
 ];
 
 /// The ops `caller` may call.

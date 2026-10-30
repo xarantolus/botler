@@ -11,11 +11,8 @@ import ProposalsView from "./views/ProposalsView.vue";
 import RequestsView from "./views/RequestsView.vue";
 import SearchView from "./views/SearchView.vue";
 import SecretsView from "./views/SecretsView.vue";
-<<<<<<< HEAD
 import StorageView from "./views/StorageView.vue";
-=======
 import SystemView from "./views/SystemView.vue";
->>>>>>> 145861c
 import "./style.css";
 
 const router = createRouter({

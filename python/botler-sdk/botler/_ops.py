@@ -367,7 +367,6 @@ def health(*, ok: bool, reason: str | None = None) -> dict[str, Any]:
     return call("health", {"ok": ok, "reason": reason})
 
 
-<<<<<<< HEAD
 def storage_usage(*, refresh: bool | None = None) -> dict[str, Any]:
     """Disk use of the data directory by chat (home, workspace, session) and by kind (shared homes, images, exports, logs, search index, memory), largest first.
 
@@ -398,7 +397,8 @@ def collect_garbage(*, logs_older_than: str | None = None) -> dict[str, Any]:
         logs_older_than: Delete run logs older than this (default `30d`).
     """
     return call("collect_garbage", {"logs_older_than": logs_older_than})
-=======
+
+
 def run_job(*, job: str) -> dict[str, Any]:
     """Start a oneshot job now, with a `manual` event. Honours pause and the overlap policy of the job's trigger (skip by default)."""
     return call("run_job", {"job": job})
@@ -407,4 +407,3 @@ def run_job(*, job: str) -> dict[str, Any]:
 def restart_service(*, service: str) -> dict[str, Any]:
     """Stop a service; the reconciler starts it again right away."""
     return call("restart_service", {"service": service})
->>>>>>> 145861c

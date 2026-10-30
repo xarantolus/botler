@@ -10,11 +10,15 @@ import type { Cancelled } from "./Cancelled";
 import type { ChatCreated } from "./ChatCreated";
 import type { ChatRestored } from "./ChatRestored";
 import type { ClearBreaker } from "./ClearBreaker";
+import type { ClearChatCaches } from "./ClearChatCaches";
+import type { CollectGarbage } from "./CollectGarbage";
 import type { Connections } from "./Connections";
+import type { DeleteChat } from "./DeleteChat";
 import type { DialogAnswer } from "./DialogAnswer";
 import type { Dialogs } from "./Dialogs";
 import type { EventPosted } from "./EventPosted";
 import type { EventsQuery } from "./EventsQuery";
+import type { Freed } from "./Freed";
 import type { GetProposal } from "./GetProposal";
 import type { GetRunLogs } from "./GetRunLogs";
 import type { HubStatus } from "./HubStatus";
@@ -38,6 +42,7 @@ import type { ProposalDiff } from "./ProposalDiff";
 import type { ProposalVerdict } from "./ProposalVerdict";
 import type { ProposalView } from "./ProposalView";
 import type { RestartService } from "./RestartService";
+import type { RestoreRequest } from "./RestoreRequest";
 import type { RevertRequest } from "./RevertRequest";
 import type { Reverted } from "./Reverted";
 import type { RevokeAccess } from "./RevokeAccess";
@@ -53,6 +58,8 @@ import type { SecretValue } from "./SecretValue";
 import type { SecretsOutcome } from "./SecretsOutcome";
 import type { ServiceRestarted } from "./ServiceRestarted";
 import type { SessionView } from "./SessionView";
+import type { StorageOverview } from "./StorageOverview";
+import type { StorageUsage } from "./StorageUsage";
 import type { Submission } from "./Submission";
 import type { SystemView } from "./SystemView";
 import type { Trace } from "./Trace";
@@ -77,7 +84,7 @@ export interface Routes {
   session: { method: "GET"; path: "/api/v1/sessions/{instance}"; params: { instance: string }; query: never; body: never; response: SessionView };
   new_chat: { method: "POST"; path: "/api/v1/chats"; params: Record<string, never>; query: never; body: NewChat; response: ChatCreated };
   archive_chat: { method: "POST"; path: "/api/v1/chats/{instance}/archive"; params: { instance: string }; query: never; body: ArchiveRequest; response: ArchiveOutcome };
-  restore_chat: { method: "POST"; path: "/api/v1/chats/{instance}/restore"; params: { instance: string }; query: never; body: never; response: ChatRestored };
+  restore_chat: { method: "POST"; path: "/api/v1/chats/{instance}/restore"; params: { instance: string }; query: never; body: RestoreRequest; response: ChatRestored };
   runs: { method: "GET"; path: "/api/v1/runs"; params: Record<string, never>; query: RunsQuery; body: never; response: Array<Run> };
   system: { method: "GET"; path: "/api/v1/system"; params: Record<string, never>; query: never; body: never; response: SystemView };
   incidents: { method: "GET"; path: "/api/v1/incidents"; params: Record<string, never>; query: never; body: never; response: Array<Incident> };
@@ -97,6 +104,10 @@ export interface Routes {
   memory_read: { method: "POST"; path: "/api/v1/ops/memory_read"; params: Record<string, never>; query: never; body: MemoryRead; response: MemoryFile };
   memory_write: { method: "POST"; path: "/api/v1/ops/memory_write"; params: Record<string, never>; query: never; body: MemoryWrite; response: MemoryWritten };
   memory_history: { method: "POST"; path: "/api/v1/ops/memory_history"; params: Record<string, never>; query: never; body: MemoryHistory; response: Array<MemoryCommit> };
+  storage_usage: { method: "POST"; path: "/api/v1/ops/storage_usage"; params: Record<string, never>; query: never; body: StorageUsage; response: StorageOverview };
+  clear_chat_caches: { method: "POST"; path: "/api/v1/ops/clear_chat_caches"; params: Record<string, never>; query: never; body: ClearChatCaches; response: Freed };
+  delete_chat: { method: "POST"; path: "/api/v1/ops/delete_chat"; params: Record<string, never>; query: never; body: DeleteChat; response: Freed };
+  collect_garbage: { method: "POST"; path: "/api/v1/ops/collect_garbage"; params: Record<string, never>; query: never; body: CollectGarbage; response: Freed };
   connections: { method: "POST"; path: "/api/v1/ops/list_connections"; params: Record<string, never>; query: never; body: ListConnections; response: Connections };
   revoke_access: { method: "POST"; path: "/api/v1/ops/revoke_access"; params: Record<string, never>; query: never; body: RevokeAccess; response: AccessRevoked };
   unsubscribe: { method: "POST"; path: "/api/v1/ops/unsubscribe"; params: Record<string, never>; query: never; body: Unsubscribe; response: Unsubscribed };
@@ -139,6 +150,10 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   memory_read: { method: "POST", path: "/api/v1/ops/memory_read" },
   memory_write: { method: "POST", path: "/api/v1/ops/memory_write" },
   memory_history: { method: "POST", path: "/api/v1/ops/memory_history" },
+  storage_usage: { method: "POST", path: "/api/v1/ops/storage_usage" },
+  clear_chat_caches: { method: "POST", path: "/api/v1/ops/clear_chat_caches" },
+  delete_chat: { method: "POST", path: "/api/v1/ops/delete_chat" },
+  collect_garbage: { method: "POST", path: "/api/v1/ops/collect_garbage" },
   connections: { method: "POST", path: "/api/v1/ops/list_connections" },
   revoke_access: { method: "POST", path: "/api/v1/ops/revoke_access" },
   unsubscribe: { method: "POST", path: "/api/v1/ops/unsubscribe" },

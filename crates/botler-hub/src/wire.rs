@@ -394,14 +394,9 @@ routes! {
     session: GET "/api/v1/sessions/{instance}" => SessionView;
     new_chat: POST "/api/v1/chats", body: NewChat => ChatCreated;
     archive_chat: POST "/api/v1/chats/{instance}/archive", body: ArchiveRequest => ArchiveOutcome;
-<<<<<<< HEAD
     restore_chat: POST "/api/v1/chats/{instance}/restore", body: RestoreRequest => ChatRestored;
-    runs: GET "/api/v1/runs" => Vec<Run>;
-=======
-    restore_chat: POST "/api/v1/chats/{instance}/restore" => ChatRestored;
     runs: GET "/api/v1/runs", query: crate::api::RunsQuery => Vec<Run>;
     system: GET "/api/v1/system" => crate::system::SystemView;
->>>>>>> 145861c
     incidents: GET "/api/v1/incidents" => Vec<Incident>;
     secrets: GET "/api/v1/secrets" => Vec<SecretGroupView>;
     set_secret: PUT "/api/v1/secrets/{name}", body: SecretValue => Saved;
