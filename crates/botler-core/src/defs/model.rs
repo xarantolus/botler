@@ -126,6 +126,30 @@ pub struct Defaults {
     /// is told (`reply.overdue`).
     #[serde(default = "Defaults::reply_within")]
     pub reply_within: HumanDuration,
+    /// Archive chats dormant this long (with the agent's handover), or `"never"`. Persistent and
+    /// always-on agents are never archived automatically.
+    #[serde(default = "Defaults::auto_archive_after", with = "never_or_duration")]
+    #[schemars(with = "String")]
+    pub auto_archive_after: Option<HumanDuration>,
+}
+
+/// `"never"` or a duration.
+mod never_or_duration {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::duration::HumanDuration;
+
+    pub fn serialize<S: Serializer>(v: &Option<HumanDuration>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(d) => d.serialize(s),
+            None => s.serialize_str("never"),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<HumanDuration>, D::Error> {
+        let s = String::deserialize(d)?;
+        if s == "never" { Ok(None) } else { s.parse().map(Some).map_err(serde::de::Error::custom) }
+    }
 }
 
 impl Defaults {
@@ -137,6 +161,9 @@ impl Defaults {
     }
     fn max_spawn_depth() -> u32 {
         8
+    }
+    fn auto_archive_after() -> Option<HumanDuration> {
+        Some(HumanDuration::from_secs(30 * 24 * 3600))
     }
     fn reply_within() -> HumanDuration {
         HumanDuration::from_secs(20 * 60)
@@ -150,6 +177,7 @@ impl Default for Defaults {
             job_timeout: Self::job_timeout(),
             budget: Budget::default(),
             max_spawn_depth: Self::max_spawn_depth(),
+            auto_archive_after: Self::auto_archive_after(),
             reply_within: Self::reply_within(),
         }
     }

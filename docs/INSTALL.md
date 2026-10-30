@@ -65,14 +65,18 @@ tailscale serve --bg 7420     # https://<host>.<tailnet>.ts.net -> http://127.0.
 ```sh
 botler backup ~/botler-$(date +%F).tar.zst            # safe while the hub runs
 botler backup --no-key ~/botler-$(date +%F).tar.zst   # without secrets.key
+botler backup --full ~/botler-$(date +%F).tar.zst     # also what git ignores (see below)
 ```
 
 The archive holds the database (an online snapshot), `secrets.key`, the monorepo (`repo.git`),
-`memory` (agent memory with its git history), pi sessions, agent workspaces and homes, and
-uploads. It leaves out what the hub
-rebuilds (exports, worktrees, rendered agent dirs, unpacked assets, images) and run logs. It is
-compressed with zstd if installed, else gzip, and created with mode 0600: **the key plus the
-database decrypt every secret**, so store it accordingly.
+`memory` (agent memory with its git history), pi sessions, agent workspaces and homes (archived
+chats' homes as their packed `homes/<chat>.tar.zst`), and uploads. It leaves out what the hub
+rebuilds (exports, worktrees, rendered agent dirs, unpacked assets, images, `search.db`) and run
+logs. Inside homes, shared homes and workspaces it also leaves out what git ignores in each git
+checkout (`node_modules`, `target`, `.venv`, ...; nested `.gitignore` files and `!` negations
+count, files outside a checkout are always kept); `--full` includes them. It is compressed with
+zstd if installed, else gzip, and created with mode 0600: **the key plus the database decrypt
+every secret**, so store it accordingly.
 
 To restore, stop the hub and unpack into an empty data directory:
 
@@ -86,6 +90,20 @@ systemctl --user start botler
 A `--no-key` backup restores without `secrets.key`; the hub makes a new key, so enter every secret
 again with `botler secret set <NAME>` (`botler secret list` shows them) and issue a new
 `botler token` (tokens are signed with the key).
+
+## Disk space
+
+`botler storage` lists disk use by chat (home, workspace, session) and by kind (shared homes,
+images, exports, run logs, search index, memory), largest first; the web app's Storage view shows
+the same and can archive a chat, clear a sleeping chat's caches, delete an archived chat for good
+and collect garbage. `botler gc` removes images and exports nothing uses and run logs older than
+`--logs-older-than` (default `30d`).
+
+Chats dormant longer than `auto_archive_after` (`botler.toml` `[defaults]`, default `30d`,
+`"never"` to turn it off) are asked to hand over and archived, at most four per hour; persistent
+and always-on agents never are. Archiving deletes what is rebuildable in the chat's home (git-ignored
+files, `~/.cache`) and packs the rest into `homes/<chat>.tar.zst`, which needs `zstd`. Messaging
+the chat unpacks it before it wakes.
 
 ## Upgrading
 

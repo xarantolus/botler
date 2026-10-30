@@ -168,7 +168,7 @@ pub async fn dispatch_pending(hub: &Arc<Hub>) -> Result<()> {
 async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
     let instance = hub.store.instance(name).await?;
     if instance.state == InstanceState::Archived {
-        hub.store.restore_instance(name).await?;
+        crate::restore::restore(hub, name, false).await?;
     }
     if let Some(b) = hub.store.breaker(&format!("instance:{name}")).await? {
         tracing::debug!(instance = %name, reason = %b.reason, "instance paused by breaker; deliveries wait");
@@ -472,6 +472,7 @@ pub fn home_dir(hub: &Hub, instance: &Instance, env: &Environment) -> std::path:
 }
 
 async fn prepare_home(hub: &Hub, instance: &Instance, def: &AgentDef) -> Result<()> {
+    crate::storage::unpack_home(hub, &instance.name).await?;
     let home = home_dir(hub, instance, &def.spec.env);
     tokio::fs::create_dir_all(&home).await?;
     // Before homes, `workspace = "volume"` agents had a private directory at `/workspace`. The

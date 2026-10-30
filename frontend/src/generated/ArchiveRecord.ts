@@ -16,4 +16,8 @@ reason: string | null, report: HandoverReport | null,
 /**
  * The chat the outstanding work went to.
  */
-handed_to: string | null, at: string, };
+handed_to: string | null, at: string, 
+/**
+ * Disk space freed by cleaning and packing its home after archiving.
+ */
+freed_bytes: number | null, };

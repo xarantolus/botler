@@ -478,6 +478,7 @@ async fn grants_and_subscriptions_follow_the_chat() {
         report: None,
         handed_to: None,
         at: Utc::now(),
+        freed_bytes: None,
     };
     s.archive_instance("dev-1", &rec).await.unwrap();
     assert!(s.active_subscriptions().await.unwrap().is_empty());
