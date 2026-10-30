@@ -42,7 +42,8 @@ journalctl --user -u botler -f              # first start builds the agent base 
 botler token
 ```
 
-Open `http://<host>:7420` and paste the token. The unit runs
+On the host itself, open `http://127.0.0.1:7420` and paste the token; from other devices, see
+below. The unit runs
 `~/.local/bin/botler serve --data ~/.local/share/botler`; edit `ExecStart` if you use another data
 directory. On `systemctl --user stop botler`, the hub stops its agent containers before exiting.
 
@@ -50,15 +51,19 @@ directory. On `systemctl --user stop botler`, the hub stops its agent containers
 
 ## Exposing it privately
 
-The hub listens on `0.0.0.0:7420` over plain HTTP (agent containers reach it through
-`host.containers.internal`). Don't expose that port to the internet; firewall it to your LAN or
-tailnet. For HTTPS, which the PWA and the share target need, put
+The hub listens on `127.0.0.1:7420` (plain HTTP, this machine only). Containers don't use that
+port: they reach the hub over its Unix socket (`<data>/run/hub.sock`, mounted at `/run/botler`),
+which works on any network setup, even for containers without network. To use the web app from
+your other devices with HTTPS, which the PWA and the share target need, put
 [Tailscale](https://tailscale.com) in front of it (enable MagicDNS and HTTPS certificates in the
 tailnet admin console first):
 
 ```sh
 tailscale serve --bg 7420     # https://<host>.<tailnet>.ts.net -> http://127.0.0.1:7420
 ```
+
+To listen elsewhere, pass `--listen` (or set `BOTLER_LISTEN`), e.g. `--listen 0.0.0.0:7420` for
+your LAN. Don't expose the port to the internet.
 
 ## Backup and restore
 

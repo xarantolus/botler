@@ -1,9 +1,14 @@
-"""Transport to the hub's ops API (`POST /api/v1/ops/{name}`). Standard library only."""
+"""Transport to the hub's ops API (`POST /api/v1/ops/{name}`). Standard library only.
+
+Containers reach the hub on its Unix socket (`BOTLER_SOCKET`), which needs no network; without
+one (tests, tools run elsewhere) the SDK uses `BOTLER_URL`."""
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
 from typing import Any
@@ -42,10 +47,52 @@ def _env(name: str, op: str) -> str:
     return value
 
 
+class _UnixConnection(http.client.HTTPConnection):
+    def __init__(self, path: str) -> None:
+        super().__init__("hub", timeout=TIMEOUT_SECONDS)
+        self._path = path
+
+    def connect(self) -> None:
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(TIMEOUT_SECONDS)
+        self.sock.connect(self._path)
+
+
+def _error(op: str, status: int, raw: str, reason: str) -> BotlerError:
+    try:
+        message = str(json.loads(raw)["error"])
+    except (ValueError, KeyError, TypeError):
+        message = raw or reason
+    return BotlerError(op, _CODES.get(status, "internal"), message, status)
+
+
+def _call_socket(op: str, path: str, body: bytes, token: str) -> Any:
+    conn = _UnixConnection(path)
+    try:
+        conn.request(
+            "POST",
+            f"/api/v1/ops/{op}",
+            body=body,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        raw = resp.read()
+    except OSError as e:
+        raise BotlerError(op, "unreachable", f"cannot reach the hub at {path}: {e}") from e
+    finally:
+        conn.close()
+    if resp.status >= 400:
+        raise _error(op, resp.status, raw.decode(errors="replace"), resp.reason)
+    return json.loads(raw or b"null")
+
+
 def call(op: str, args: dict[str, Any]) -> Any:
     """Run hub operation `op`. Arguments that are None are left out (the hub applies defaults)."""
-    url = _env("BOTLER_URL", op).rstrip("/") + f"/api/v1/ops/{op}"
     body = json.dumps({k: v for k, v in args.items() if v is not None}).encode()
+    sock = os.environ.get("BOTLER_SOCKET")
+    if sock:
+        return _call_socket(op, sock, body, _env("BOTLER_TOKEN", op))
+    url = _env("BOTLER_URL", op).rstrip("/") + f"/api/v1/ops/{op}"
     req = urllib.request.Request(
         url,
         data=body,
@@ -56,11 +103,6 @@ def call(op: str, args: dict[str, Any]) -> Any:
         with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
             return json.loads(resp.read() or b"null")
     except urllib.error.HTTPError as e:
-        raw = e.read().decode(errors="replace")
-        try:
-            message = str(json.loads(raw)["error"])
-        except (ValueError, KeyError, TypeError):
-            message = raw or e.reason
-        raise BotlerError(op, _CODES.get(e.code, "internal"), message, e.code) from e
+        raise _error(op, e.code, e.read().decode(errors="replace"), str(e.reason)) from e
     except (urllib.error.URLError, OSError) as e:
         raise BotlerError(op, "unreachable", f"cannot reach the hub at {url}: {e}") from e

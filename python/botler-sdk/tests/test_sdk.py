@@ -5,6 +5,8 @@ import os
 import subprocess
 import sys
 import textwrap
+import socketserver
+import tempfile
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -39,14 +41,20 @@ class FakeHub:
             def log_message(self, *_: Any) -> None:
                 pass
 
+        self.handler = Handler
         self.server = HTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_port}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
 
+class _UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
 @pytest.fixture
 def hub(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeHub]:
     h = FakeHub()
+    monkeypatch.delenv("BOTLER_SOCKET", raising=False)
     monkeypatch.setenv("BOTLER_URL", h.url)
     monkeypatch.setenv("BOTLER_TOKEN", "tok")
     yield h
@@ -106,9 +114,37 @@ def test_hub_errors_raise_botler_error(hub: FakeHub) -> None:
     assert (e.value.code, e.value.status) == ("internal", 500)
 
 
+def test_the_socket_is_used_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In containers the hub's Unix socket needs no network; it wins over BOTLER_URL."""
+    import botler
+
+    h = FakeHub()
+    with tempfile.TemporaryDirectory() as d:
+        path = f"{d}/hub.sock"
+        server = _UnixHTTPServer(path, h.handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        monkeypatch.setenv("BOTLER_SOCKET", path)
+        monkeypatch.setenv("BOTLER_URL", "http://127.0.0.1:9")
+        monkeypatch.setenv("BOTLER_TOKEN", "tok")
+        assert botler.ops.list_timers() == {"ok": True}
+        assert h.calls == [("list_timers", "Bearer tok", {})]
+        h.responses["list_timers"] = (403, {"error": "no"})
+        with pytest.raises(botler.BotlerError) as e:
+            botler.ops.list_timers()
+        assert (e.value.code, e.value.status, e.value.message) == ("forbidden", 403, "no")
+        server.shutdown()
+        server.server_close()
+        monkeypatch.setenv("BOTLER_SOCKET", f"{d}/gone.sock")
+        with pytest.raises(botler.BotlerError) as e:
+            botler.ops.list_timers()
+        assert e.value.code == "unreachable" and e.value.status is None
+    h.server.shutdown()
+
+
 def test_unreachable_and_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
     import botler
 
+    monkeypatch.delenv("BOTLER_SOCKET", raising=False)
     monkeypatch.delenv("BOTLER_URL", raising=False)
     with pytest.raises(botler.BotlerError) as e:
         botler.ops.list_timers()

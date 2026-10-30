@@ -18,6 +18,20 @@ async fn route_loop(hub: Arc<Hub>) {
     }
 }
 
+/// Listen on the hub's Unix socket, replacing one a previous run left behind. Only the hub's user
+/// may connect (containers run as that user under rootless Podman).
+pub fn bind_socket(path: &std::path::Path) -> std::io::Result<tokio::net::UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let listener = tokio::net::UnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
+}
+
 /// Serve until `shutdown` resolves. Startup is recovery: everything is reconciled from the store,
 /// the monorepo and the container runtime before work starts.
 pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()> + Send + 'static) -> Result<()> {
@@ -53,6 +67,14 @@ pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()
     let listener = tokio::net::TcpListener::bind(hub.config.listen).await?;
     tracing::info!(addr = %hub.config.listen, commit = %hub.applied().await.commit, "botler hub listening");
     let app = api::router(hub.clone());
+    let unix = bind_socket(&hub.paths.socket())?;
+    tracing::info!(socket = %hub.paths.socket().display(), "containers reach the hub on its socket");
+    let socket_app = app.clone();
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(unix, socket_app).await {
+            tracing::error!(error = %e, "the hub's socket stopped serving");
+        }
+    });
     let stop_hub = hub.clone();
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {

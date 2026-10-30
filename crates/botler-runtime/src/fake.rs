@@ -269,7 +269,8 @@ impl Containers for Fake {
 
     async fn run_attached(&self, spec: &ContainerSpec) -> Result<Attached> {
         Self::check_mounts(spec)?;
-        if spec.command.first().is_some_and(|c| c != "pi") {
+        // pi runs directly or behind the agent forwarder (`node forward.mjs pi ...`).
+        if !spec.command.iter().take(3).any(|c| c == "pi") {
             let (output, code) = self.lock().script.clone();
             let (hub_w, _pi_r) = tokio::io::duplex(64);
             let (mut pi_w, hub_r) = tokio::io::duplex(1 << 16);

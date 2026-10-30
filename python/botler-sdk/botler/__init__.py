@@ -1,7 +1,7 @@
 """The botler SDK: how jobs, services, tools and agent scripts reach the hub.
 
 The hub mounts this package at /opt/botler/sdk in every container it starts and sets
-`BOTLER_URL`, `BOTLER_TOKEN` and `PYTHONPATH`. The runtime part is standard library only;
+`BOTLER_SOCKET` (or `BOTLER_URL`), `BOTLER_TOKEN` and `PYTHONPATH`. The runtime part is standard library only;
 `Event` and `tool` need pydantic and are imported lazily.
 
 Every hub operation is in `botler.ops` (generated from the hub); the common ones are here.
