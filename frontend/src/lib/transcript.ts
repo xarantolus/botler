@@ -2,7 +2,7 @@
 //
 // This is the only module coupled to the AI SDK's message types (type imports only: `ai` is
 // never bundled). It is pure: the session items from the hub, the dialogs they opened, the
-// messages still in the outbox and what is streaming in become one list of messages:
+// user's messages the hub still holds (queued) and what is streaming in become one list of messages:
 //
 // - the user typing           → a `user` message with a `text` part;
 // - any other delivery        → a `system` message with a `data-envelope` part (an event card);
@@ -11,11 +11,11 @@
 //   result; a call that opened a dialog becomes a `data-dialog` part (the card replaces the
 //   call); a provider error a `data-error` part;
 // - notes and compactions     → `system` messages with `data-note` / `data-compaction`;
-// - the outbox                → `user` messages with `metadata.queued`;
+// - queued messages           → `user` messages with `metadata.queued` (and their delivery id);
 // - streaming text / thinking → appended to the running turn (or a new trailing message).
 
 import type { ChatStatus, UIMessage } from "ai";
-import type { Dialog, SessionItem } from "../generated";
+import type { Dialog, QueuedMessage, SessionItem } from "../generated";
 import { envelopeOf, isUserMessage, type Envelope } from "./envelope";
 import { linkedDialog } from "./events";
 
@@ -32,7 +32,7 @@ export interface MessageMeta {
   model?: string | null;
   /** What the agent turn cost, summed over its steps. */
   costUsd?: number | null;
-  /** Sent by the user, not in the transcript yet. */
+  /** Sent by the user and held by the hub until the turn ends (`delivery` cancels it). */
   queued?: boolean;
   /** Still being written (the live tail). */
   live?: boolean;
@@ -59,17 +59,12 @@ export type TranscriptMessage = UIMessage<MessageMeta, TranscriptData>;
 export type TranscriptPart = TranscriptMessage["parts"][number];
 export type ToolPart = Extract<TranscriptPart, { type: "dynamic-tool" }>;
 
-export interface QueuedMessage {
-  text: string;
-  /** When it was sent (ms since the epoch). */
-  at: number;
-}
-
 export interface TranscriptInput {
   items: SessionItem[];
   /** Dialogs to resolve the links of tool results against. */
   dialogs: Dialog[];
-  outbox: QueuedMessage[];
+  /** The user's messages the hub holds until the agent's turn ends. */
+  queued: QueuedMessage[];
   /** Assistant text and thinking streaming in. */
   streaming: { text: string; thinking: string };
   /** The agent is working on a turn. */
@@ -246,14 +241,14 @@ export function buildTranscript(input: TranscriptInput): Transcript {
     if (text) m.parts.push({ type: "text", text, state: "streaming" });
   }
 
-  input.outbox.forEach((q, i) => {
+  for (const q of input.queued) {
     messages.push({
-      id: `queued:${i}:${q.at}`,
+      id: `queued:${q.delivery}`,
       role: "user",
       parts: [{ type: "text", text: q.text }],
-      metadata: { at: new Date(q.at).toISOString(), queued: true },
+      metadata: { at: q.at, queued: true, delivery: q.delivery },
     });
-  });
+  }
 
   const status: ChatStatus = streaming ? "streaming" : input.busy ? "submitted" : "ready";
   return { messages, status, unresolvedLinks, messageOf };

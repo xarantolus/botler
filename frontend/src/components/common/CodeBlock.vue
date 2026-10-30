@@ -1,10 +1,14 @@
 <script setup lang="ts">
-// Preformatted text (tool arguments and results, JSON payloads, logs), with a copy button.
-import { ref } from "vue";
+// Preformatted text (tool arguments and results, JSON payloads, logs), syntax-highlighted (the
+// language given or detected, lib/highlight.ts), with a copy button.
+import { computed, ref } from "vue";
+import { highlight } from "../../lib/highlight";
 import { notifyError } from "../../notify";
 
-const props = defineProps<{ text: string; label?: string; error?: boolean; maxHeight?: string }>();
+const props = defineProps<{ text: string; label?: string; error?: boolean; maxHeight?: string; language?: string }>();
 const copied = ref(false);
+// Sanitized: highlight.js escapes the text, DOMPurify on top.
+const html = computed(() => (props.error || !props.text ? null : highlight(props.text, props.language).html));
 
 async function copy() {
   try {
@@ -24,7 +28,7 @@ async function copy() {
       class="overflow-auto rounded-md border px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words"
       :class="error ? 'border-error/30 bg-error/5 text-error' : 'border-muted bg-muted text-default'"
       :style="{ maxHeight: maxHeight ?? '24rem' }"
-    >{{ text || "(empty)" }}</pre>
+    ><code v-if="html !== null" v-html="html" /><template v-else>{{ text || "(empty)" }}</template></pre>
     <UButton
       v-if="text"
       :icon="copied ? 'i-lucide-copy-check' : 'i-lucide-copy'"

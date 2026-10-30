@@ -28,7 +28,14 @@ pub const BUILTIN: &[BuiltinEvent] = &[
     BuiltinEvent {
         kind: kinds::MESSAGE,
         summary: "A message from the user or another agent.",
-        fields: &[("text", "the message"), ("files", "paths of attached files under /inbox/files, if any")],
+        fields: &[
+            ("text", "the message"),
+            ("files", "paths of attached files under /inbox/files, if any"),
+            (
+                "mode",
+                "from the user while you worked: `queue` (held until your turn ended) or `steer` (interrupting it)",
+            ),
+        ],
         follow_up: &[FollowUp {
             tool: "get_events",
             args: &[("correlation", "correlation")],

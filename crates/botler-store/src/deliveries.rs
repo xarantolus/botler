@@ -158,6 +158,16 @@ impl Store {
         Ok(())
     }
 
+    /// Drop a delivery that is still pending; false if it is not (delivered, or dropped already).
+    pub async fn cancel_pending(&self, id: &str, note: &str) -> Result<bool> {
+        let r = sqlx::query("UPDATE deliveries SET status = 'dropped', note = ? WHERE id = ? AND status = 'pending'")
+            .bind(note)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() == 1)
+    }
+
     pub async fn drop_delivery(&self, id: &str, note: &str) -> Result<()> {
         sqlx::query("UPDATE deliveries SET status = 'dropped', note = ? WHERE id = ?")
             .bind(note)

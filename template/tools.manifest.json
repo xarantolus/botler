@@ -112,6 +112,13 @@
         "query"
       ],
       "type": "object"
+    },
+    "render": {
+      "items": "results",
+      "kind": "links",
+      "snippet": "snippet",
+      "title": "title",
+      "url": "url"
     }
   }
 ]

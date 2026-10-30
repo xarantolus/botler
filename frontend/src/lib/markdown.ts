@@ -1,7 +1,19 @@
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
+import { highlight } from "./highlight";
 
-const marked = new Marked({ gfm: true, breaks: true, async: false });
+const marked = new Marked({
+  gfm: true,
+  breaks: true,
+  async: false,
+  // Fenced and indented code, highlighted (lib/highlight.ts escapes it).
+  renderer: {
+    code({ text, lang }) {
+      const { html, language } = highlight(text, lang);
+      return `<pre><code class="hljs"${language ? ` data-language="${language}"` : ""}>${html}</code></pre>\n`;
+    },
+  },
+});
 
 // Links open outside the app and never leak the referrer.
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {

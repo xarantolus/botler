@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use botler_core::catalog;
 use botler_core::defs::{AgentDef, Budget, Environment, Workspace};
 use botler_core::loops::TurnLog;
-use botler_core::payloads::{AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, MessagePayload};
+use botler_core::payloads::{AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, MessagePayload, SendMode};
 use botler_core::{Event, Source};
 use botler_runtime::{ContainerSpec, Mount, PiClient, PiError, PiEvent, PiEventKind, Streaming};
 use botler_store::{Delivery, Instance, InstanceState};
@@ -157,10 +157,22 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
         return Ok(());
     }
     let agent = ensure_awake(hub, &instance).await?;
+    // A turn this loop started may not show as busy yet: queued messages wait for it too.
+    let mut started = false;
     for d in hub.store.pending_deliveries(name).await? {
-        deliver_one(hub, &agent, &d).await?;
+        started |= deliver_one(hub, &agent, &d, started).await?;
     }
     Ok(())
+}
+
+/// A message the user queued: held (pending, cancellable) until the agent's turn ends.
+fn is_queued_message(ev: &Event) -> Result<bool> {
+    if ev.source != Source::User || ev.kind != botler_core::event::kinds::MESSAGE {
+        return Ok(false);
+    }
+    let m: MessagePayload =
+        serde_json::from_value(ev.payload.clone()).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+    Ok(m.mode == Some(SendMode::Queue))
 }
 
 /// The text pi receives for one delivery. The botler extension recognises the prefix, drops
@@ -189,11 +201,18 @@ pub fn envelope(
     Ok(format!("botler:delivery {json}"))
 }
 
-async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
+/// Hand one delivery to pi. Returns whether it started a turn; a queued message is left pending
+/// while one runs (`turn_started`: by this dispatch, maybe not reported busy yet).
+async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: bool) -> Result<bool> {
     let ev = hub.store.event(&d.event_id).await?;
+    let busy = agent.pi.is_busy().await?;
+    if (busy || turn_started) && is_queued_message(&ev)? {
+        tracing::debug!(delivery = %d.id, "queued message waits for the turn to end");
+        return Ok(false);
+    }
     let previous = hub.store.last_delivered(&d.instance).await?.and_then(|p| p.delivered_at);
     let text = envelope(d, &ev, hub.applied().await.defs.timezone, Utc::now(), previous)?;
-    let streaming = if agent.pi.is_busy().await? {
+    let streaming = if busy {
         // The user and urgent events interrupt at the next turn boundary; everything else waits.
         Some(if ev.urgent || ev.source == Source::User { Streaming::Steer } else { Streaming::FollowUp })
     } else {
@@ -208,12 +227,12 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
             // would race with a settle that arrives before this response is processed.
             tracing::debug!(delivery = %d.id, ?disposition, "delivered");
             agent.touch();
-            Ok(())
+            Ok(!busy && !d.quiet)
         }
         Err(PiError::Rejected { error, .. }) if d.attempts + 1 >= MAX_ATTEMPTS => {
             tracing::error!(delivery = %d.id, %error, "pi keeps rejecting delivery; dropping it");
             hub.store.drop_delivery(&d.id, &format!("rejected by pi: {error}")).await?;
-            Ok(())
+            Ok(false)
         }
         Err(e) => Err(e.into()),
     }
@@ -500,12 +519,6 @@ async fn container_spec(
         dst: "/botler/extension".into(),
         read_only: true,
     });
-    if !tools.is_empty() {
-        // Tool code runs from the applied main commit (not the agent's own checkout), like
-        // agent-authored pi resources.
-        let export = images::applied_tree(hub, &applied.commit).await?;
-        mounts.push(Mount::Bind { src: export, dst: "/botler/applied".into(), read_only: true });
-    }
     if let Some(src) = pi_res {
         mounts.push(Mount::Bind { src, dst: "/botler/pi".into(), read_only: true });
     }
@@ -862,9 +875,10 @@ fn broadcast_state(hub: &Hub, instance: &str, status: AgentStatus) {
 
 /// An urgent note to the front door (`botler`) from the hub.
 pub async fn alarm(hub: &Hub, text: &str) -> Result<()> {
-    let ev = builtin(BuiltinPayload::Message(MessagePayload { text: text.into(), files: vec![] }), Source::Hub)?
-        .to(botler_core::FRONT_DOOR)
-        .urgent(true);
+    let ev =
+        builtin(BuiltinPayload::Message(MessagePayload { text: text.into(), files: vec![], mode: None }), Source::Hub)?
+            .to(botler_core::FRONT_DOOR)
+            .urgent(true);
     hub.emit(ev).await?;
     Ok(())
 }

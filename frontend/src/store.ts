@@ -27,8 +27,6 @@ export interface AppState {
   events: BotlerEvent[];
   /** Latest known status per chat: from the live stream, or the wake phase of a fetch. */
   liveStatus: Record<string, AgentStatus>;
-  /** Messages the user sent that are not in the transcript yet (queued for delivery). */
-  outbox: Record<string, { text: string; at: number }[]>;
   /** When we first saw a chat waking (for elapsed time). */
   wakeStarted: Record<string, number>;
   session: SessionView | null;
@@ -50,7 +48,6 @@ export const state = plainReactive<AppState>({
   dialogs: null,
   events: [],
   liveStatus: {},
-  outbox: {},
   wakeStarted: {},
   session: null,
   sessionError: null,
@@ -139,26 +136,11 @@ export function refreshSession(name: string) {
       if (now) state.liveStatus[s.instance.name] = now;
       else delete state.liveStatus[s.instance.name];
       trackWake(s.instance.name, s.phase?.phase === "waking" || s.instance.state === "starting");
-      settleOutbox(s);
     } catch (e) {
       if (sessionFor === name) state.sessionError = e instanceof Error ? e.message : String(e);
       throw e;
     }
   });
-}
-
-/** Remember a sent message until the transcript shows it. */
-export function queueSent(instance: string, text: string) {
-  (state.outbox[instance] ??= []).push({ text, at: Date.now() });
-}
-
-function settleOutbox(s: SessionView) {
-  const queued = state.outbox[s.instance.name];
-  if (!queued?.length) return;
-  const texts = s.items.flatMap((it) => (it.kind === "user" ? [it.text] : []));
-  state.outbox[s.instance.name] = queued.filter(
-    (q) => !texts.some((t) => t.includes(q.text)) && !(s.pending === 0 && Date.now() - q.at > 15_000),
-  );
 }
 
 export function clearSession() {

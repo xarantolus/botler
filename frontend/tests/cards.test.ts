@@ -183,7 +183,7 @@ describe("MessageParts", () => {
         },
       ],
       dialogs: [d],
-      outbox: [],
+      queued: [],
       streaming: { text: "", thinking: "" },
       busy: true,
     });

@@ -59,6 +59,7 @@ impl Op for SendMessage {
             botler_core::payloads::BuiltinPayload::Message(botler_core::payloads::MessagePayload {
                 text: self.text,
                 files: vec![],
+                mode: None,
             }),
             caller.source(),
         )?

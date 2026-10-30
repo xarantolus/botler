@@ -35,6 +35,10 @@ struct State {
     /// When set, a prompt starts a turn but does not end it: the test ends it with
     /// [`Fake::pi_event`] (`agent_settled`), after doing things "during" the turn.
     hold_turns: bool,
+    /// Containers whose pi is in a held turn (`get_state` reports it streaming).
+    busy: HashSet<String>,
+    /// The `streamingBehavior` of each accepted prompt, per container.
+    behaviors: BTreeMap<String, Vec<Option<String>>>,
     /// Extra pi events to write to an attached pi's stdout, per container.
     inject: BTreeMap<String, mpsc::UnboundedSender<Value>>,
     /// Delivery ids each pi has seen, persisted per session file like the real extension.
@@ -108,7 +112,16 @@ impl Fake {
 
     /// Make the pi in container `name` emit `event` (e.g. a tool start, or the end of a turn).
     pub fn pi_event(&self, name: &str, event: Value) -> bool {
-        self.lock().inject.get(name).is_some_and(|tx| tx.send(event).is_ok())
+        let mut st = self.lock();
+        if event.get("type").and_then(Value::as_str) == Some("agent_settled") {
+            st.busy.remove(name);
+        }
+        st.inject.get(name).is_some_and(|tx| tx.send(event).is_ok())
+    }
+
+    /// The `streamingBehavior` of each prompt the pi in container `name` accepted (`None`: idle).
+    pub fn prompt_behaviors(&self, name: &str) -> Vec<Option<String>> {
+        self.lock().behaviors.get(name).cloned().unwrap_or_default()
     }
 
     pub fn set_fail_builds(&self, fail: bool) {
@@ -437,6 +450,11 @@ impl Fake {
                 let hold = {
                     let mut st = self.lock();
                     st.prompts.entry(name.into()).or_default().push(text);
+                    let behavior = cmd.get("streamingBehavior").and_then(Value::as_str).map(String::from);
+                    st.behaviors.entry(name.into()).or_default().push(behavior);
+                    if st.hold_turns {
+                        st.busy.insert(name.into());
+                    }
                     st.hold_turns
                 };
                 let mut out = vec![
@@ -449,7 +467,7 @@ impl Fake {
                 }
                 out
             }
-            "get_state" => vec![ok(json!({"isStreaming": false, "isCompacting": false}))],
+            "get_state" => vec![ok(json!({"isStreaming": self.lock().busy.contains(name), "isCompacting": false}))],
             "get_last_assistant_text" => {
                 let text = self.lock().last_reply.get(name).cloned().unwrap_or_else(|| "fake reply".into());
                 vec![ok(json!({"text": text}))]

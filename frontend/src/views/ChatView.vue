@@ -70,7 +70,7 @@ const transcript = computed(() =>
     ? buildTranscript({
         items: session.value.items,
         dialogs: allDialogs.value,
-        outbox: state.outbox[session.value.instance.name] ?? [],
+        queued: session.value.queued,
         streaming: state.streaming,
         busy: session.value.busy,
       })
@@ -211,14 +211,16 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
             :messages="transcript.messages"
             :status="transcript.status"
             :queued-note="queuedNote"
+            :instance="name"
             :start-at-end="!linked"
           />
         </template>
-        <div v-if="name" class="sticky bottom-0 z-10 mt-auto bg-default pb-4 pt-2 sm:pb-6">
+        <div v-if="name" id="chat-composer" class="sticky bottom-0 z-10 mt-auto bg-default pb-4 pt-2 sm:pb-6">
           <ChatComposer
             ref="composer"
             :instance="name"
             :archived="inst?.state === 'archived'"
+            :busy="!!session?.busy || badge?.busy === true"
             @sent="toBottom(true)"
           />
         </div>

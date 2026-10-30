@@ -69,7 +69,7 @@ const dialog = (id: string, extra: Partial<Dialog> = {}): Dialog => ({
 const input = (items: SessionItem[], over: Partial<TranscriptInput> = {}): TranscriptInput => ({
   items,
   dialogs: [],
-  outbox: [],
+  queued: [],
   streaming: { text: "", thinking: "" },
   busy: false,
   ...over,
@@ -233,14 +233,28 @@ describe("buildTranscript", () => {
     expect(t.messages[1]?.metadata?.delivery).toBe("d3");
   });
 
-  it("appends the outbox as queued user messages", () => {
-    const t = buildTranscript(input([user("u1", "hi")], { outbox: [{ text: "later", at: Date.UTC(2026, 9, 30) }] }));
-    expect(t.messages[1]).toEqual({
-      id: `queued:0:${Date.UTC(2026, 9, 30)}`,
-      role: "user",
-      parts: [{ type: "text", text: "later" }],
-      metadata: { at: "2026-10-30T00:00:00.000Z", queued: true },
-    });
+  it("appends the messages the hub holds as queued user messages, cancellable by delivery", () => {
+    const queued = [
+      { delivery: "d7", text: "later", at: "2026-10-30T10:05:00Z", mode: "queue" as const },
+      { delivery: "d8", text: "and this", at: "2026-10-30T10:06:00Z", mode: "queue" as const },
+    ];
+    const t = buildTranscript(input([user("u1", "hi")], { queued, busy: true }));
+    expect(t.messages.slice(1)).toEqual([
+      {
+        id: "queued:d7",
+        role: "user",
+        parts: [{ type: "text", text: "later" }],
+        metadata: { at: "2026-10-30T10:05:00Z", queued: true, delivery: "d7" },
+      },
+      {
+        id: "queued:d8",
+        role: "user",
+        parts: [{ type: "text", text: "and this" }],
+        metadata: { at: "2026-10-30T10:06:00Z", queued: true, delivery: "d8" },
+      },
+    ]);
+    // Delivered: gone from the hub's list, so only the transcript shows it.
+    expect(buildTranscript(input([user("u1", "hi")])).messages).toHaveLength(1);
   });
 
   it("continues the running turn with what streams in", () => {

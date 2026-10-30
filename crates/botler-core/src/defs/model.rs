@@ -613,4 +613,54 @@ pub struct ToolDecl {
     /// Python module path, e.g. `botler_tools_github.issues`.
     pub module: String,
     pub function: String,
+    /// How the web app shows the tool's result; heuristics when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render: Option<ToolRender>,
+}
+
+impl ToolDecl {
+    /// The name pi registers the tool under: model APIs accept `[A-Za-z0-9_-]{1,64}`, manifest
+    /// names are dotted (`weather.forecast` → `weather_forecast`). Mirrors the pi extension.
+    pub fn pi_name(&self) -> String {
+        self.name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).take(64).collect()
+    }
+}
+
+/// A render hint for a tool's result, declared with `@tool(render=...)`. Field names are keys of
+/// the result object; `items` names the key holding the list (the result itself when absent).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ToolRender {
+    /// Link cards: the title linking to the url, with a snippet.
+    Links {
+        #[ts(optional)]
+        items: Option<String>,
+        #[ts(optional)]
+        title: Option<String>,
+        #[ts(optional)]
+        url: Option<String>,
+        #[ts(optional)]
+        snippet: Option<String>,
+    },
+    /// A table of the list's objects with these columns (all keys when absent).
+    Table {
+        #[ts(optional)]
+        items: Option<String>,
+        #[ts(optional)]
+        columns: Option<Vec<String>>,
+    },
+    /// Sanitized markdown: the result string, or its `field`.
+    Markdown {
+        #[ts(optional)]
+        field: Option<String>,
+    },
+    /// The object's scalar fields as a key/value list.
+    Keyvalue,
+    /// An image: the result (a URL, path or data URI), or its `field`.
+    Image {
+        #[ts(optional)]
+        field: Option<String>,
+    },
+    /// Collapsible JSON.
+    Json,
 }

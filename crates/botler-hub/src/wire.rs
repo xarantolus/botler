@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use botler_core::Event;
-use botler_core::defs::SecretClass;
-use botler_core::payloads::SecretsOutcome;
+use botler_core::defs::{SecretClass, ToolRender};
+use botler_core::payloads::{SecretsOutcome, SendMode};
 use botler_store::{Breaker, Delivery, Dialog, Incident, Instance, Proposal, Run, UsageTotals};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -154,6 +154,24 @@ pub struct SessionView {
     /// Waking progress, or why the last wake failed.
     pub phase: Option<WakePhase>,
     pub items: Vec<Item>,
+    /// Render hints of the Python tools that declare one, by the name pi calls them (`web_search`).
+    pub tool_renders: BTreeMap<String, ToolRender>,
+    /// The user's messages not delivered yet (waiting for the turn to end), oldest first.
+    pub queued: Vec<QueuedMessage>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct QueuedMessage {
+    /// Cancel with `DELETE /api/v1/messages/{id}` (this id).
+    pub delivery: String,
+    pub text: String,
+    pub at: DateTime<Utc>,
+    pub mode: SendMode,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct Cancelled {
+    pub delivery: String,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -317,6 +335,7 @@ routes! {
     status: GET "/api/v1/status" => HubStatus;
     usage: GET "/api/v1/usage" => Usage;
     send_message: POST "/api/v1/messages", body: UserMessage => EventPosted;
+    cancel_message: DELETE "/api/v1/messages/{id}" => Cancelled;
     dialogs: GET "/api/v1/dialogs" => Dialogs;
     answer_dialog: POST "/api/v1/dialogs/{id}/answer", body: Answer => DialogAnswer;
     submit_secrets: POST "/api/v1/dialogs/{id}/secrets", body: Submission => SecretsOutcome;

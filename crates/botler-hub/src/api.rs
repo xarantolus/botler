@@ -8,10 +8,10 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use axum::{Extension, Json, Router};
 use botler_core::payloads::{
-    ArchiveRequestedPayload, BuiltinPayload, DialogAnsweredPayload, MessagePayload, SecretsOutcome,
+    ArchiveRequestedPayload, BuiltinPayload, DialogAnsweredPayload, MessagePayload, SecretsOutcome, SendMode,
 };
 use botler_core::{Event, Source};
 use botler_store::{ArchiveRecord, DialogStatus, EventQuery, Incident, Instance, Proposal, Run};
@@ -25,9 +25,9 @@ use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
 use crate::ops::{self, Caller, OpError};
 use crate::wire::{
-    ApiErrorBody, ArchiveOutcome, BreakerCleared, BudgetView, ChatCreated, ChatRestored, DialogAnswer, DialogView,
-    Dialogs, EventPosted, HubStatus, PauseState, ReachedChat, Reverted, RuntimeInfo, Saved, SecretFieldView,
-    SecretGroupView, SessionAnchor, SessionView, Trace, Usage,
+    ApiErrorBody, ArchiveOutcome, BreakerCleared, BudgetView, Cancelled, ChatCreated, ChatRestored, DialogAnswer,
+    DialogView, Dialogs, EventPosted, HubStatus, PauseState, QueuedMessage, ReachedChat, Reverted, RuntimeInfo, Saved,
+    SecretFieldView, SecretGroupView, SessionAnchor, SessionView, Trace, Usage,
 };
 
 type AppState = Arc<Hub>;
@@ -54,6 +54,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/usage", get(usage))
         .route("/api/v1/messages", post(user_message))
+        .route("/api/v1/messages/{id}", delete(cancel_message))
         .route("/api/v1/dialogs", get(dialogs))
         .route("/api/v1/dialogs/{id}/answer", post(answer_dialog))
         .route("/api/v1/dialogs/{id}/secrets", post(submit_secrets))
@@ -253,6 +254,10 @@ pub struct UserMessage {
     #[ts(optional, as = "Option<String>")]
     to: String,
     text: String,
+    /// While the agent works: wait for its turn to end (the default) or interrupt it.
+    #[serde(default)]
+    #[ts(optional, as = "Option<SendMode>")]
+    mode: SendMode,
 }
 
 fn main_instance() -> String {
@@ -265,9 +270,49 @@ async fn user_message(
     Json(m): Json<UserMessage>,
 ) -> ApiResult<Json<EventPosted>> {
     user_only(&p)?;
-    let ev = user_event(BuiltinPayload::Message(MessagePayload { text: m.text, files: vec![] }))?.to(m.to);
+    let payload = MessagePayload { text: m.text, files: vec![], mode: Some(m.mode) };
+    let ev = user_event(BuiltinPayload::Message(payload))?.to(m.to);
     let ev = hub.emit(ev).await?;
     Ok(Json(EventPosted { event_id: ev.id }))
+}
+
+/// Take back a message of the user that is not delivered yet (queued while the agent works).
+async fn cancel_message(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(delivery): Path<String>,
+) -> ApiResult<Json<Cancelled>> {
+    user_only(&p)?;
+    let d = hub.store.delivery(&delivery).await?;
+    if hub.store.event(&d.event_id).await?.source != Source::User {
+        return Err(ApiError(StatusCode::FORBIDDEN, "only your own messages can be taken back".into()));
+    }
+    if !hub.store.cancel_pending(&delivery, "taken back by the user").await? {
+        return Err(ApiError(StatusCode::CONFLICT, "the message was already delivered".into()));
+    }
+    hub.dispatch_notify.notify_one();
+    Ok(Json(Cancelled { delivery }))
+}
+
+/// The user's messages waiting for the agent's turn to end.
+async fn queued(hub: &Hub, instance: &str) -> Result<Vec<QueuedMessage>, ApiError> {
+    let mut out = Vec::new();
+    for d in hub.store.pending_deliveries(instance).await? {
+        let ev = hub.store.event(&d.event_id).await?;
+        if ev.source != Source::User || ev.kind != botler_core::event::kinds::MESSAGE {
+            continue;
+        }
+        let m: MessagePayload = serde_json::from_value(ev.payload.clone()).map_err(|e| {
+            ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("message {} is unreadable: {e}", ev.id))
+        })?;
+        out.push(QueuedMessage {
+            delivery: d.id,
+            text: m.text,
+            at: d.created_at,
+            mode: m.mode.unwrap_or(SendMode::Steer),
+        });
+    }
+    Ok(out)
 }
 
 /// An event from the user.
@@ -427,7 +472,10 @@ async fn session(
     let pending = hub.store.pending_deliveries(&inst.name).await?.len();
     let phase = hub.agents.phase(&inst.name).await;
     let items = crate::sessions::read(&hub, &inst.name).await?;
-    Ok(Json(SessionView { instance: inst, busy, pending, phase, items }))
+    let tool_renders =
+        hub.applied().await.defs.tools.values().filter_map(|t| Some((t.pi_name(), t.render.clone()?))).collect();
+    let queued = queued(&hub, &inst.name).await?;
+    Ok(Json(SessionView { instance: inst, busy, pending, phase, items, tool_renders, queued }))
 }
 
 #[derive(Deserialize, ts_rs::TS)]
@@ -448,7 +496,8 @@ async fn new_chat(
     user_only(&p)?;
     let def = c.definition.unwrap_or_else(|| "chat".into());
     let name = crate::router::new_instance(&hub, &def, None, None).await?;
-    let ev = user_event(BuiltinPayload::Message(MessagePayload { text: c.text, files: vec![] }))?.to(name.clone());
+    let ev = user_event(BuiltinPayload::Message(MessagePayload { text: c.text, files: vec![], mode: None }))?
+        .to(name.clone());
     hub.emit(ev).await?;
     Ok(Json(ChatCreated { instance: name }))
 }
