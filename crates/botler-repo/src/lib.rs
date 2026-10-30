@@ -6,6 +6,7 @@
 //! namespace. The hub never runs git inside an agent-owned checkout: repo-local config there
 //! (`core.fsmonitor`, hooks) would execute as the hub.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -127,11 +128,23 @@ impl Repo {
             return Err(Error::AlreadyExists(self.git_dir.clone()));
         }
         tokio::fs::create_dir_all(&self.git_dir).await?;
+        let result = self.populate_from(template).await;
+        if result.is_err()
+            && let Err(e) = tokio::fs::remove_dir_all(&self.git_dir).await
+        {
+            tracing::warn!(dir = %self.git_dir.display(), error = %e, "could not remove the half-made monorepo");
+        }
+        result
+    }
+
+    async fn populate_from(&self, template: &Path) -> Result<String> {
         self.git(&["init", "--bare", "--initial-branch", MAIN]).await?;
         self.git(&["config", "receive.denyDeletes", "true"]).await?;
         self.git(&["config", "http.receivepack", "true"]).await?;
         self.install_hooks().await?;
-        let mut c = self.cmd();
+        // This git runs in `template`, so a relative git dir would resolve against it.
+        let mut c = Self::base_cmd();
+        c.arg("--git-dir").arg(std::path::absolute(&self.git_dir)?);
         c.arg("--work-tree").arg(template).current_dir(template);
         self.run(c, &["add", "--all", "--force", "."]).await?;
         let tree = self.git(&["write-tree"]).await?;
@@ -206,6 +219,25 @@ impl Repo {
     pub async fn log_subjects(&self, base: &str, head: &str) -> Result<Vec<String>> {
         let out = self.git(&["log", "--format=%h %s", &format!("{base}..{head}")]).await?;
         Ok(out.lines().map(String::from).collect())
+    }
+
+    /// Object ids (tree or blob hashes) of `paths` at `commit`. Absent paths are left out.
+    pub async fn path_ids(&self, commit: &str, paths: &[&str]) -> Result<BTreeMap<String, String>> {
+        if paths.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut args = vec!["ls-tree", "-z", "--full-tree", commit, "--"];
+        args.extend_from_slice(paths);
+        let listing = self.git(&args).await?;
+        let mut ids = BTreeMap::new();
+        for entry in listing.split('\0').filter(|s| !s.is_empty()) {
+            // "<mode> <type> <object>\t<path>"
+            let malformed = || Error::Malformed(format!("ls-tree entry {entry:?}"));
+            let (meta, path) = entry.split_once('\t').ok_or_else(malformed)?;
+            let object = meta.split(' ').nth(2).ok_or_else(malformed)?;
+            ids.insert(path.to_string(), object.to_string());
+        }
+        Ok(ids)
     }
 
     /// Load the files definitions are made of at `commit` into memory.
@@ -392,12 +424,20 @@ impl Repo {
             .collect()
     }
 
-    /// Export a commit's full tree to `dest` (for image builds and gate runs).
+    /// Export a commit's full tree to `dest` (for gate runs).
     pub async fn export(&self, commit: &str, dest: &Path) -> Result<()> {
+        self.export_paths(commit, &[], dest).await
+    }
+
+    /// Export only `paths` (files or directories, kept at their repo paths) of a commit to
+    /// `dest`; the whole tree when `paths` is empty. Every path must exist at `commit`.
+    pub async fn export_paths(&self, commit: &str, paths: &[&str], dest: &Path) -> Result<()> {
         tokio::fs::create_dir_all(dest).await?;
         let tar = dest.with_extension("tar");
         let t = tar.to_string_lossy().to_string();
-        self.git(&["archive", "--format=tar", "-o", &t, commit]).await?;
+        let mut args = vec!["archive", "--format=tar", "-o", &t, commit, "--"];
+        args.extend_from_slice(paths);
+        self.git(&args).await?;
         let out = Command::new("tar").arg("-xf").arg(&tar).arg("-C").arg(dest).output().await?;
         remove_file_if_exists(&tar).await?;
         if !out.status.success() {

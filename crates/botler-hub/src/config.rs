@@ -31,7 +31,8 @@ impl Paths {
     pub fn worktrees(&self) -> PathBuf {
         self.root.join("worktrees")
     }
-    /// Exported commits used as image build contexts, one directory per commit.
+    /// Exports from the monorepo: `pi-<tree>` (agent pi resources, shared by every commit with
+    /// the same `pi/`) and short-lived `build-*` image build contexts.
     pub fn exports(&self) -> PathBuf {
         self.root.join("exports")
     }

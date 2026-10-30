@@ -1,6 +1,6 @@
 //! In-memory container runtime with a scripted pi, for testing hub logic without Podman.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -23,7 +23,8 @@ pub struct FakeContainer {
 #[derive(Default)]
 struct State {
     containers: BTreeMap<String, FakeContainer>,
-    images: BTreeSet<String>,
+    /// Tag -> (image id, labels).
+    images: BTreeMap<String, (String, BTreeMap<String, String>)>,
     builds: Vec<String>,
     /// Prompts received by each attached pi, in order (after delivery dedup).
     prompts: BTreeMap<String, Vec<String>>,
@@ -130,13 +131,20 @@ impl Containers for Fake {
         &self.info
     }
 
-    async fn image_exists(&self, image: &str) -> Result<bool> {
-        Ok(self.lock().images.contains(image))
+    async fn image_id(&self, image: &str) -> Result<Option<String>> {
+        Ok(self.lock().images.get(image).map(|(id, _)| id.clone()))
     }
 
-    async fn build(&self, context: &Path, dockerfile: &str, tag: &str) -> Result<()> {
+    async fn build(
+        &self,
+        context: &Path,
+        dockerfile: &str,
+        tag: &str,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<()> {
         let mut st = self.lock();
-        if st.fail_builds {
+        // Like podman, the Dockerfile must be inside the context.
+        if st.fail_builds || !context.join(dockerfile).is_file() {
             return Err(ContainerError::Command {
                 binary: "fake".into(),
                 args: format!("build {tag}"),
@@ -144,8 +152,26 @@ impl Containers for Fake {
             });
         }
         st.builds.push(format!("{tag} <- {}:{dockerfile}", context.display()));
-        st.images.insert(tag.to_string());
+        let id = format!("fake-image-{}", st.builds.len());
+        st.images.insert(tag.to_string(), (id, labels.clone()));
         Ok(())
+    }
+
+    async fn images(&self, labels: &BTreeMap<String, String>) -> Result<Vec<String>> {
+        Ok(self
+            .lock()
+            .images
+            .iter()
+            .filter(|(_, (_, l))| labels.iter().all(|(k, v)| l.get(k) == Some(v)))
+            .map(|(t, _)| t.clone())
+            .collect())
+    }
+
+    async fn remove_image(&self, tag: &str) -> Result<()> {
+        match self.lock().images.remove(tag) {
+            Some(_) => Ok(()),
+            None => Err(ContainerError::NotFound(tag.into())),
+        }
     }
 
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {
@@ -258,6 +284,16 @@ impl Containers for Fake {
             exit_code: c.exit_code,
             oom_killed: false,
             labels: c.spec.labels.clone(),
+            image: c.spec.image.clone(),
+            mounts: c
+                .spec
+                .mounts
+                .iter()
+                .filter_map(|m| match m {
+                    crate::container::Mount::Bind { src, .. } => Some(src.clone()),
+                    _ => None,
+                })
+                .collect(),
         }))
     }
 
