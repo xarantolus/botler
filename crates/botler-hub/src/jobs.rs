@@ -85,6 +85,7 @@ async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<()> {
         &Principal::Run { run_id: run.id.clone() },
         timeout.as_chrono() + Duration::minutes(5),
         &def.spec.secrets,
+        &[],
         run_dir.join("secrets"),
     )
     .await?;

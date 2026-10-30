@@ -122,15 +122,14 @@ async fn main() -> anyhow::Result<()> {
                 }
                 SecretCommand::List => {
                     let set = hub.store.secret_names().await?;
-                    for s in hub.applied().await.defs.secrets.values() {
-                        let mark = if set.contains(&s.name) { "set" } else { "MISSING" };
-                        println!(
-                            "{:<28} {:<10} {:<8} {}",
-                            s.name,
-                            format!("{:?}", s.class).to_lowercase(),
-                            mark,
-                            s.description
-                        );
+                    let applied = hub.applied().await;
+                    for g in applied.defs.secret_groups.values() {
+                        println!("{} ({}): {}", g.name, format!("{:?}", g.class).to_lowercase(), g.description);
+                        for s in g.secrets.iter().filter_map(|n| applied.defs.secrets.get(n)) {
+                            let mark = if set.contains(&s.name) { "set" } else { "MISSING" };
+                            let how = s.file.as_deref().map_or_else(|| "env".to_string(), |f| format!("file {f}"));
+                            println!("  {:<28} {:<8} {:<24} {}", s.name, mark, how, s.description);
+                        }
                     }
                 }
             }

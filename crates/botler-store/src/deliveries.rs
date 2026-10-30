@@ -98,6 +98,17 @@ impl Store {
         rows.iter().map(row).collect()
     }
 
+    /// The most recently delivered delivery of an instance (what started its current turn).
+    pub async fn last_delivered(&self, instance: &str) -> Result<Option<Delivery>> {
+        let r = sqlx::query(
+            "SELECT * FROM deliveries WHERE instance = ? AND status = 'delivered' ORDER BY delivered_at DESC, id DESC LIMIT 1",
+        )
+        .bind(instance)
+        .fetch_optional(&self.pool)
+        .await?;
+        r.as_ref().map(row).transpose()
+    }
+
     pub async fn mark_delivery_attempt(&self, id: &str) -> Result<()> {
         sqlx::query("UPDATE deliveries SET attempts = attempts + 1 WHERE id = ?").bind(id).execute(&self.pool).await?;
         Ok(())

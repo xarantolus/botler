@@ -57,6 +57,8 @@ pub struct Definitions {
     pub agents: BTreeMap<String, AgentDef>,
     pub jobs: BTreeMap<String, JobDef>,
     pub triggers: BTreeMap<String, ResolvedTrigger>,
+    pub secret_groups: BTreeMap<String, SecretGroup>,
+    /// Every secret by its unique name.
     pub secrets: BTreeMap<String, SecretDecl>,
     pub events: BTreeMap<String, EventDecl>,
     pub tools: BTreeMap<String, ToolDecl>,
@@ -65,6 +67,20 @@ pub struct Definitions {
 }
 
 impl Definitions {
+    /// The secrets a container gets for these group grants plus individually named secrets
+    /// (route API keys), deduplicated, in a stable order.
+    pub fn secrets_for(&self, groups: &[String], extra: &[String]) -> Vec<&SecretDecl> {
+        let mut names: Vec<&str> = groups
+            .iter()
+            .filter_map(|g| self.secret_groups.get(g))
+            .flat_map(|g| g.secrets.iter().map(String::as_str))
+            .chain(extra.iter().map(String::as_str))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names.into_iter().filter_map(|n| self.secrets.get(n)).collect()
+    }
+
     pub fn services(&self) -> impl Iterator<Item = &JobDef> {
         self.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Service)
     }
@@ -250,18 +266,51 @@ pub fn load(tree: &dyn Tree) -> LoadReport {
     }
 
     if let Some(s) = l.toml::<SecretsFile>("secrets.toml") {
-        l.check_version("secrets.toml", s.version);
-        for decl in s.secrets {
-            if !decl.name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-                || decl.name.is_empty()
-            {
-                l.err("secrets.toml", format!("secret name {:?} must be UPPER_SNAKE_CASE", decl.name));
+        const P: &str = "secrets.toml";
+        l.check_version(P, s.version);
+        for g in s.groups {
+            l.check_name(P, "secret group", &g.name);
+            if g.secrets.is_empty() {
+                l.err(P, format!("secret group {} has no secrets", g.name));
             }
-            if decl.class == SecretClass::Hub && decl.file.is_some() {
-                l.err("secrets.toml", format!("hub secret {} cannot have a container file path", decl.name));
+            let mut names = Vec::new();
+            for f in &g.secrets {
+                if f.name.is_empty()
+                    || !f.name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                {
+                    l.err(P, format!("secret name {:?} must be UPPER_SNAKE_CASE", f.name));
+                }
+                match &f.file {
+                    Some(_) if g.class == SecretClass::Hub => {
+                        l.err(
+                            P,
+                            format!(
+                                "{} is in hub group {} and never enters a container, so it cannot have a file path",
+                                f.name, g.name
+                            ),
+                        );
+                    }
+                    Some(path) if !path.starts_with('/') => {
+                        l.err(P, format!("file path of {} must be absolute", f.name))
+                    }
+                    _ => {}
+                }
+                let decl = SecretDecl {
+                    name: f.name.clone(),
+                    group: g.name.clone(),
+                    description: f.description.clone(),
+                    class: g.class,
+                    file: f.file.clone(),
+                };
+                if let Some(prev) = defs.secrets.insert(f.name.clone(), decl) {
+                    l.err(P, format!("secret {} is declared twice (groups {} and {})", f.name, prev.group, g.name));
+                }
+                names.push(f.name.clone());
             }
-            if defs.secrets.insert(decl.name.clone(), decl.clone()).is_some() {
-                l.err("secrets.toml", format!("secret {} declared twice", decl.name));
+            let group =
+                SecretGroup { name: g.name.clone(), description: g.description, class: g.class, secrets: names };
+            if defs.secret_groups.insert(g.name.clone(), group).is_some() {
+                l.err(P, format!("secret group {} is declared twice", g.name));
             }
         }
     }
@@ -456,18 +505,33 @@ fn validate_models(l: &mut Loader<'_>, defs: &Definitions) {
             }
         }
         if let Some(s) = &route.api_key_secret {
-            check_container_secret(l, defs, "botler.toml", s);
+            check_route_secret(l, defs, "botler.toml", s);
         }
     }
 }
 
-fn check_container_secret(l: &mut Loader<'_>, defs: &Definitions, path: &str, name: &str) {
+/// A grant of a secret group to a container.
+fn check_container_group(l: &mut Loader<'_>, defs: &Definitions, path: &str, group: &str) {
+    match defs.secret_groups.get(group) {
+        None if defs.secrets.contains_key(group) => {
+            l.err(path, format!("`{group}` is a secret, not a group; grant its group `{}`", defs.secrets[group].group))
+        }
+        None => l.err(path, format!("secret group {group} is not declared in secrets.toml")),
+        Some(g) if g.class == SecretClass::Hub => l.err(
+            path,
+            format!("secret group {group} is hub-class and can never enter a container; use an approval-gated action"),
+        ),
+        Some(_) => {}
+    }
+}
+
+/// A single secret a model route uses as its API key.
+fn check_route_secret(l: &mut Loader<'_>, defs: &Definitions, path: &str, name: &str) {
     match defs.secrets.get(name) {
         None => l.err(path, format!("secret {name} is not declared in secrets.toml")),
-        Some(d) if d.class == SecretClass::Hub => l.err(
-            path,
-            format!("secret {name} is hub-class and can never enter a container; use an approval-gated action"),
-        ),
+        Some(d) if d.class == SecretClass::Hub => {
+            l.err(path, format!("secret {name} is hub-class and can never enter a container"))
+        }
         Some(_) => {}
     }
 }
@@ -486,8 +550,8 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
         if defs.route_for(&a.spec).is_none() {
             l.err(&path, "no model route: set `model` or `models.default` in botler.toml");
         }
-        for s in &a.spec.secrets {
-            check_container_secret(l, defs, &path, s);
+        for g in &a.spec.secrets {
+            check_container_group(l, defs, &path, g);
         }
         for m in &a.spec.mcp {
             match defs.jobs.get(m) {
@@ -501,6 +565,9 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
         } else if !a.spec.tools.is_empty() && defs.tools_for(&a.spec).is_empty() {
             l.warn(&path, "tools globs match no tool in tools.manifest.json");
         }
+        if let Some(sc) = &a.spec.scratch {
+            l.check_name(&path, "scratch", sc);
+        }
         if a.spec.always_on && a.spec.kind != AgentKind::Persistent {
             l.err(&path, "always_on only applies to persistent agents");
         }
@@ -513,8 +580,8 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
 fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
     for j in defs.jobs.values() {
         let path = format!("jobs/{}/job.toml", j.name);
-        for s in &j.spec.secrets {
-            check_container_secret(l, defs, &path, s);
+        for g in &j.spec.secrets {
+            check_container_group(l, defs, &path, g);
         }
         if let Some(t) = &j.spec.on_failure {
             check_target(l, defs, &path, t);
@@ -626,6 +693,7 @@ fn is_builtin_event(kind: &str) -> bool {
         BREAKER_TRIPPED,
         TIMER,
         ARCHIVE_REQUESTED,
+        AGENT_IDLE,
     ]
     .contains(&kind)
 }

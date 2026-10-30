@@ -248,3 +248,80 @@ async fn archive_hands_over_and_messaging_restores() {
     e.route().await;
     assert_ne!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Archived, "messaging restores");
 }
+
+#[tokio::test]
+async fn secret_groups_and_scratch_reach_the_container() {
+    use botler_runtime::Mount;
+    let e = env().await;
+    with_key(&e).await;
+    let secrets = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template/secrets.toml")).unwrap()
+        + "\n[[group]]\nname = \"station\"\nclass = \"container\"\n[[group.secret]]\nname = \"STATION_KEY\"\nfile = \"/root/.ssh/id_ed25519\"\n[[group.secret]]\nname = \"STATION_HOST\"\n";
+    e.commit(&[
+        ("secrets.toml", secrets.as_str()),
+        ("agents/station/agent.toml", "kind = \"persistent\"\nsecrets = [\"station\"]\nscratch = \"groundstation\"\n"),
+        ("agents/station/AGENTS.md", "station agent"),
+    ])
+    .await;
+    e.hub.store.set_secret(&e.hub.secret_key, "STATION_KEY", "-----BEGIN KEY-----").await.unwrap();
+    e.hub.store.set_secret(&e.hub.secret_key, "STATION_HOST", "station.lan").await.unwrap();
+    e.hub
+        .emit(
+            Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+                .to("station")
+                .payload(json!({"text": "hi"})),
+        )
+        .await
+        .unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+
+    let c = &e.fake.containers()[&agents::container_name("station")];
+    assert_eq!(c.spec.env["STATION_HOST"], "station.lan");
+    assert!(!c.spec.env.contains_key("STATION_KEY"), "file secrets are not env vars");
+    let key_mount = c.spec.mounts.iter().find_map(|m| match m {
+        Mount::Bind { src, dst, read_only } if dst == "/root/.ssh/id_ed25519" => Some((src.clone(), *read_only)),
+        _ => None,
+    });
+    let (src, ro) = key_mount.expect("key mounted");
+    assert!(ro);
+    assert_eq!(std::fs::read_to_string(&src).unwrap(), "-----BEGIN KEY-----");
+    let scratch = c.spec.mounts.iter().find_map(|m| match m {
+        Mount::Bind { src, dst, .. } if dst == "/scratch" => Some(src.clone()),
+        _ => None,
+    });
+    assert_eq!(scratch.unwrap(), e.hub.paths.scratch_space("groundstation"));
+    let main_scratch = e
+        .fake
+        .containers()
+        .values()
+        .find(|c| c.spec.name == agents::container_name("main"))
+        .map(|c| c.spec.mounts.clone());
+    if let Some(m) = main_scratch {
+        assert!(
+            m.iter()
+                .any(|m| matches!(m, Mount::Bind { src, dst, .. } if dst == "/scratch" && src.ends_with("chat-main")))
+        );
+    }
+}
+
+#[tokio::test]
+async fn parent_hears_when_a_spawned_chat_finishes_its_turn() {
+    let e = env().await;
+    with_key(&e).await;
+    let child = router::spawn(&e.hub, "dev", Some("main"), Some("look into x"), None, None).await.unwrap();
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    e.route().await;
+    let idle = e
+        .hub
+        .store
+        .events(&botler_store::EventQuery { kind: Some(kinds::AGENT_IDLE.into()), limit: 5, ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(idle.len(), 1, "one turn, one idle notice");
+    assert_eq!(idle[0].to.as_deref(), Some("main"));
+    assert_eq!(idle[0].payload["instance"], child.as_str());
+    assert_eq!(idle[0].payload["last_reply"], "fake reply");
+    assert!(idle[0].correlation.is_some(), "chained to the delivery that started the turn");
+    assert!(e.hub.agents.phase(&child).await.is_none(), "no phase once running");
+}

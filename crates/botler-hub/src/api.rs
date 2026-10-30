@@ -297,8 +297,9 @@ async fn session(
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no chat {instance}")))?;
     let busy = hub.agents.get(&inst.name).await.is_some_and(|a| a.busy());
     let pending = hub.store.pending_deliveries(&inst.name).await?.len();
+    let phase = hub.agents.phase(&inst.name).await;
     let items = crate::sessions::read(&hub, &inst.name).await?;
-    Ok(Json(json!({ "instance": inst, "busy": busy, "pending": pending, "items": items })))
+    Ok(Json(json!({ "instance": inst, "busy": busy, "pending": pending, "phase": phase, "items": items })))
 }
 
 #[derive(Deserialize)]
@@ -397,18 +398,47 @@ async fn incidents(State(hub): State<AppState>, Extension(p): Extension<Principa
     Ok(Json(json!(hub.store.open_incidents().await?)))
 }
 
-/// Declared secrets and whether each has a value (never the values).
+/// Declared secret groups, each field with whether it has a value (never the values), and who
+/// is granted the group.
 async fn secrets(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {
     user_only(&p)?;
     let applied = hub.applied().await;
     let set = hub.store.secret_names().await?;
-    let list: Vec<Value> = applied
+    let mut grantees: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
+    for a in applied.defs.agents.values() {
+        for g in &a.spec.secrets {
+            grantees.entry(g.as_str()).or_default().push(format!("agent {}", a.name));
+        }
+    }
+    for j in applied.defs.jobs.values() {
+        for g in &j.spec.secrets {
+            grantees.entry(g.as_str()).or_default().push(format!("job {}", j.name));
+        }
+    }
+    for (r, route) in &applied.defs.instance.models.routes {
+        if let Some(sec) = route.api_key_secret.as_ref().and_then(|n| applied.defs.secrets.get(n)) {
+            grantees.entry(sec.group.as_str()).or_default().push(format!("model route {r}"));
+        }
+    }
+    let groups: Vec<Value> = applied
         .defs
-        .secrets
+        .secret_groups
         .values()
-        .map(|s| json!({ "name": s.name, "description": s.description, "class": s.class, "has_value": set.contains(&s.name) }))
+        .map(|g| {
+            let fields: Vec<Value> = g
+                .secrets
+                .iter()
+                .filter_map(|n| applied.defs.secrets.get(n))
+                .map(|s| json!({ "name": s.name, "description": s.description, "file": s.file, "has_value": set.contains(&s.name) }))
+                .collect();
+            let complete = g.secrets.iter().all(|n| set.contains(n));
+            json!({
+                "name": g.name, "description": g.description, "class": g.class, "complete": complete,
+                "fields": fields, "granted_to": grantees.get(g.name.as_str()).cloned().unwrap_or_default(),
+            })
+        })
         .collect();
-    Ok(Json(json!(list)))
+    Ok(Json(json!(groups)))
 }
 
 #[derive(Deserialize)]

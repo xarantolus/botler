@@ -71,6 +71,14 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
         ),
         Workspace::None => s.push_str("You have no filesystem workspace.\n\n"),
     }
+    s.push_str(&format!(
+        "`/scratch` is persistent storage that is never committed: downloads, recordings, build \
+         outputs, notes that do not belong in the repo. {}\n\n",
+        match &def.spec.scratch {
+            Some(name) => format!("It is the shared scratch space `{name}`: other chats of this project see it too."),
+            None => "It belongs to this chat.".to_string(),
+        }
+    ));
     s.push_str(
         "## Limits\n\
          - You never send anything to other people directly. Actions that reach others are \

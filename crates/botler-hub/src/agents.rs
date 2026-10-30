@@ -70,6 +70,8 @@ pub struct Agents {
     wakes: Mutex<HashMap<String, String>>,
     /// Consecutive unexpected exits per instance, and when the next start is allowed.
     crashes: Mutex<HashMap<String, (u32, DateTime<Utc>)>>,
+    /// What waking is doing right now, or why the last wake failed (for viewers).
+    phases: Mutex<HashMap<String, String>>,
     /// Serialises waking per hub so one instance is never started twice.
     waking: Mutex<()>,
 }
@@ -87,6 +89,11 @@ impl Agents {
 
     pub async fn all(&self) -> Vec<Arc<LiveAgent>> {
         self.live.lock().await.values().cloned().collect()
+    }
+
+    /// The current wake phase or last wake error of an instance, if any.
+    pub async fn phase(&self, instance: &str) -> Option<String> {
+        self.phases.lock().await.get(instance).cloned()
     }
 
     /// Whether `wake` is the current session of `instance`.
@@ -180,11 +187,35 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
     }
 }
 
-/// Return the live agent for `instance`, starting its container if needed.
+async fn set_phase(hub: &Hub, instance: &str, phase: &str) {
+    hub.agents.phases.lock().await.insert(instance.to_string(), phase.to_string());
+    broadcast_state(hub, instance, &format!("starting: {phase}"));
+}
+
+/// Return the live agent for `instance`, starting its container if needed. Progress and the
+/// reason for a failure are visible through [`Agents::phase`].
 pub async fn ensure_awake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     if let Some(a) = hub.agents.get(&instance.name).await {
         return Ok(a);
     }
+    match wake(hub, instance).await {
+        Ok(a) => {
+            hub.agents.phases.lock().await.remove(&instance.name);
+            Ok(a)
+        }
+        Err(e) => {
+            let msg = format!("could not start: {e}");
+            hub.agents.phases.lock().await.insert(instance.name.clone(), msg.clone());
+            if let Err(err) = hub.store.set_instance_state(&instance.name, InstanceState::Dormant, None).await {
+                tracing::error!(instance = %instance.name, error = %err, "could not reset instance state");
+            }
+            broadcast_state(hub, &instance.name, &msg);
+            Err(e)
+        }
+    }
+}
+
+async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     let _guard = hub.agents.waking.lock().await;
     if let Some(a) = hub.agents.get(&instance.name).await {
         return Ok(a);
@@ -209,8 +240,12 @@ pub async fn ensure_awake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<Liv
         return Err(e);
     }
 
+    hub.store.set_instance_state(&instance.name, InstanceState::Starting, None).await?;
+    set_phase(hub, &instance.name, "building image").await;
     let image = images::ensure_agent_image(hub, &def.spec.image, &applied.commit).await?;
+    set_phase(hub, &instance.name, "preparing workspace").await;
     let branch = prepare_workspace(hub, instance, def).await?;
+    set_phase(hub, &instance.name, "starting container").await;
     let wake = uuid::Uuid::now_v7().simple().to_string();
     let spec = container_spec(hub, instance, def, &applied, image, branch.as_deref(), &wake).await?;
     tracing::info!(instance = %instance.name, %wake, "waking agent");
@@ -305,17 +340,13 @@ async fn container_spec(
         .route_for(&def.spec)
         .ok_or_else(|| HubError::Undefined { kind: "model route", name: def.name.clone() })?;
 
-    let mut secrets = def.spec.secrets.clone();
-    if let Some(s) = &route.api_key_secret
-        && !secrets.contains(s)
-    {
-        secrets.push(s.clone());
-    }
+    let route_key: Vec<String> = route.api_key_secret.iter().cloned().collect();
     let p = plumbing::plumbing(
         hub,
         &Principal::Agent { instance: instance.name.clone(), wake: wake.into() },
         Duration::hours(AGENT_TOKEN_TTL_HOURS),
-        &secrets,
+        &def.spec.secrets,
+        &route_key,
         hub.paths.root.join("agent-secrets").join(&instance.name),
     )
     .await?;
@@ -387,6 +418,12 @@ async fn container_spec(
             read_only: false,
         });
     }
+    // Shared scratch names are validated definition names; per-chat ones are prefixed so they
+    // can never collide with a project name.
+    let scratch =
+        hub.paths.scratch_space(&def.spec.scratch.clone().unwrap_or_else(|| format!("chat-{}", instance.name)));
+    tokio::fs::create_dir_all(&scratch).await?;
+    mounts.push(Mount::Bind { src: scratch, dst: "/scratch".into(), read_only: false });
 
     let mut command = vec![
         "pi".to_string(),
@@ -477,6 +514,9 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                 if let Err(e) = hub.store.touch_instance(&agent.instance).await {
                     tracing::error!(instance = %agent.instance, error = %e, "could not record activity");
                 }
+                if let Err(e) = notify_parent(&hub, &agent).await {
+                    tracing::error!(instance = %agent.instance, error = %e, "could not notify parent");
+                }
                 hub.dispatch_notify.notify_one();
             }
             PiEventKind::MessageEnd { usage: Some(u), error, .. } => {
@@ -516,6 +556,29 @@ async fn on_provider_error(hub: &Hub, agent: &LiveAgent, err: &str) -> Result<()
             tracing::trace!("no live viewers");
         }
     }
+    Ok(())
+}
+
+/// Tell the chat that spawned this one that it finished its turn, with its last reply. Chained
+/// to the delivery that started the turn so the cycle breaker bounds parent/child ping-pong.
+async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
+    let instance = hub.store.instance(&agent.instance).await?;
+    let Some(parent) = instance.parent.clone() else { return Ok(()) };
+    let last_reply = match agent.pi.command(json!({ "type": "get_last_assistant_text" })).await {
+        Ok(d) => d.get("text").and_then(|t| t.as_str()).unwrap_or("").chars().take(4000).collect::<String>(),
+        Err(e) => {
+            tracing::warn!(instance = %agent.instance, error = %e, "could not read last reply");
+            String::new()
+        }
+    };
+    let mut ev = Event::new(kinds::AGENT_IDLE, Source::Agent(instance.name.clone()), Provenance::Trusted, Utc::now())
+        .to(parent)
+        .payload(json!({ "instance": instance.name, "title": instance.title, "slug": instance.slug, "last_reply": last_reply }));
+    if let Some(d) = hub.store.last_delivered(&instance.name).await? {
+        let started = hub.store.event(&d.event_id).await?;
+        ev = ev.in_reply_to(&started);
+    }
+    hub.emit(ev).await?;
     Ok(())
 }
 

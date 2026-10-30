@@ -190,12 +190,16 @@ pub struct Agent {
     pub model: Option<String>,
     #[serde(default)]
     pub workspace: Workspace,
+    /// Persistent scratch space mounted at `/scratch`, never committed. Defaults to one per
+    /// chat; naming one (e.g. `"groundstation"`) shares it between every chat that names it.
+    #[serde(default)]
+    pub scratch: Option<String>,
     #[serde(default)]
     pub idle_timeout: Option<HumanDuration>,
     /// Keep this agent's pi session running at all times (persistent agents only), e.g. `main`.
     #[serde(default)]
     pub always_on: bool,
-    /// Container secrets granted to this agent.
+    /// Secret groups (from `secrets.toml`) delivered into this agent's container.
     #[serde(default)]
     pub secrets: Vec<String>,
     /// Service instances (MCP servers) this agent can reach.
@@ -291,6 +295,7 @@ pub struct Job {
     pub command: Vec<String>,
     #[serde(default)]
     pub timeout: Option<HumanDuration>,
+    /// Secret groups (from `secrets.toml`) delivered into this job's container.
     #[serde(default)]
     pub secrets: Vec<String>,
     /// Keep a persistent volume mounted at `/data` across runs.
@@ -459,27 +464,62 @@ pub struct TriggerFile {
     pub triggers: Vec<Trigger>,
 }
 
-/// `secrets.toml`: declarations only, never values.
+/// `secrets.toml`: declarations only, never values. Secrets come in groups: an agent declares a
+/// group (e.g. a deploy key plus a host name), the user uploads its values, and definitions are
+/// granted whole groups.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SecretsFile {
     #[serde(default = "default_version")]
     pub version: u32,
-    #[serde(default, rename = "secret")]
-    pub secrets: Vec<SecretDecl>,
+    #[serde(default, rename = "group")]
+    pub groups: Vec<SecretGroupFile>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct SecretDecl {
-    /// Unique name; also the env var name when delivered as env.
+pub struct SecretGroupFile {
+    /// Group name, granted in `secrets = [...]` of agents and jobs.
     pub name: String,
     #[serde(default)]
     pub description: String,
     pub class: SecretClass,
-    /// For container secrets: mount as a file at this path instead of an env var.
+    #[serde(default, rename = "secret")]
+    pub secrets: Vec<SecretField>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SecretField {
+    /// Unique across all groups; the env var name when delivered as env.
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Deliver as a file at this absolute path instead of an env var (container class only).
     #[serde(default)]
     pub file: Option<String>,
+}
+
+/// One secret, flattened with its group's class.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretDecl {
+    pub name: String,
+    pub group: String,
+    #[serde(default)]
+    pub description: String,
+    pub class: SecretClass,
+    #[serde(default)]
+    pub file: Option<String>,
+}
+
+/// A secret group as loaded.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretGroup {
+    pub name: String,
+    pub description: String,
+    pub class: SecretClass,
+    /// Secret names, in declaration order.
+    pub secrets: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]

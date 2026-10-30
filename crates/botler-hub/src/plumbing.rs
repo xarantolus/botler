@@ -12,7 +12,8 @@ use crate::hub::{Hub, HubError, Result};
 
 pub const SDK_DIR: &str = "/opt/botler/sdk";
 
-/// Env and mounts for a container acting as `who`, holding `secrets`.
+/// Env and mounts for a container acting as `who`, holding the secret `groups` it is granted
+/// plus individually named `extra` secrets (a model route's API key).
 pub struct Plumbing {
     pub env: BTreeMap<String, String>,
     pub mounts: Vec<Mount>,
@@ -24,7 +25,8 @@ pub async fn plumbing(
     hub: &Hub,
     who: &Principal,
     ttl: Duration,
-    secrets: &[String],
+    groups: &[String],
+    extra: &[String],
     secret_dir: PathBuf,
 ) -> Result<Plumbing> {
     let mut env = BTreeMap::new();
@@ -34,9 +36,18 @@ pub async fn plumbing(
     let mut mounts = vec![Mount::Bind { src: hub.paths.assets().join("sdk"), dst: SDK_DIR.into(), read_only: true }];
     let applied = hub.applied().await;
     let mut wrote_files = false;
-    for name in secrets {
-        let decl =
-            applied.defs.secrets.get(name).ok_or_else(|| HubError::Undefined { kind: "secret", name: name.clone() })?;
+    for g in groups {
+        if !applied.defs.secret_groups.contains_key(g) {
+            return Err(HubError::Undefined { kind: "secret group", name: g.clone() });
+        }
+    }
+    for e in extra {
+        if !applied.defs.secrets.contains_key(e) {
+            return Err(HubError::Undefined { kind: "secret", name: e.clone() });
+        }
+    }
+    for decl in applied.defs.secrets_for(groups, extra) {
+        let name = &decl.name;
         // Definitions validation already forbids this; checked again because it is the line
         // that keeps the approval guarantee.
         if decl.class != SecretClass::Container {

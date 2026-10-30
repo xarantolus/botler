@@ -47,6 +47,10 @@ impl Paths {
     pub fn agent_dir(&self, instance: &str) -> PathBuf {
         self.root.join("agent-dirs").join(instance)
     }
+    /// Persistent scratch space: `chat-<instance>` for a chat's own, or a shared project name.
+    pub fn scratch_space(&self, key: &str) -> PathBuf {
+        self.root.join("scratch-spaces").join(key)
+    }
     pub fn uploads(&self) -> PathBuf {
         self.root.join("uploads")
     }

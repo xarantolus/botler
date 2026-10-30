@@ -152,6 +152,22 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         guidance: "Prepare to be archived. 1) Commit and push any uncommitted work in your workspace to your branch                    (or propose it). 2) Write anything worth remembering to memory. 3) Call `archive_ready` once with a                    summary of everything you did, what is still outstanding, where your state lives (branch, files,                    notes), and a `handoff` if someone should continue the outstanding work (an existing chat, or a new                    agent to spawn). Be complete: whoever picks this up only has your report.",
     },
     BuiltinEvent {
+        kind: kinds::AGENT_IDLE,
+        summary: "A chat you started finished its turn and is waiting.",
+        fields: &[
+            ("instance", "the chat"),
+            ("title", "its title, if it named itself"),
+            ("last_reply", "its last answer"),
+        ],
+        follow_up: &[FollowUp {
+            tool: "read_session",
+            args: &[("instance", "instance")],
+            why: "everything it did this turn",
+        }],
+        guidance: "Reply with `send_message` only if it asked you something or its result needs action from you. \
+                   Otherwise do nothing: it sleeps until messaged.",
+    },
+    BuiltinEvent {
         kind: kinds::TIMER,
         summary: "A timer you (or another agent) set has fired.",
         fields: &[("timer_id", "the timer"), ("note", "what it was set for")],
@@ -271,6 +287,7 @@ mod tests {
             kinds::BREAKER_TRIPPED,
             kinds::TIMER,
             kinds::ARCHIVE_REQUESTED,
+            kinds::AGENT_IDLE,
         ] {
             assert!(builtin(k).is_some(), "{k} missing from catalog");
         }

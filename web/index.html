@@ -237,7 +237,8 @@ async function refreshChat() {
   const i = s.instance;
   $("#title").textContent = i.title || i.slug || i.name;
   $("#sub").innerHTML = `${esc(i.name)} · ${esc(i.definition)} · ${esc(i.state)}` +
-    (s.busy ? ' · <span class="ok">working…</span>' : "") + (s.pending ? ` · ${s.pending} queued` : "");
+    (s.busy ? ' · <span class="ok">working…</span>' : "") + (s.pending ? ` · ${s.pending} queued` : "") +
+    (s.phase ? ` · <span class="${s.phase.startsWith("could not") ? "bad" : "warn"}">${esc(s.phase)}</span>` : "");
   const archived = i.state === "archived";
   $("#archive").style.display = archived || i.name === "main" ? "none" : "";
   $("#forcearchive").style.display = i.archive_requested_at && !archived ? "" : "none";
@@ -251,7 +252,7 @@ async function refreshChat() {
         (rep.report.state?.length ? `<div><b>State:</b> ${rep.report.state.map(esc).join("; ")}</div>` : "") +
         (rep.handed_to ? `<div><b>Handed to:</b> <a href="#" data-goto="${esc(rep.handed_to)}">${esc(rep.handed_to)}</a></div>` : "") : "")
     : i.archive_requested_at ? '<span class="muted">Waiting for the agent to hand over before archiving…</span>' : "";
-  const key = JSON.stringify([s.items.length, s.busy, s.pending, s.items.at(-1)?.id, i.state, !!rep]);
+  const key = JSON.stringify([s.items.length, s.busy, s.pending, s.items.at(-1)?.id, i.state, !!rep, s.phase]);
   if (key === lastSessionKey && !flashDelivery) return;
   lastSessionKey = key;
   const log = $("#log");
@@ -340,20 +341,23 @@ async function renderRuns() {
 }
 
 async function renderSecrets() {
-  const list = await api("/api/v1/secrets");
-  return `<p class="muted" style="font-size:12px">Declared in the monorepo's <code>secrets.toml</code>. Values are stored encrypted by the hub and never shown again.</p>` +
-    list.map((s) => `<div class="row" data-secret="${esc(s.name)}">
-      <div><b>${esc(s.name)}</b> <span class="chip">${esc(s.class)}</span> ${s.has_value ? '<span class="ok">set</span>' : '<span class="bad">missing</span>'}</div>
-      <div class="muted" style="font-size:12px">${esc(s.description)}</div>
-      <div class="ctas"><input type="password" placeholder="${s.has_value ? "replace value" : "value"}" autocomplete="off"><button data-save>Save</button></div>
-    </div>`).join("");
+  const groups = await api("/api/v1/secrets");
+  return `<p class="muted" style="font-size:12px">Groups are declared in the monorepo's <code>secrets.toml</code> (agents can add them through a proposal). Values are stored encrypted by the hub and never shown again.</p>` +
+    groups.map((g) => `<div class="row">
+      <div><b>${esc(g.name)}</b> <span class="chip">${esc(g.class)}</span> ${g.complete ? '<span class="ok">complete</span>' : '<span class="bad">incomplete</span>'}</div>
+      <div class="muted" style="font-size:12px">${esc(g.description)}${g.granted_to.length ? " · used by " + g.granted_to.map(esc).join(", ") : " · not granted to anything yet"}</div>
+      ${g.fields.map((f) => `<div data-secret="${esc(f.name)}" style="margin-top:6px">
+        <div style="font-size:13px"><code>${esc(f.name)}</code> ${f.has_value ? '<span class="ok">set</span>' : '<span class="bad">missing</span>'} <span class="muted">${f.file ? "file " + esc(f.file) : "env var"}${f.description ? " · " + esc(f.description) : ""}</span></div>
+        <div class="ctas">${f.file ? `<textarea rows="2" placeholder="${f.has_value ? "replace contents" : "file contents"}"></textarea>` : `<input type="password" placeholder="${f.has_value ? "replace value" : "value"}" autocomplete="off">`}<button data-save>Save</button></div>
+      </div>`).join("")}
+    </div>`).join("") || '<p class="muted">No secret groups declared.</p>';
 }
 
 async function refreshPane() {
   const render = { events: renderEvents, questions: renderQuestions, runs: renderRuns, secrets: renderSecrets }[tab];
   const pane = $("#pane");
   // Do not clobber what the user is typing.
-  if (pane.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;
+  if (pane.contains(document.activeElement) && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
   pane.innerHTML = await render();
 }
 
@@ -377,7 +381,7 @@ async function onPaneClick(e) {
   }
   const secret = e.target.closest("[data-secret]");
   if (secret && e.target.dataset.save !== undefined) {
-    const input = secret.querySelector("input");
+    const input = secret.querySelector("input, textarea");
     if (!input.value) return;
     try {
       await api("/api/v1/secrets/" + encodeURIComponent(secret.dataset.secret), { method: "PUT", body: JSON.stringify({ value: input.value }) });

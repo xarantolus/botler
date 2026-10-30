@@ -298,6 +298,7 @@ impl Fake {
                 ]
             }
             "get_state" => vec![ok(json!({"isStreaming": false, "isCompacting": false}))],
+            "get_last_assistant_text" => vec![ok(json!({"text": "fake reply"}))],
             "abort" => vec![ok(Value::Null)],
             _ => vec![
                 json!({"type": "response", "id": id, "command": kind, "success": false, "error": format!("fake pi: unsupported {kind}")}),

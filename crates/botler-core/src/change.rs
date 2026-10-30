@@ -20,10 +20,12 @@ pub enum Escalation {
     },
     SecretGranted {
         secret: String,
+        group: String,
         to: String,
     },
     SecretDeclared {
         secret: String,
+        group: String,
         class: SecretClass,
     },
     SecretClassChanged {
@@ -67,9 +69,11 @@ impl Escalation {
     pub fn explain(&self) -> String {
         match self {
             Self::ProtectedPath { path } => format!("edits protected path `{path}`"),
-            Self::SecretGranted { secret, to } => format!("grants secret `{secret}` to {to}"),
-            Self::SecretDeclared { secret, class } => format!("declares new {class:?} secret `{secret}`"),
-            Self::SecretClassChanged { secret } => format!("changes the class of secret `{secret}`"),
+            Self::SecretGranted { secret, group, to } => format!("gives {to} secret `{secret}` (group `{group}`)"),
+            Self::SecretDeclared { secret, group, class } => {
+                format!("declares new {} secret `{secret}` in group `{group}`", format!("{class:?}").to_lowercase())
+            }
+            Self::SecretClassChanged { secret } => format!("changes the class, group or delivery of secret `{secret}`"),
             Self::NetworkOpened { agent } => format!("gives agent `{agent}` network access"),
             Self::CapabilityAdded { agent, capability } => {
                 format!("gives agent `{agent}` the `{capability}` capability")
@@ -166,37 +170,44 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
     for (name, decl) in &new.secrets {
         match old.secrets.get(name) {
             None => {
-                esc.insert(Escalation::SecretDeclared { secret: name.clone(), class: decl.class });
+                esc.insert(Escalation::SecretDeclared {
+                    secret: name.clone(),
+                    group: decl.group.clone(),
+                    class: decl.class,
+                });
             }
-            Some(o) if o.class != decl.class || o.file != decl.file => {
+            Some(o) if o.class != decl.class || o.file != decl.file || o.group != decl.group => {
                 esc.insert(Escalation::SecretClassChanged { secret: name.clone() });
             }
             _ => {}
         }
     }
 
-    let grants = |d: &Definitions| -> BTreeSet<(String, String)> {
+    // Grants expanded to individual secrets: a secret added to an already granted group is a
+    // new grant too, so a definition cannot grow its own access unnoticed.
+    let grants = |d: &Definitions| -> BTreeSet<(String, String, String)> {
         let mut g = BTreeSet::new();
-        for a in d.agents.values() {
-            for s in &a.spec.secrets {
-                g.insert((s.clone(), format!("agent `{}`", a.name)));
+        let mut add = |groups: &[String], extra: &[String], to: String| {
+            for s in d.secrets_for(groups, extra) {
+                g.insert((s.name.clone(), s.group.clone(), to.clone()));
             }
+        };
+        for a in d.agents.values() {
+            add(&a.spec.secrets, &[], format!("agent `{}`", a.name));
         }
         for j in d.jobs.values() {
-            for s in &j.spec.secrets {
-                g.insert((s.clone(), format!("job `{}`", j.name)));
-            }
+            add(&j.spec.secrets, &[], format!("job `{}`", j.name));
         }
         for (r, route) in &d.instance.models.routes {
             if let Some(s) = &route.api_key_secret {
-                g.insert((s.clone(), format!("model route `{r}`")));
+                add(&[], std::slice::from_ref(s), format!("model route `{r}`"));
             }
         }
         g
     };
     let old_grants = grants(old);
-    for (secret, to) in grants(new).difference(&old_grants) {
-        esc.insert(Escalation::SecretGranted { secret: secret.clone(), to: to.clone() });
+    for (secret, group, to) in grants(new).difference(&old_grants) {
+        esc.insert(Escalation::SecretGranted { secret: secret.clone(), group: group.clone(), to: to.clone() });
     }
 
     for a in new.agents.values() {
@@ -419,7 +430,7 @@ mod tests {
         MemTree::new()
             .with("botler.toml", "timezone = \"Europe/Berlin\"\n[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"openrouter\"\nmodel = \"x\"\n")
             .with("images/agent/Dockerfile", "FROM x")
-            .with("secrets.toml", "[[secret]]\nname = \"GITLAB_TOKEN\"\nclass = \"container\"\n")
+            .with("secrets.toml", "[[group]]\nname = \"gitlab\"\nclass = \"container\"\n[[group.secret]]\nname = \"GITLAB_TOKEN\"\n")
             .with("agents/main/agent.toml", "kind = \"persistent\"\n")
             .with("agents/main/AGENTS.md", "hi")
             .with("agents/triage/agent.toml", "")
@@ -452,16 +463,35 @@ mod tests {
     #[test]
     fn secret_grant_and_protected_path_escalate() {
         let old = defs(&base());
-        let new_tree = base().with("agents/main/agent.toml", "kind = \"persistent\"\nsecrets = [\"GITLAB_TOKEN\"]\n");
+        let new_tree = base().with("agents/main/agent.toml", "kind = \"persistent\"\nsecrets = [\"gitlab\"]\n");
         let new = defs(&new_tree);
         let s = preview(&old, &new, &["agents/main/agent.toml".into(), "policies/reviewer.md".into()], Utc::now());
-        assert!(
-            s.escalations
-                .contains(&Escalation::SecretGranted { secret: "GITLAB_TOKEN".into(), to: "agent `main`".into() })
-        );
+        assert!(s.escalations.contains(&Escalation::SecretGranted {
+            secret: "GITLAB_TOKEN".into(),
+            group: "gitlab".into(),
+            to: "agent `main`".into()
+        }));
         assert!(s.escalations.contains(&Escalation::ProtectedPath { path: "policies/reviewer.md".into() }));
         assert_eq!(decide(&s, Verdict::Approve), Decision::AskUser);
         assert_eq!(decide(&s, Verdict::Reject), Decision::Reject);
+    }
+
+    #[test]
+    fn growing_a_granted_group_is_a_new_grant() {
+        let granted = base().with("agents/main/agent.toml", "kind = \"persistent\"\nsecrets = [\"gitlab\"]\n");
+        let old = defs(&granted);
+        let grown = granted.clone().with(
+            "secrets.toml",
+            "[[group]]\nname = \"gitlab\"\nclass = \"container\"\n[[group.secret]]\nname = \"GITLAB_TOKEN\"\n[[group.secret]]\nname = \"GITLAB_ADMIN_TOKEN\"\n",
+        );
+        let s = preview(&old, &defs(&grown), &[], Utc::now());
+        assert!(
+            s.escalations
+                .iter()
+                .any(|e| matches!(e, Escalation::SecretGranted { secret, .. } if secret == "GITLAB_ADMIN_TOKEN")),
+            "{:?}",
+            s.escalations
+        );
     }
 
     #[test]

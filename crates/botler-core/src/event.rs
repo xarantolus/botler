@@ -133,6 +133,7 @@ pub mod kinds {
     pub const BREAKER_TRIPPED: &str = "breaker.tripped";
     pub const TIMER: &str = "timer";
     pub const ARCHIVE_REQUESTED: &str = "archive.requested";
+    pub const AGENT_IDLE: &str = "agent.idle";
 }
 
 #[cfg(test)]
