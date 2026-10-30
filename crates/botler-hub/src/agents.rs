@@ -1,0 +1,615 @@
+//! Agent instances: waking pi in a container, delivering queued events, metering usage, and
+//! putting idle instances to sleep.
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use botler_core::catalog;
+use botler_core::defs::{AgentDef, Budget, Network, Workspace};
+use botler_core::event::kinds;
+use botler_core::{Event, Provenance, Source};
+use botler_runtime::{
+    ContainerSpec, Disposition, Mount, NetworkMode, PiClient, PiError, PiEvent, PiEventKind, Streaming,
+};
+use botler_store::{Delivery, Instance, InstanceState};
+use chrono::{DateTime, Duration, Utc};
+use serde_json::json;
+use tokio::sync::{Mutex, mpsc, oneshot};
+
+use crate::auth::Principal;
+use crate::hub::{Hub, HubError, Live, Result};
+use crate::{images, plumbing, prompt};
+
+/// Attempts before a delivery pi keeps rejecting is dropped.
+const MAX_ATTEMPTS: i64 = 5;
+const AGENT_TOKEN_TTL_HOURS: i64 = 24;
+
+pub struct LiveAgent {
+    pub instance: String,
+    pub container: String,
+    pub pi: PiClient,
+    busy: AtomicBool,
+    last_active: std::sync::Mutex<DateTime<Utc>>,
+    /// Set when the hub stops the agent on purpose (idle, kill switch), so the exit is not a crash.
+    stopping: AtomicBool,
+    kill: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+impl LiveAgent {
+    pub fn busy(&self) -> bool {
+        self.busy.load(Ordering::SeqCst)
+    }
+
+    fn touch(&self) {
+        *self.last_active.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Utc::now();
+    }
+
+    pub fn last_active(&self) -> DateTime<Utc> {
+        *self.last_active.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    async fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        if let Some(k) = self.kill.lock().await.take()
+            && k.send(()).is_err()
+        {
+            tracing::debug!(instance = %self.instance, "agent already exited");
+        }
+    }
+}
+
+/// Live pi connections, by instance name.
+#[derive(Default)]
+pub struct Agents {
+    live: Mutex<HashMap<String, Arc<LiveAgent>>>,
+    /// Serialises waking per hub so one instance is never started twice.
+    waking: Mutex<()>,
+}
+
+impl std::fmt::Debug for Agents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Agents(..)")
+    }
+}
+
+impl Agents {
+    pub async fn get(&self, instance: &str) -> Option<Arc<LiveAgent>> {
+        self.live.lock().await.get(instance).cloned()
+    }
+
+    pub async fn all(&self) -> Vec<Arc<LiveAgent>> {
+        self.live.lock().await.values().cloned().collect()
+    }
+}
+
+pub fn container_name(instance: &str) -> String {
+    format!("botler-agent-{instance}")
+}
+
+pub fn branch_for(instance: &str) -> String {
+    format!("agents/{instance}/work")
+}
+
+/// Deliver everything queued, waking instances as needed.
+pub async fn dispatch_pending(hub: &Arc<Hub>) -> Result<()> {
+    if hub.paused().await? {
+        return Ok(());
+    }
+    for name in hub.store.instances_with_pending().await? {
+        if let Err(e) = deliver_to(hub, &name).await {
+            tracing::warn!(instance = %name, error = %e, "delivery deferred");
+        }
+    }
+    Ok(())
+}
+
+async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
+    let instance = hub.store.instance(name).await?;
+    if instance.state == InstanceState::Ended {
+        for d in hub.store.pending_deliveries(name).await? {
+            hub.store.drop_delivery(&d.id, "instance has ended").await?;
+        }
+        return Ok(());
+    }
+    if let Some(b) = hub.store.breaker(&format!("instance:{name}")).await? {
+        tracing::debug!(instance = %name, reason = %b.reason, "instance paused by breaker; deliveries wait");
+        return Ok(());
+    }
+    let agent = ensure_awake(hub, &instance).await?;
+    for d in hub.store.pending_deliveries(name).await? {
+        deliver_one(hub, &agent, &d).await?;
+    }
+    Ok(())
+}
+
+/// The text pi receives for one delivery. The botler extension recognises the prefix, drops
+/// duplicate ids, and renders the header.
+pub fn envelope(d: &Delivery, ev: &Event) -> String {
+    let provenance = match ev.provenance {
+        Provenance::Trusted => "trusted",
+        Provenance::External => "external",
+        Provenance::Untrusted => "untrusted",
+    };
+    let body = json!({
+        "id": d.id,
+        "event": ev.id,
+        "kind": ev.kind,
+        "from": ev.source.key(),
+        "provenance": provenance,
+        "correlation": ev.correlation.unwrap_or(ev.id),
+        "body": catalog::render(ev, d.prompt.as_deref()),
+    });
+    format!("botler:delivery {body}")
+}
+
+async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
+    let ev = hub.store.event(&d.event_id).await?;
+    let text = envelope(d, &ev);
+    let streaming = if agent.pi.is_busy().await? {
+        // The user and urgent events interrupt at the next turn boundary; everything else waits.
+        Some(if ev.urgent || ev.source == Source::User { Streaming::Steer } else { Streaming::FollowUp })
+    } else {
+        None
+    };
+    hub.store.mark_delivery_attempt(&d.id).await?;
+    match agent.pi.prompt(&text, &[], streaming).await {
+        Ok(disposition) => {
+            hub.store.mark_delivered(&d.id).await?;
+            if disposition != Disposition::Handled {
+                agent.busy.store(true, Ordering::SeqCst);
+            }
+            agent.touch();
+            Ok(())
+        }
+        Err(PiError::Rejected { error, .. }) if d.attempts + 1 >= MAX_ATTEMPTS => {
+            tracing::error!(delivery = %d.id, %error, "pi keeps rejecting delivery; dropping it");
+            hub.store.drop_delivery(&d.id, &format!("rejected by pi: {error}")).await?;
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Return the live agent for `instance`, starting its container if needed.
+pub async fn ensure_awake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
+    if let Some(a) = hub.agents.get(&instance.name).await {
+        return Ok(a);
+    }
+    let _guard = hub.agents.waking.lock().await;
+    if let Some(a) = hub.agents.get(&instance.name).await {
+        return Ok(a);
+    }
+    let applied = hub.applied().await;
+    let def = applied
+        .defs
+        .agents
+        .get(&instance.definition)
+        .ok_or_else(|| HubError::Undefined { kind: "agent", name: instance.definition.clone() })?;
+    let limit = def.spec.limits.get("wake").copied().unwrap_or_else(|| botler_core::limits::default_limit("wake"));
+    if let Err(e) = hub.rate_limit(&format!("agent:{}", instance.name), "wake", limit).await {
+        let reason = format!("woken too often ({e})");
+        if hub.store.trip_breaker(&format!("instance:{}", instance.name), "wake", &reason).await? {
+            alarm(hub, &format!("Agent `{}` was {reason} and is paused until you clear it.", instance.name)).await?;
+        }
+        return Err(e);
+    }
+
+    let image = images::ensure_agent_image(hub, &def.spec.image, &applied.commit).await?;
+    let branch = prepare_workspace(hub, instance, def).await?;
+    let spec = container_spec(hub, instance, def, &applied, image, branch.as_deref()).await?;
+    tracing::info!(instance = %instance.name, "waking agent");
+    let attached = hub.containers.run_attached(&spec).await?;
+    let (pi, events) = PiClient::connect(attached.stdin, attached.stdout, hub.config.pi_timeout);
+    let agent = Arc::new(LiveAgent {
+        instance: instance.name.clone(),
+        container: spec.name.clone(),
+        pi,
+        busy: AtomicBool::new(false),
+        last_active: std::sync::Mutex::new(Utc::now()),
+        stopping: AtomicBool::new(false),
+        kill: Mutex::new(Some(attached.kill)),
+    });
+    hub.agents.live.lock().await.insert(instance.name.clone(), agent.clone());
+    hub.store.set_instance_state(&instance.name, InstanceState::Running, Some(&spec.name)).await?;
+    broadcast_state(hub, &instance.name, "running");
+    tokio::spawn(pump(hub.clone(), agent.clone(), events));
+    tokio::spawn(watch_exit(hub.clone(), agent.clone(), instance.persistent, attached.exited));
+    Ok(agent)
+}
+
+/// Clone the monorepo into a new workspace (never touching an existing one: agents own it).
+async fn prepare_workspace(hub: &Hub, instance: &Instance, def: &AgentDef) -> Result<Option<String>> {
+    let dir = hub.paths.workspace(&instance.name);
+    match def.spec.workspace {
+        Workspace::None => Ok(None),
+        Workspace::Volume => {
+            tokio::fs::create_dir_all(&dir).await?;
+            Ok(None)
+        }
+        Workspace::Monorepo => {
+            let branch = branch_for(&instance.name);
+            if !dir.join(".git").exists() {
+                let tmp = dir.with_extension("cloning");
+                if tmp.exists() {
+                    tokio::fs::remove_dir_all(&tmp).await?;
+                }
+                git_fresh(&[
+                    "clone",
+                    "--quiet",
+                    &crate::config::path_str(hub.repo.git_dir()),
+                    &crate::config::path_str(&tmp),
+                ])
+                .await?;
+                let origin = format!("{}/git/monorepo.git", hub.config.container_url);
+                git_fresh(&["-C", &crate::config::path_str(&tmp), "remote", "set-url", "origin", &origin]).await?;
+                git_fresh(&["-C", &crate::config::path_str(&tmp), "checkout", "--quiet", "-b", &branch]).await?;
+                tokio::fs::rename(&tmp, &dir).await?;
+            }
+            Ok(Some(branch))
+        }
+    }
+}
+
+/// git on directories the hub just created itself (never on agent-owned checkouts).
+async fn git_fresh(args: &[&str]) -> Result<()> {
+    let out = tokio::process::Command::new("git")
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .await?;
+    if !out.status.success() {
+        return Err(HubError::Repo(botler_repo::Error::Git {
+            args: args.join(" "),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        }));
+    }
+    Ok(())
+}
+
+async fn container_spec(
+    hub: &Hub,
+    instance: &Instance,
+    def: &AgentDef,
+    applied: &crate::hub::Applied,
+    image: String,
+    branch: Option<&str>,
+) -> Result<ContainerSpec> {
+    let (_route_name, route) = applied
+        .defs
+        .route_for(&def.spec)
+        .ok_or_else(|| HubError::Undefined { kind: "model route", name: def.name.clone() })?;
+
+    let mut secrets = def.spec.secrets.clone();
+    if let Some(s) = &route.api_key_secret
+        && !secrets.contains(s)
+    {
+        secrets.push(s.clone());
+    }
+    let p = plumbing::plumbing(
+        hub,
+        &Principal::Agent(instance.name.clone()),
+        Duration::hours(AGENT_TOKEN_TTL_HOURS),
+        &secrets,
+        hub.paths.root.join("agent-secrets").join(&instance.name),
+    )
+    .await?;
+    let mut env = p.env;
+    env.insert("PI_OFFLINE".into(), "1".into());
+    env.insert("BOTLER_INSTANCE".into(), instance.name.clone());
+    // Lets git in the workspace push to the hub without storing the token in .git/config.
+    env.insert("GIT_CONFIG_COUNT".into(), "1".into());
+    env.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
+    env.insert("GIT_CONFIG_VALUE_0".into(), format!("Authorization: Bearer {}", env["BOTLER_TOKEN"]));
+
+    // Rendered pi config: a tmpfs agent dir with read-only files on top (pi needs to write locks).
+    let dir = hub.paths.agent_dir(&instance.name);
+    tokio::fs::create_dir_all(&dir).await?;
+    let models = json!({
+        "providers": {
+            route.provider.clone(): {
+                "apiKey": route.api_key_secret.as_ref().map(|s| format!("${s}")),
+                "baseUrl": route.base_url,
+                "modelOverrides": { route.model.clone(): { "maxTokens": route.max_tokens } }
+            }
+        }
+    });
+    let mut servers = serde_json::Map::new();
+    servers.insert(
+        "botler".into(),
+        json!({
+            "url": format!("{}/mcp", hub.config.container_url),
+            "headers": { "Authorization": "Bearer ${BOTLER_TOKEN}" },
+            "description": "The botler hub: messaging, timers, spawning agents, asking the user, proposing changes, incidents."
+        }),
+    );
+    for svc in &def.spec.mcp {
+        servers.insert(
+            svc.clone(),
+            json!({
+                "url": format!("{}/services/{svc}/mcp", hub.config.container_url),
+                "headers": { "Authorization": "Bearer ${BOTLER_TOKEN}" }
+            }),
+        );
+    }
+    let files: Vec<(&str, String)> = vec![
+        ("models.json", to_json(&models)?),
+        ("mcp.json", to_json(&json!({ "mcpServers": servers }))?),
+        ("botler.md", prompt::render(instance, def, branch)),
+        ("AGENTS.md", def.prompt.clone().unwrap_or_default()),
+    ];
+    let mut mounts = p.mounts;
+    mounts.push(Mount::Tmpfs { dst: "/botler/agent-dir".into() });
+    for (name, body) in &files {
+        let host = dir.join(name);
+        tokio::fs::write(&host, body).await?;
+        mounts.push(Mount::Bind { src: host, dst: format!("/botler/agent-dir/{name}"), read_only: true });
+    }
+    let sessions = hub.paths.sessions(&instance.name);
+    tokio::fs::create_dir_all(&sessions).await?;
+    mounts.push(Mount::Bind { src: sessions, dst: "/botler/sessions".into(), read_only: false });
+    mounts.push(Mount::Bind {
+        src: hub.paths.assets().join("extension"),
+        dst: "/botler/extension".into(),
+        read_only: true,
+    });
+    if def.spec.workspace != Workspace::None {
+        mounts.push(Mount::Bind {
+            src: hub.paths.workspace(&instance.name),
+            dst: "/workspace".into(),
+            read_only: false,
+        });
+    }
+
+    let mut command = vec![
+        "pi".to_string(),
+        "--mode".into(),
+        "rpc".into(),
+        "--no-approve".into(),
+        "--session".into(),
+        format!("/botler/sessions/{}", instance.session_file),
+        "--model".into(),
+        format!("{}/{}", route.provider, route.model),
+        "--append-system-prompt".into(),
+        "/botler/agent-dir/botler.md".into(),
+        "-e".into(),
+        "/botler/extension/index.ts".into(),
+    ];
+    if let Some(t) = &route.thinking {
+        command.extend(["--thinking".into(), t.clone()]);
+    }
+    // Agent-authored pi resources come from the applied main commit, never from the agent's own
+    // branch, so an agent cannot load unreviewed code into itself.
+    let pi_res = hub.paths.exports().join(&applied.commit).join("pi");
+    if pi_res.exists() {
+        mounts.push(Mount::Bind { src: pi_res.clone(), dst: "/botler/pi".into(), read_only: true });
+        for (flag, sub) in [("--skill", "skills"), ("--prompt-template", "prompts")] {
+            if has_entries(&pi_res.join(sub)) {
+                command.extend([flag.into(), format!("/botler/pi/{sub}")]);
+            }
+        }
+        for ext in list_files(&pi_res.join("extensions"), "ts") {
+            command.extend(["-e".into(), format!("/botler/pi/extensions/{ext}")]);
+        }
+    }
+
+    Ok(ContainerSpec {
+        name: container_name(&instance.name),
+        image,
+        command,
+        env,
+        mounts,
+        labels: BTreeMap::from([
+            (crate::jobs::ROLE_LABEL.into(), "agent".into()),
+            ("botler.instance".into(), instance.name.clone()),
+        ]),
+        network: match def.spec.network {
+            Network::Default => NetworkMode::Default,
+            Network::None => NetworkMode::None,
+        },
+        workdir: Some(if def.spec.workspace == Workspace::None { "/".into() } else { "/workspace".into() }),
+        remove_on_exit: true,
+        ..Default::default()
+    })
+}
+
+fn to_json(v: &serde_json::Value) -> Result<String> {
+    serde_json::to_string_pretty(v).map_err(|e| HubError::Io(std::io::Error::other(e)))
+}
+
+fn has_entries(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut rd| rd.any(|e| e.is_ok_and(|e| e.file_name() != "README.md")))
+}
+
+fn list_files(dir: &Path, ext: &str) -> Vec<String> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(&format!(".{ext}")))
+        .collect();
+    out.sort();
+    out
+}
+
+/// Consume pi's events: live view, busy tracking, usage and budgets.
+async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<PiEvent>) {
+    while let Some(ev) = events.recv().await {
+        if hub.live.send(Live::Pi { instance: agent.instance.clone(), event: ev.raw.clone() }).is_err() {
+            tracing::trace!("no live viewers");
+        }
+        match &ev.kind {
+            PiEventKind::AgentStart => agent.busy.store(true, Ordering::SeqCst),
+            PiEventKind::AgentSettled => {
+                agent.busy.store(false, Ordering::SeqCst);
+                agent.touch();
+                if let Err(e) = hub.store.touch_instance(&agent.instance).await {
+                    tracing::error!(instance = %agent.instance, error = %e, "could not record activity");
+                }
+                hub.dispatch_notify.notify_one();
+            }
+            PiEventKind::MessageEnd { usage: Some(u), error, .. } => {
+                if let Some(err) = error {
+                    tracing::warn!(instance = %agent.instance, %err, "model call failed");
+                }
+                if let Err(e) = meter(&hub, &agent, u).await {
+                    tracing::error!(instance = %agent.instance, error = %e, "usage metering failed");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Record usage and stop the agent when it exceeds its budget (stop and report, never truncate).
+async fn meter(hub: &Hub, agent: &LiveAgent, u: &botler_runtime::Usage) -> Result<()> {
+    let now = Utc::now();
+    hub.store.record_usage(&agent.instance, now, &u.model, u.total_tokens, u.cost_usd).await?;
+    let instance = hub.store.instance(&agent.instance).await?;
+    let applied = hub.applied().await;
+    let budget: Budget = applied
+        .defs
+        .agents
+        .get(&instance.definition)
+        .and_then(|d| d.spec.budget.clone())
+        .unwrap_or_else(|| applied.defs.instance.defaults.budget.clone());
+    let day_start = now
+        .with_timezone(&applied.defs.timezone)
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|t| t.and_local_timezone(applied.defs.timezone).earliest())
+        .map_or(now - Duration::hours(24), |t| t.with_timezone(&Utc));
+    let today = hub.store.usage_since(Some(&agent.instance), day_start).await?;
+    let over = match (budget.usd_per_day, budget.tokens_per_day) {
+        (Some(usd), _) if today.cost_usd > usd => {
+            Some(format!("spent ${:.2} today (budget ${usd:.2})", today.cost_usd))
+        }
+        (_, Some(tok)) if today.tokens > i64::try_from(tok).unwrap_or(i64::MAX) => {
+            Some(format!("used {} tokens today (budget {tok})", today.tokens))
+        }
+        _ => None,
+    };
+    if let Some(reason) = over
+        && hub.store.trip_breaker(&format!("instance:{}", agent.instance), "budget", &reason).await?
+    {
+        tracing::warn!(instance = %agent.instance, %reason, "budget exceeded; stopping agent");
+        if let Err(e) = agent.pi.abort().await {
+            tracing::warn!(instance = %agent.instance, error = %e, "abort after budget failed");
+        }
+        alarm(
+            hub,
+            &format!("Agent `{}` {reason} and was stopped. Clear its breaker to let it continue.", agent.instance),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn watch_exit(hub: Arc<Hub>, agent: Arc<LiveAgent>, persistent: bool, exited: oneshot::Receiver<Option<i32>>) {
+    let code = match exited.await {
+        Ok(c) => c,
+        Err(_) => {
+            tracing::warn!(instance = %agent.instance, "exit status lost");
+            None
+        }
+    };
+    let deliberate = agent.stopping.load(Ordering::SeqCst);
+    {
+        let mut live = hub.agents.live.lock().await;
+        if live.get(&agent.instance).is_some_and(|a| Arc::ptr_eq(a, &agent)) {
+            live.remove(&agent.instance);
+        }
+    }
+    let state = if deliberate && !persistent { InstanceState::Ended } else { InstanceState::Dormant };
+    if let Err(e) = hub.store.set_instance_state(&agent.instance, state, None).await {
+        tracing::error!(instance = %agent.instance, error = %e, "could not record agent exit");
+    }
+    broadcast_state(&hub, &agent.instance, state.as_str());
+    if !deliberate {
+        tracing::warn!(instance = %agent.instance, ?code, "agent container exited unexpectedly");
+    }
+    // Anything still queued wakes it again (subject to the wake limit).
+    hub.dispatch_notify.notify_one();
+}
+
+/// Stop idle agents: persistent ones go dormant, ephemeral ones end.
+pub async fn reap_idle(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
+    let applied = hub.applied().await;
+    for agent in hub.agents.all().await {
+        if agent.busy() {
+            continue;
+        }
+        let instance = hub.store.instance(&agent.instance).await?;
+        let idle = applied
+            .defs
+            .agents
+            .get(&instance.definition)
+            .and_then(|d| d.spec.idle_timeout)
+            .unwrap_or(applied.defs.instance.defaults.idle_timeout);
+        if now - agent.last_active() > idle.as_chrono()
+            && hub.store.pending_deliveries(&agent.instance).await?.is_empty()
+        {
+            tracing::info!(instance = %agent.instance, "idle; stopping");
+            agent.stop().await;
+        }
+    }
+    Ok(())
+}
+
+/// Stop every agent (kill switch / shutdown). They come back on their next delivery.
+pub async fn stop_all(hub: &Hub) {
+    for agent in hub.agents.all().await {
+        if let Err(e) = agent.pi.abort().await {
+            tracing::debug!(instance = %agent.instance, error = %e, "abort before stop failed");
+        }
+        agent.stop().await;
+    }
+}
+
+/// After a restart no pi connection survives: mark instances dormant and remove leftovers.
+pub async fn reconcile_on_boot(hub: &Hub) -> Result<()> {
+    let n = hub.store.reset_running_instances().await?;
+    let leftovers =
+        hub.containers.list(&BTreeMap::from([(crate::jobs::ROLE_LABEL.to_string(), "agent".to_string())])).await?;
+    for c in leftovers {
+        hub.containers.remove(&c.name).await?;
+    }
+    if n > 0 {
+        tracing::info!(instances = n, "agents were running before restart; they wake on their next delivery");
+    }
+    Ok(())
+}
+
+fn broadcast_state(hub: &Hub, instance: &str, state: &str) {
+    if hub.live.send(Live::Instance { instance: instance.into(), state: state.into() }).is_err() {
+        tracing::trace!("no live viewers");
+    }
+}
+
+/// An urgent note to `main` from the hub.
+pub async fn alarm(hub: &Hub, text: &str) -> Result<()> {
+    let ev = Event::new(kinds::MESSAGE, Source::Hub, Provenance::Trusted, Utc::now())
+        .to("main")
+        .urgent(true)
+        .payload(json!({ "text": text }));
+    hub.emit(ev).await?;
+    Ok(())
+}
+
+/// Run forever: deliver when woken, reap idle agents periodically.
+pub async fn run(hub: Arc<Hub>) {
+    loop {
+        if let Err(e) = dispatch_pending(&hub).await {
+            tracing::error!(error = %e, "dispatch failed");
+        }
+        if let Err(e) = reap_idle(&hub, Utc::now()).await {
+            tracing::error!(error = %e, "idle reaping failed");
+        }
+        tokio::select! {
+            _ = hub.dispatch_notify.notified() => {}
+            _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {}
+        }
+    }
+}

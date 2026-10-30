@@ -1,0 +1,13 @@
+#!/bin/sh
+# The deterministic gate. The hub runs this on every proposal in a hermetic container with no
+# network; agents run it themselves before proposing. Protected path: only the user can change it.
+set -eu
+cd "$(dirname "$0")/.."
+
+echo "== botler validate";      botler-validate .
+echo "== tools manifest";       python -m botler.tools manifest --check .
+echo "== ruff format";          uv run --offline ruff format --check .
+echo "== ruff lint";            uv run --offline ruff check .
+echo "== pyright";              uv run --offline pyright
+echo "== pytest";               uv run --offline pytest
+echo "gate: ok"

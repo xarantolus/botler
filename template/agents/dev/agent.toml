@@ -1,0 +1,6 @@
+version = 1
+description = "General-purpose developer agent for building jobs, tools and connectors in the monorepo."
+kind = "ephemeral"
+image = "dev"
+workspace = "monorepo"
+idle_timeout = "30m"

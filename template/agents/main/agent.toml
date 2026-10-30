@@ -1,0 +1,7 @@
+version = 1
+description = "The front door: talks to the user, routes work, sets things up."
+kind = "persistent"
+image = "agent"
+workspace = "monorepo"
+capabilities = ["read_sessions", "spawn"]
+idle_timeout = "30m"

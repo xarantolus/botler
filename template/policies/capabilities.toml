@@ -1,0 +1,5 @@
+# Changes to these paths always need the user's approval, whatever the reviewer says.
+# The hub also protects policies/**, gate/**, secrets.toml, botler.toml and images/** even if
+# they are removed from this list.
+version = 1
+protected_paths = ["policies/**", "gate/**", "secrets.toml", "botler.toml", "images/**", "agents/reviewer/**"]

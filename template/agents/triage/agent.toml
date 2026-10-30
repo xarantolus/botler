@@ -1,0 +1,8 @@
+version = 1
+description = "Investigates failures of jobs and services and decides what to do about them."
+kind = "ephemeral"
+image = "dev"
+workspace = "monorepo"
+capabilities = ["incidents"]
+model = "standard"
+idle_timeout = "20m"

@@ -1,0 +1,43 @@
+[package]
+name = "botler"
+description = "The botler hub: one binary that runs, schedules and supervises everything."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "botler"
+path = "src/main.rs"
+
+[lib]
+name = "botler_hub"
+path = "src/lib.rs"
+
+[dependencies]
+botler-core.workspace = true
+botler-store.workspace = true
+botler-repo.workspace = true
+botler-runtime.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+uuid.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+sha2.workspace = true
+hex.workspace = true
+hmac = "0.12"
+rand = "0.9"
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

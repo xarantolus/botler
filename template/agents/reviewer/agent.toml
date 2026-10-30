@@ -1,0 +1,8 @@
+version = 1
+description = "Reviews proposed monorepo changes against policies/reviewer.md. Spawned fresh per proposal."
+kind = "ephemeral"
+image = "agent"
+workspace = "none"
+network = "none"
+capabilities = ["review"]
+idle_timeout = "10m"

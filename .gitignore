@@ -1,0 +1,15 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# build
+/target/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
+
+# local runtime data
+/.botler-data/

@@ -1,0 +1,10 @@
+[project]
+name = "shared"
+version = "0.1.0"
+description = "Shared clients and helpers for jobs, tools and connectors. Reuse before writing new code."
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,7 @@
+# Declare your own event types here (one or more files in events/). Built-in hub events
+# (message, runnable.failed, proposal.updated, ...) are documented by the hub and need no entry.
+version = 1
+
+# [[event]]
+# type = "mail.received"
+# description = "A new mail arrived in a watched folder."

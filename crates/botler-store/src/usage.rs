@@ -1,0 +1,56 @@
+//! Model usage per call, as reported by pi. Budgets are checked against these facts.
+
+use chrono::{DateTime, Utc};
+use sqlx::Row;
+
+use crate::{Result, Store, ts};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct UsageTotals {
+    pub tokens: i64,
+    pub cost_usd: f64,
+    pub calls: i64,
+}
+
+impl Store {
+    pub async fn record_usage(
+        &self,
+        instance: &str,
+        at: DateTime<Utc>,
+        model: &str,
+        tokens: i64,
+        cost_usd: f64,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO usage (instance, at, model, tokens, cost_usd) VALUES (?, ?, ?, ?, ?)")
+            .bind(instance)
+            .bind(ts(at))
+            .bind(model)
+            .bind(tokens)
+            .bind(cost_usd)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Totals since `since`, for one instance or (with `None`) for everything.
+    pub async fn usage_since(&self, instance: Option<&str>, since: DateTime<Utc>) -> Result<UsageTotals> {
+        const SELECT: &str =
+            "SELECT COALESCE(SUM(tokens), 0) AS t, COALESCE(SUM(cost_usd), 0.0) AS c, COUNT(*) AS n FROM usage";
+        let r = match instance {
+            Some(i) => {
+                sqlx::query(sqlx::AssertSqlSafe(format!("{SELECT} WHERE instance = ? AND at >= ?")))
+                    .bind(i)
+                    .bind(ts(since))
+                    .fetch_one(&self.pool)
+                    .await?
+            }
+            None => {
+                sqlx::query(sqlx::AssertSqlSafe(format!("{SELECT} WHERE at >= ?")))
+                    .bind(ts(since))
+                    .fetch_one(&self.pool)
+                    .await?
+            }
+        };
+        Ok(UsageTotals { tokens: r.get("t"), cost_usd: r.get("c"), calls: r.get("n") })
+    }
+}

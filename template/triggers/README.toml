@@ -1,0 +1,11 @@
+# Standalone triggers: when something happens, do something.
+#   cron / every / on / webhook  →  target = { resume = "<persistent agent>" }
+#                                          | { spawn = "<agent definition>" }
+#                                          | { run = "<oneshot job>" }
+version = 1
+
+# [[trigger]]
+# name = "morning-digest"
+# cron = "0 7 * * 1-5"
+# target = { resume = "main" }
+# prompt = "Write my morning digest."
