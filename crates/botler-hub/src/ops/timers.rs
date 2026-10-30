@@ -36,6 +36,10 @@ pub struct TimerSet {
     pub fires_at: DateTime<Utc>,
     /// `fires_at` in the instance's time zone, for people.
     pub local: String,
+    /// A trial run: recorded, not carried out.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, as = "Option<bool>")]
+    pub dry_run: bool,
 }
 
 impl Op for SetTimer {
@@ -54,6 +58,13 @@ impl Op for SetTimer {
             Some(i) => Target::Resume(resolve_chat(hub, i).await?),
             None => return Err(OpError::BadRequest("`instance` is required".into())),
         };
+        let tz = hub.applied().await.defs.timezone;
+        let local = fire_at.with_timezone(&tz).format("%a %Y-%m-%d %H:%M %Z").to_string();
+        if let Some(trial) = crate::trials::of_caller(hub, caller).await? {
+            let timer = TimerEffect { fires_at: fire_at, target: &target, prompt: &self.prompt };
+            crate::trials::record(hub, &trial, Self::NAME, &timer).await?;
+            return Ok(TimerSet { timer_id: String::new(), fires_at: fire_at, local, dry_run: true });
+        }
         let t = hub
             .store
             .create_timer(&NewTimer {
@@ -65,10 +76,16 @@ impl Op for SetTimer {
             })
             .await?;
         hub.schedule_notify.notify_one();
-        let tz = hub.applied().await.defs.timezone;
-        let local = fire_at.with_timezone(&tz).format("%a %Y-%m-%d %H:%M %Z").to_string();
-        Ok(TimerSet { timer_id: t.id, fires_at: fire_at, local })
+        Ok(TimerSet { timer_id: t.id, fires_at: fire_at, local, dry_run: false })
     }
+}
+
+/// The timer a trial run would have set.
+#[derive(Serialize)]
+struct TimerEffect<'a> {
+    fires_at: DateTime<Utc>,
+    target: &'a Target,
+    prompt: &'a str,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]

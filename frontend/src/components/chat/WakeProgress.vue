@@ -4,7 +4,7 @@
 import { computed, onBeforeUnmount, ref } from "vue";
 import type { AgentStatus } from "../../generated";
 import { asBuiltin } from "../../lib/events";
-import { WAKE_STEPS } from "../../lib/phase";
+import { WAKE_STEPS, retryIn } from "../../lib/phase";
 import { elapsed } from "../../lib/time";
 import { state } from "../../store";
 import CodeBlock from "../common/CodeBlock.vue";
@@ -83,6 +83,14 @@ const crashDismissed = ref<string | null>(null);
       </UCollapsible>
     </template>
   </UAlert>
+  <UAlert
+    v-else-if="status?.status === 'retrying'"
+    color="warning"
+    variant="subtle"
+    icon="i-lucide-refresh-cw"
+    :title="`The model call failed; retrying ${retryIn(status.at, now)}`"
+    :description="status.error"
+  />
   <UAlert
     v-else-if="status?.status === 'paused'"
     color="error"

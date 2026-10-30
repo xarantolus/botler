@@ -33,6 +33,9 @@ max_tokens = 16384
 [defaults]
 idle_timeout = "15m"
 job_timeout = "10m"
+# How long a spawned agent or the reviewer may take to answer before whoever waits on it is told
+# (`reply.overdue`); a proposal whose reviewer is overdue goes to you for approval.
+reply_within = "20m"
 
 [defaults.budget]
 usd_per_day = 1.0

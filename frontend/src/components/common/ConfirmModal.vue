@@ -8,8 +8,8 @@ const props = defineProps<{
   description?: string;
   confirmLabel: string;
   color?: "primary" | "warning" | "error";
-  /** Ask for an optional reason. */
-  reason?: { label: string; placeholder?: string };
+  /** Ask for a reason; optional unless `required`. */
+  reason?: { label: string; placeholder?: string; required?: boolean };
 }>();
 const emit = defineEmits<{ close: [result: { reason: string } | false] }>();
 const reason = ref("");
@@ -18,7 +18,7 @@ const reason = ref("");
 <template>
   <UModal :title="props.title" :description="props.description" :ui="{ footer: 'justify-end' }">
     <template v-if="props.reason" #body>
-      <UFormField :label="props.reason.label" hint="Optional">
+      <UFormField :label="props.reason.label" :hint="props.reason.required ? undefined : 'Optional'" :required="props.reason.required">
         <UTextarea
           v-model="reason"
           :placeholder="props.reason.placeholder"
@@ -34,6 +34,7 @@ const reason = ref("");
       <UButton
         :color="props.color ?? 'primary'"
         :label="props.confirmLabel"
+        :disabled="props.reason?.required && !reason.trim()"
         autofocus
         @click="emit('close', { reason: reason.trim() })"
       />

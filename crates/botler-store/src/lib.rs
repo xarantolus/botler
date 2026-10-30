@@ -7,6 +7,7 @@ mod breakers;
 mod deliveries;
 mod dialogs;
 mod events;
+mod grants;
 mod incidents;
 mod instances;
 mod kv;
@@ -16,7 +17,9 @@ mod runs;
 mod schedules;
 mod secrets;
 mod timers;
+mod trials;
 mod usage;
+mod waits;
 
 use std::path::Path;
 use std::str::FromStr;
@@ -28,14 +31,17 @@ pub use breakers::Breaker;
 pub use deliveries::{Delivery, DeliveryStatus};
 pub use dialogs::{Dialog, DialogKind, DialogStatus, NewDialog, Priority};
 pub use events::EventQuery;
+pub use grants::{Grant, NewSubscription};
 pub use incidents::{Incident, IncidentStatus};
 pub use instances::{ArchiveRecord, Handoff, HandoverReport, Instance, InstanceState, NewInstance};
-pub use proposals::{NewProposal, Proposal, ProposalKind, ProposalStatus};
+pub use proposals::{NewProposal, Proposal, ProposalDecision, ProposalKind, ProposalStage, ProposalStatus};
 pub use runs::{NewRun, Run, RunKind, RunStatus};
 pub use schedules::ScheduleState;
 pub use secrets::SecretKey;
 pub use timers::{NewTimer, Timer, TimerStatus};
+pub use trials::{MAX_EFFECTS as MAX_TRIAL_EFFECTS, Trial};
 pub use usage::UsageTotals;
+pub use waits::{ReplyExpectation, TurnRetry};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

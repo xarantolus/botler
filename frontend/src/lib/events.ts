@@ -8,13 +8,18 @@ const BUILTIN = {
   "dialog.answered": true,
   "dialog.aborted": true,
   "proposal.updated": true,
+  "trial.finished": true,
   "action.result": true,
   "breaker.tripped": true,
   "archive.requested": true,
   "agent.idle": true,
+  "agent.turn_failed": true,
+  "reply.overdue": true,
   timer: true,
   schedule: true,
   manual: true,
+  "access.changed": true,
+  "environment.updated": true,
 } as const satisfies Record<BuiltinPayload["type"], true>;
 
 /** The typed payload of a built-in event, or null for agent-defined event types. */
@@ -29,13 +34,18 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   "dialog.answered": "i-lucide-message-square-reply",
   "dialog.aborted": "i-lucide-message-square-x",
   "proposal.updated": "i-lucide-git-pull-request-arrow",
+  "trial.finished": "i-lucide-flask-conical",
   "action.result": "i-lucide-zap",
   "breaker.tripped": "i-lucide-octagon-pause",
   "archive.requested": "i-lucide-archive",
   "agent.idle": "i-lucide-moon",
+  "agent.turn_failed": "i-lucide-circle-alert",
+  "reply.overdue": "i-lucide-hourglass",
   timer: "i-lucide-alarm-clock",
   schedule: "i-lucide-calendar-clock",
   manual: "i-lucide-hand",
+  "access.changed": "i-lucide-shield-plus",
+  "environment.updated": "i-lucide-refresh-cw",
 };
 
 /** An icon for an event type (agent-defined types get a generic one). */
@@ -72,6 +82,8 @@ export function eventSummary(ev: BotlerEvent): string {
       return `"${b.payload.question}" withdrawn: ${b.payload.reason}`;
     case "proposal.updated":
       return `${b.payload.title}: ${b.payload.status}`;
+    case "trial.finished":
+      return `trial of ${b.payload.job}: ${b.payload.outcome}, ${b.payload.effects.length} effects recorded`;
     case "action.result":
       return `${b.payload.action}: ${b.payload.ok ? "ok" : "failed"}`;
     case "breaker.tripped":
@@ -80,12 +92,20 @@ export function eventSummary(ev: BotlerEvent): string {
       return `archive requested${b.payload.reason ? `: ${b.payload.reason}` : ""}`;
     case "agent.idle":
       return `${b.payload.title ?? b.payload.instance} is idle`;
+    case "agent.turn_failed":
+      return `${b.payload.instance} failed (${b.payload.class}, ${b.payload.attempts} attempts): ${b.payload.error}`;
+    case "reply.overdue":
+      return `${b.payload.instance} has not answered`;
     case "timer":
       return `timer ${b.payload.timer_id}${b.payload.note ? `: ${b.payload.note}` : ""}`;
     case "schedule":
       return `schedule ${b.payload.trigger}${b.payload.skipped ? ` (${b.payload.skipped} missed)` : ""}`;
     case "manual":
       return `${b.payload.runnable} started by hand`;
+    case "access.changed":
+      return `${b.payload.resource} ${b.payload.change}`;
+    case "environment.updated":
+      return `restarted: ${b.payload.changes.join("; ")}`;
   }
 }
 

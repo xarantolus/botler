@@ -28,7 +28,14 @@ pub const BUILTIN: &[BuiltinEvent] = &[
     BuiltinEvent {
         kind: kinds::MESSAGE,
         summary: "A message from the user or another agent.",
-        fields: &[("text", "the message"), ("files", "paths of attached files under /inbox/files, if any")],
+        fields: &[
+            ("text", "the message"),
+            ("files", "paths of attached files under /inbox/files, if any"),
+            (
+                "mode",
+                "from the user while you worked: `queue` (held until your turn ended) or `steer` (interrupting it)",
+            ),
+        ],
         follow_up: &[FollowUp {
             tool: "get_events",
             args: &[("correlation", "correlation")],
@@ -112,6 +119,7 @@ pub const BUILTIN: &[BuiltinEvent] = &[
             ("status", "gating | reviewing | awaiting_user | merged | rejected | failed"),
             ("detail", "gate failures, reviewer notes, or the reason for the decision"),
             ("summary", "the deployment summary of the change"),
+            ("reason", "the user's reason for rejecting it (or comment on approving it)"),
         ],
         follow_up: &[FollowUp {
             tool: "get_proposal",
@@ -121,7 +129,26 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         guidance: "If the gate failed, fix the reported problems on your branch and call `propose_change` again. \
                    `gate/run` and everything the gate checks are files on your branch: a gate failure is always \
                    fixable there (changes to `gate/` need the user's approval). \
-                   If it was rejected, read the reason before trying anything else.",
+                   If it was rejected, read `reason` (the user's words) or the reviewer's notes in `detail` \
+                   before trying anything else, and address them in the next proposal.",
+    },
+    BuiltinEvent {
+        kind: kinds::TRIAL_FINISHED,
+        summary: "A `trial_run` you started ended. Nothing it emitted, sent or scheduled took effect.",
+        fields: &[
+            ("run_id", "the trial run"),
+            ("job", "the job or service tried"),
+            ("branch", "the branch it ran from"),
+            ("outcome", "succeeded | failed | time_up (a service still running when its minutes were up)"),
+            ("exit_code", "process exit code, if it exited"),
+            ("reason", "why it ended, if not a clean exit"),
+            ("logs_tail", "the last lines of output"),
+            ("effects", "the events, messages and timers it would have produced"),
+            ("withheld_secrets", "secret groups it declares that you do not hold, so it ran without them"),
+        ],
+        follow_up: &[FollowUp { tool: "get_run_logs", args: &[("run_id", "run_id")], why: "full output" }],
+        guidance: "Check the effects are the events you expect, with sensible payloads, and the logs are clean. \
+                   Fix and `trial_run` again, or `propose_change` once it behaves.",
     },
     BuiltinEvent {
         kind: kinds::ACTION_RESULT,
@@ -187,6 +214,40 @@ pub const BUILTIN: &[BuiltinEvent] = &[
                    it. Otherwise do not answer (no thanks needed): it sleeps until messaged.",
     },
     BuiltinEvent {
+        kind: kinds::AGENT_TURN_FAILED,
+        summary: "An agent you are waiting on could not finish its turn: its model calls kept failing.",
+        fields: &[
+            ("instance", "the agent"),
+            ("class", "transient (retries used up) | context_length | permanent | auth | billing"),
+            ("error", "the provider's error message"),
+            ("attempts", "how often the turn was tried"),
+            ("event_id", "the event whose delivery started the failed turn"),
+        ],
+        follow_up: &[
+            FollowUp { tool: "read_session", args: &[("instance", "instance")], why: "how far it got before failing" },
+            FollowUp { tool: "get_events", args: &[("correlation", "event_id")], why: "the conversation it was in" },
+        ],
+        guidance: "Decide whether to retry (message it again later, e.g. after a `set_timer`), do the work \
+                   yourself, or tell the user. Auth and billing errors need the user (a key or credits): do not \
+                   retry those. The hub already retried transient errors with backoff, so retrying right away \
+                   rarely helps.",
+    },
+    BuiltinEvent {
+        kind: kinds::REPLY_OVERDUE,
+        summary: "An agent you messaged or spawned has not answered within the time you expected.",
+        fields: &[
+            ("instance", "the agent that has not answered"),
+            ("event_id", "your message or task waiting for an answer"),
+            ("due_at", "when the answer was due"),
+        ],
+        follow_up: &[
+            FollowUp { tool: "read_session", args: &[("instance", "instance")], why: "what it is doing" },
+            FollowUp { tool: "list_chats", args: &[], why: "whether it is running, asleep or failed" },
+        ],
+        guidance: "Check what it is doing. Then decide: wait longer (`set_timer`), nudge it with `send_message`, \
+                   do the work yourself, or tell the user. Do not just resend the same request.",
+    },
+    BuiltinEvent {
         kind: kinds::SCHEDULE,
         summary: "A schedule (cron or interval trigger) fired.",
         fields: &[
@@ -210,6 +271,30 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         fields: &[("runnable", "the job")],
         follow_up: &[],
         guidance: "Nothing to do: it only starts the job.",
+    },
+    BuiltinEvent {
+        kind: kinds::ACCESS_CHANGED,
+        summary: "Something this chat may use changed: a grant was given without asking (policy `auto`) or revoked.",
+        fields: &[
+            ("grant_id", "the grant"),
+            ("resource", "what it is about, e.g. `secret:github`"),
+            ("change", "granted | revoked"),
+            ("note", "what it means for you"),
+        ],
+        follow_up: &[FollowUp {
+            tool: "list_connections",
+            args: &[],
+            why: "everything this chat holds and is subscribed to",
+        }],
+        guidance: "A grant is applied to your container when you are next woken; a revoked one is gone from then \
+                   on. Carry on with what needed it, or stop using it.",
+    },
+    BuiltinEvent {
+        kind: kinds::ENVIRONMENT_UPDATED,
+        summary: "Your container was restarted with a changed environment (e.g. a merged change); this conversation goes on.",
+        fields: &[("changes", "what changed: tools, image, instructions, pi resources, secrets, services")],
+        follow_up: &[],
+        guidance: "Use what is new from now on (new tools are in your tool list). Nothing to answer.",
     },
 ];
 
@@ -325,6 +410,10 @@ mod tests {
             kinds::TIMER,
             kinds::ARCHIVE_REQUESTED,
             kinds::AGENT_IDLE,
+            kinds::AGENT_TURN_FAILED,
+            kinds::REPLY_OVERDUE,
+            kinds::ACCESS_CHANGED,
+            kinds::ENVIRONMENT_UPDATED,
         ] {
             assert!(builtin(k).is_some(), "{k} missing from catalog");
         }

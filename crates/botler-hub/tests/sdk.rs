@@ -120,6 +120,20 @@ fn sdk_ops_are_current() {
     assert!(have == want, "{} is stale; run `BOTLER_BLESS=1 cargo test -p botler --test sdk`", path.display());
 }
 
+/// The JSON Schema of `ToolRender`, which the SDK's tests check its render-hint models against.
+#[test]
+fn tool_render_schema_is_current() {
+    let path = sdk_dir().join("tests/tool_render.schema.json");
+    let schema = schemars::schema_for!(botler_core::defs::ToolRender);
+    let want = serde_json::to_string_pretty(&schema).unwrap() + "\n";
+    if std::env::var_os("BOTLER_BLESS").is_some() {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "{} is stale; run `BOTLER_BLESS=1 cargo test -p botler --test sdk`", path.display());
+}
+
 #[test]
 fn every_sdk_file_is_embedded() {
     let mut on_disk: Vec<String> = std::fs::read_dir(sdk_dir().join("botler"))
@@ -167,16 +181,14 @@ async fn granted_python_tools_reach_the_agent() {
             .unwrap();
     assert_eq!(tools[0]["name"], "example.word_count");
     assert_eq!(tools[0]["module"], "example");
+    // Tool code is baked into the image (/opt/botler/tools-venv), not mounted.
     let containers = e.fake.containers();
-    let monorepo = |name: &str| {
-        containers[&agents::container_name(&e.hub, name)].spec.mounts.iter().find_map(|m| match m {
-            Mount::Bind { src, dst, read_only } if dst == "/botler/applied" => Some((src.clone(), *read_only)),
-            _ => None,
-        })
-    };
-    let (src, ro) = monorepo("counter").expect("applied commit mounted for tool code");
-    assert!(ro && src.join("tools/example/src/example/__init__.py").exists() && src.join("uv.lock").exists());
-    assert!(monorepo("plain").is_none(), "no tools granted, nothing mounted");
+    let mounts = &containers[&agents::container_name(&e.hub, "counter")].spec.mounts;
+    assert!(mounts.iter().all(|m| !matches!(m, Mount::Bind { dst, .. } if dst == "/botler/applied")));
+    // The web tools declare a render hint; it reaches the manifest the hub loaded.
+    let search = &e.hub.applied().await.defs.tools["web.search"];
+    assert_eq!(search.pi_name(), "web_search");
+    assert!(matches!(search.render, Some(botler_core::defs::ToolRender::Links { .. })));
     let none = std::fs::read_to_string(e.hub.paths.agent_dir("plain").join("tools.json")).unwrap();
     assert_eq!(none.trim(), "[]");
 }

@@ -13,12 +13,15 @@ use botler_core::change::{ChangeSummary, Decision, Verdict, decide, preview};
 use botler_core::defs::Environment;
 use botler_core::payloads::{BuiltinPayload, ProposalUpdatedPayload};
 use botler_runtime::Mount;
-use botler_store::{DialogKind, NewDialog, NewProposal, Priority, Proposal, ProposalKind, ProposalStatus};
+use botler_store::{
+    DialogKind, NewDialog, NewProposal, Priority, Proposal, ProposalDecision, ProposalKind, ProposalStage,
+    ProposalStatus,
+};
 use chrono::Utc;
 use tokio::io::AsyncReadExt;
 
 use crate::environment::{self, Runnable};
-use crate::hub::{Hub, HubError, Result, load_at};
+use crate::hub::{Hub, HubError, Live, Result, load_at};
 use crate::{images, router};
 
 /// How often a proposal is re-run because main moved underneath it before giving up.
@@ -86,6 +89,9 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     }
     let p = hub.store.proposal(id).await?;
     hub.store.set_proposal_status(id, ProposalStatus::Gating).await?;
+    if !stage(hub, id, ProposalStage::Rebase).await? {
+        return Ok(());
+    }
     let original = p.head_commit.clone().unwrap_or_default();
     let head = match hub.repo.rebase_onto_main(&original, &p.title).await {
         Ok(h) => h,
@@ -115,21 +121,30 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     update(hub, id, "gating", &format!("Validated. Deployment summary:\n\n{md}\nRunning the gate…")).await?;
 
     let (ok, report) = run_gate(hub, id, &head).await?;
+    // The user may have rejected it meanwhile (which also stops the gate).
+    if hub.store.proposal(id).await?.status.is_terminal() {
+        return Ok(());
+    }
     hub.store.set_proposal_gate(id, &head, &summary, &report).await?;
     if !ok {
         return fail(hub, id, &format!("the gate failed; fix and propose again:\n```\n{report}\n```")).await;
     }
 
+    if !stage(hub, id, ProposalStage::Review).await? {
+        return Ok(());
+    }
     // The reviewer is spawned while the proposal is still `gating`; it cannot submit before the
     // update below, since it first has to start and read the task.
     let reviewer = start_review(hub, id, &base, &head, &md, &report).await?;
     match reviewer {
         Some(name) => {
             hub.store.set_proposal_reviewing(id, &name).await?;
+            // A reviewer that fails or goes quiet hands the decision to the user.
+            crate::turns::expect_reply(hub, crate::turns::HUB, &name, None, None).await?;
             update(hub, id, "reviewing", &format!("Gate passed. Reviewer `{name}` is looking at it.")).await
         }
         // No reviewer agent defined: the user decides.
-        None => decide_and_act(hub, id, Verdict::Escalate, "no reviewer agent is defined").await,
+        None => decide_and_act(hub, id, "hub", None, "no reviewer agent is defined").await,
     }
 }
 
@@ -140,8 +155,15 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
     if tree.is_none() {
         return Ok((true, "no gate/run in this commit; nothing to check".into()));
     }
+    let stopped = || Ok((false, "stopped: the proposal was decided".into()));
+    if !stage(hub, id, ProposalStage::Image).await? {
+        return stopped();
+    }
     let image_name = if applied.defs.images.contains("dev") { "dev" } else { "agent" };
     let image = images::ensure_agent_image(hub, image_name, commit).await?;
+    if !stage(hub, id, ProposalStage::Gate).await? {
+        return stopped();
+    }
     let dir = hub.paths.root.join("gates").join(id);
     if dir.exists() {
         tokio::fs::remove_dir_all(&dir).await?;
@@ -229,7 +251,7 @@ async fn start_review(
 /// The reviewer's verdict arrives (from the `submit_review` op).
 pub async fn submit_review(hub: &Arc<Hub>, reviewer: &str, id: &str, verdict: Verdict, notes: &str) -> Result<()> {
     let p = hub.store.proposal(id).await?;
-    if p.status != ProposalStatus::Reviewing || p.reviewer.as_deref() != Some(reviewer) {
+    if p.reviewer.as_deref() != Some(reviewer) {
         return Err(HubError::Forbidden(format!("proposal {id} is not waiting for your review")));
     }
     let v = match verdict {
@@ -237,18 +259,57 @@ pub async fn submit_review(hub: &Arc<Hub>, reviewer: &str, id: &str, verdict: Ve
         Verdict::Escalate => "escalate",
         Verdict::Reject => "reject",
     };
+    // The user decided while the review ran: the verdict is kept for the record, nothing more.
+    if p.status == ProposalStatus::Rejected && p.decided_by.as_deref() == Some(USER) {
+        return Ok(hub.store.set_proposal_review(id, v, notes).await?);
+    }
+    if p.status != ProposalStatus::Reviewing {
+        return Err(HubError::Forbidden(format!("proposal {id} is not waiting for your review")));
+    }
     hub.store.set_proposal_review(id, v, notes).await?;
-    decide_and_act(hub, id, verdict, notes).await
+    hub.store.clear_expectations(Some(crate::turns::HUB), reviewer).await?;
+    decide_and_act(hub, id, reviewer, Some(verdict), notes).await
 }
 
-async fn decide_and_act(hub: &Arc<Hub>, id: &str, verdict: Verdict, notes: &str) -> Result<()> {
+/// The reviewer `reviewer` failed or did not answer in time: proposals it is still reviewing go
+/// to the user, with the reason. A no-op for any other instance, and for a proposal the user
+/// already decided (it is no longer `reviewing`).
+pub async fn reviewer_unavailable(hub: &Arc<Hub>, reviewer: &str, reason: &str) -> Result<()> {
+    for p in hub.store.unfinished_proposals().await? {
+        if p.status == ProposalStatus::Reviewing && p.reviewer.as_deref() == Some(reviewer) {
+            tracing::warn!(proposal = %p.id, reviewer, reason, "reviewer unavailable; asking the user");
+            let notes = format!("reviewer unavailable: {reason}");
+            hub.store.set_proposal_review(&p.id, "unavailable", &notes).await?;
+            decide_and_act(hub, &p.id, reviewer, None, &notes).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The decision table, applied. `by` is the reviewer (or `hub` without one); `verdict` is `None`
+/// when there is no review (see [`decide`]).
+async fn decide_and_act(hub: &Arc<Hub>, id: &str, by: &str, verdict: Option<Verdict>, notes: &str) -> Result<()> {
     let p = hub.store.proposal(id).await?;
     let summary: ChangeSummary = summary_of(&p)?;
-    match decide(&summary, verdict) {
-        Decision::Reject => {
-            hub.store.set_proposal_outcome(id, ProposalStatus::Rejected, "rejected by the reviewer").await?;
-            update(hub, id, "rejected", &format!("The reviewer rejected it:\n{notes}")).await
+    let decision = decide(&summary, verdict);
+    let why = match (&decision, verdict) {
+        (Decision::Reject, _) => "rejected by the reviewer".to_string(),
+        (Decision::Merge, _) => {
+            "merged without asking you: the reviewer approved and nothing in it needs your approval".to_string()
         }
+        (Decision::AskUser, Some(Verdict::Approve)) => {
+            format!("asked you: the reviewer approved, but {} change(s) need your approval", summary.escalations.len())
+        }
+        (Decision::AskUser, None) if by == "hub" => "asked you: no reviewer agent is defined".to_string(),
+        (Decision::AskUser, None) => format!("asked you: {notes}"),
+        (Decision::AskUser, _) => "asked you: the reviewer escalated it to you".to_string(),
+    };
+    let status = (decision == Decision::Reject).then_some(ProposalStatus::Rejected);
+    if !hub.store.decide_proposal(id, status, &ProposalDecision { by, why: &why, reason: None }).await? {
+        return Ok(()); // the user decided first
+    }
+    match decision {
+        Decision::Reject => update(hub, id, "rejected", &format!("The reviewer rejected it:\n{notes}")).await,
         Decision::Merge => merge(hub, id).await,
         Decision::AskUser => ask_user(hub, &p, &summary, notes).await,
     }
@@ -259,6 +320,9 @@ fn summary_of(p: &Proposal) -> Result<ChangeSummary> {
 }
 
 async fn ask_user(hub: &Hub, p: &Proposal, summary: &ChangeSummary, notes: &str) -> Result<()> {
+    if !stage(hub, &p.id, ProposalStage::Approval).await? {
+        return Ok(());
+    }
     hub.store.set_proposal_status(&p.id, ProposalStatus::AwaitingUser).await?;
     let tz = hub.applied().await.defs.timezone;
     update(hub, &p.id, "awaiting_user", "Waiting for the user's approval.").await?;
@@ -286,22 +350,89 @@ async fn ask_user(hub: &Hub, p: &Proposal, summary: &ChangeSummary, notes: &str)
     Ok(())
 }
 
-/// The user answered an approval dialog.
-pub async fn on_approval(hub: &Arc<Hub>, proposal_id: &str, approved: bool) -> Result<()> {
-    let p = hub.store.proposal(proposal_id).await?;
-    if p.status != ProposalStatus::AwaitingUser {
-        return Err(HubError::Forbidden(format!("proposal {proposal_id} is not waiting for approval")));
-    }
+/// `decided_by` of the user's decisions.
+pub const USER: &str = "user";
+
+/// The user decides: approve (only once it awaits them; `reason` is an optional comment) or
+/// reject at any stage before the merge (`reason` required), which stops the pipeline where it
+/// is. Either way the approval dialog closes and the agent hears the reason.
+pub async fn on_approval(hub: &Arc<Hub>, id: &str, approved: bool, reason: Option<&str>) -> Result<()> {
+    let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+    let p = hub.store.proposal(id).await?;
     if approved {
-        merge(hub, proposal_id).await
-    } else {
-        hub.store.set_proposal_outcome(proposal_id, ProposalStatus::Rejected, "rejected by the user").await?;
-        update(hub, proposal_id, "rejected", "The user rejected it.").await
+        if p.status != ProposalStatus::AwaitingUser {
+            return Err(HubError::Forbidden(format!(
+                "proposal {id} is not waiting for your approval; approve it once its checks finish"
+            )));
+        }
+        let d = ProposalDecision { by: USER, why: "approved by you", reason };
+        if !hub.store.decide_proposal(id, None, &d).await? {
+            return Err(HubError::Forbidden(format!("proposal {id} is already decided")));
+        }
+        close_approval(hub, id, "approve").await?;
+        return merge(hub, id).await;
     }
+    let Some(reason) = reason else {
+        return Err(HubError::Forbidden("say why you reject it: the agent reads the reason".into()));
+    };
+    let during = match p.stage {
+        None | Some(ProposalStage::Rebase) => "while it was being rebased",
+        Some(ProposalStage::Image) => "while the gate's image was building",
+        Some(ProposalStage::Gate) => "while the gate ran",
+        Some(ProposalStage::Review) => "while it was being reviewed",
+        Some(ProposalStage::Approval) => "when asked",
+        Some(ProposalStage::Merge) => "while merging",
+    };
+    let why = format!("rejected by you {during}");
+    let d = ProposalDecision { by: USER, why: &why, reason: Some(reason) };
+    if !hub.store.decide_proposal(id, Some(ProposalStatus::Rejected), &d).await? {
+        return Err(HubError::Forbidden(format!("proposal {id} is already decided or merging")));
+    }
+    close_approval(hub, id, "reject").await?;
+    update(hub, id, "rejected", &format!("The user rejected it: {reason}")).await?;
+    // A running gate is stopped; its pipeline notices the rejection and ends.
+    let gate = environment::gate_container(hub, id);
+    if hub.containers.inspect(&gate).await?.is_some() {
+        hub.containers.stop(&gate, 0).await?;
+    }
+    Ok(())
+}
+
+/// Answer the proposal's open approval dialog, if any.
+async fn close_approval(hub: &Hub, id: &str, answer: &str) -> Result<()> {
+    for d in hub.store.open_dialogs().await? {
+        if d.kind == DialogKind::Approval && d.proposal_id.as_deref() == Some(id) {
+            hub.store.answer_dialog(&d.id, answer).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Move an in-flight proposal to `stage` and show it live. False once it was decided (the user
+/// rejected it): the pipeline then stops.
+async fn stage(hub: &Hub, id: &str, stage: ProposalStage) -> Result<bool> {
+    let moved = hub.store.set_proposal_stage(id, stage).await?;
+    if moved {
+        broadcast(hub, id).await?;
+    }
+    Ok(moved)
+}
+
+/// Show the proposal's current state to live viewers.
+async fn broadcast(hub: &Hub, id: &str) -> Result<()> {
+    let proposal = Box::new(hub.store.proposal(id).await?);
+    if hub.live.send(Live::Proposal { proposal }).is_err() {
+        tracing::trace!("no live viewers");
+    }
+    Ok(())
 }
 
 /// Fast-forward main to the reviewed commit, apply it, tell everyone.
 async fn merge(hub: &Arc<Hub>, id: &str) -> Result<()> {
+    // From here on a rejection cannot stop it.
+    if !stage(hub, id, ProposalStage::Merge).await? {
+        return Ok(());
+    }
     let p = hub.store.proposal(id).await?;
     let head = p.head_commit.clone().unwrap_or_default();
     let base = p.base_commit.clone().unwrap_or_default();
@@ -331,12 +462,15 @@ async fn mirror(hub: &Hub) {
 }
 
 async fn fail(hub: &Hub, id: &str, why: &str) -> Result<()> {
-    hub.store.set_proposal_outcome(id, ProposalStatus::Failed, why).await?;
+    if !hub.store.set_proposal_outcome(id, ProposalStatus::Failed, why).await? {
+        return Ok(()); // decided meanwhile
+    }
     update(hub, id, "failed", why).await
 }
 
-/// Report progress to the proposing agent.
+/// Report progress to the proposing agent (and live viewers).
 async fn update(hub: &Hub, id: &str, status: &str, detail: &str) -> Result<()> {
+    broadcast(hub, id).await?;
     let p = hub.store.proposal(id).await?;
     let payload = BuiltinPayload::ProposalUpdated(ProposalUpdatedPayload {
         proposal_id: id.into(),
@@ -344,6 +478,7 @@ async fn update(hub: &Hub, id: &str, status: &str, detail: &str) -> Result<()> {
         status: status.into(),
         detail: detail.into(),
         summary: None,
+        reason: p.decision_reason,
     });
     let ev = crate::hub::builtin(payload, Source::Hub)?.to(p.instance.clone());
     hub.emit(ev).await?;
@@ -417,12 +552,22 @@ pub async fn interrupted(hub: &Hub) -> Result<Vec<String>> {
 }
 
 /// After a restart: interrupted proposals start over, unless finished meanwhile (superseded);
-/// reviews in progress continue.
+/// reviews in progress continue. A review without a deadline (started before deadlines existed)
+/// gets one counted from when it started, so the scheduler hands it to the user once overdue.
 pub async fn resume_on_boot(hub: &Arc<Hub>, interrupted: Vec<String>) -> Result<()> {
     for id in interrupted {
         if hub.store.proposal(&id).await?.status == ProposalStatus::Gating {
             tracing::info!(proposal = %id, "restarting interrupted proposal");
             spawn_pipeline(hub.clone(), id);
+        }
+    }
+    let within = hub.applied().await.defs.instance.defaults.reply_within.as_chrono();
+    for p in hub.store.unfinished_proposals().await? {
+        let Some(reviewer) = p.reviewer.as_deref().filter(|_| p.status == ProposalStatus::Reviewing) else { continue };
+        let waiting = hub.store.expectations_on(reviewer).await?.iter().any(|x| x.sender == crate::turns::HUB);
+        if !waiting {
+            tracing::info!(proposal = %p.id, reviewer, "review in progress has no deadline; adding one");
+            hub.store.expect_reply(crate::turns::HUB, reviewer, None, p.updated_at + within).await?;
         }
     }
     Ok(())

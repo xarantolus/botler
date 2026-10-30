@@ -1,7 +1,7 @@
 //! Job runs: oneshot containers started by triggers, timers, agents or replays, and the shared
 //! launch and exit handling that services (`services.rs`) use too.
 
-use botler_core::defs::{Lifetime, Overlap};
+use botler_core::defs::{Environment, Job, Lifetime, Overlap};
 use botler_core::payloads::{BuiltinPayload, RunnableFinishedPayload};
 use botler_core::{Event, Source};
 use botler_runtime::Mount;
@@ -63,6 +63,10 @@ pub async fn admit(
     if def.spec.lifetime != Lifetime::Oneshot {
         return Err(HubError::Forbidden(format!("{job} is a service; services are not triggered")));
     }
+    if !def.spec.enabled {
+        tracing::info!(job, trigger, "disabled (enabled = false); not started");
+        return Ok(None);
+    }
     let busy = hub.store.runs_for(job, 20).await?.iter().any(|r| !r.status.is_terminal());
     if busy && overlap == Overlap::Skip {
         tracing::info!(job, trigger, "previous run still active; skipped (overlap = skip)");
@@ -108,17 +112,30 @@ pub async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<(
         .jobs
         .get(&run.runnable)
         .ok_or_else(|| HubError::Undefined { kind: "job", name: run.runnable.clone() })?;
-    let commit = run.commit_id.clone().unwrap_or_else(|| applied.commit.clone());
-    let image = images::ensure_job_image(hub, &run.runnable, &commit).await?;
-    let service = def.spec.lifetime == Lifetime::Service;
-    // A service's token lives as long as its run: `Caller::resolve` refuses it once the run ends.
-    let ttl = if service {
-        Duration::days(3650)
-    } else {
-        def.spec.timeout.unwrap_or(applied.defs.instance.defaults.job_timeout).as_chrono() + Duration::minutes(5)
+    let timeout = def.spec.timeout.unwrap_or(applied.defs.instance.defaults.job_timeout).as_chrono();
+    launch_job(hub, run, &def.spec, &def.spec.env, timeout, event).await
+}
+
+/// Start the container for `run` of `job` (from any commit) in `env`. Its token lives `timeout`
+/// plus a margin, or as long as the run for a service.
+pub(crate) async fn launch_job(
+    hub: &Hub,
+    run: &Run,
+    job: &Job,
+    env: &Environment,
+    timeout: Duration,
+    event: Option<&Event>,
+) -> Result<()> {
+    let commit = match &run.commit_id {
+        Some(c) => c.clone(),
+        None => hub.applied().await.commit.clone(),
     };
+    let image = images::ensure_job_image(hub, &run.runnable, &commit).await?;
+    let service = run.kind == RunKind::Service;
+    // A service's token lives as long as its run: `Caller::resolve` refuses it once the run ends.
+    let ttl = if service { Duration::days(3650) } else { timeout + Duration::minutes(5) };
     let what = Runnable::Run { run, ttl };
-    let mut spec = environment::container_spec(hub, &def.spec.env, what, image, def.spec.command.clone(), &[]).await?;
+    let mut spec = environment::container_spec(hub, env, what, image, job.command.clone(), &[]).await?;
     let run_dir = hub.paths.root.join("runs").join(&run.id);
     tokio::fs::create_dir_all(&run_dir).await?;
     let event_file = run_dir.join("event.json");
@@ -153,6 +170,10 @@ pub async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<(
 pub async fn sweep_timeouts(hub: &Hub, now: chrono::DateTime<Utc>) -> Result<()> {
     let applied = hub.applied().await;
     for run in hub.store.active_runs().await? {
+        if run.kind == RunKind::Trial {
+            crate::trials::sweep(hub, &run, now).await?;
+            continue;
+        }
         if run.kind != RunKind::Oneshot || run.status != RunStatus::Running {
             continue;
         }
@@ -189,6 +210,9 @@ async fn on_timeout(hub: &Hub, run_id: &str) -> Result<()> {
 /// A job container exited (from the runtime event stream or boot reconciliation).
 pub async fn on_exit(hub: &Hub, run_id: &str, exit_code: Option<i64>, oom: bool) -> Result<()> {
     let run = hub.store.run(run_id).await?;
+    if run.kind == RunKind::Trial {
+        return crate::trials::on_exit(hub, &run, exit_code, oom).await;
+    }
     let name = run_container(hub, &run);
     let logs = collect_logs(hub, &name, run_id).await;
     if run.kind == RunKind::Service {

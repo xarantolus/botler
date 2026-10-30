@@ -93,7 +93,8 @@ async fn session_files_are_indexed_incrementally() {
     );
     append(&e, "chat-a", &assistant("a1", "Rotated the antenna by ninety degrees"));
     let first = search::index_pending(&e.hub).await.unwrap();
-    assert_eq!(first.entries, 2);
+    // The user's message, the assistant's text and its tool call (a document of its own).
+    assert_eq!(first.entries, 3);
     assert!(first.repo > 0, "the applied monorepo is indexed");
 
     // Nothing new: nothing indexed.
@@ -106,7 +107,7 @@ async fn session_files_are_indexed_incrementally() {
     append(&e, "chat-a", &partial[..20]);
     assert_eq!(search::index_pending(&e.hub).await.unwrap().entries, 1);
     append(&e, "chat-a", &partial[20..]);
-    assert_eq!(search::index_pending(&e.hub).await.unwrap().entries, 1);
+    assert_eq!(search::index_pending(&e.hub).await.unwrap().entries, 2);
 
     let hits = find(&e, &user_caller(), json!({"query": "antenna"})).await.unwrap();
     let mut found = refs(&hits);
@@ -117,13 +118,15 @@ async fn session_files_are_indexed_incrementally() {
     assert_eq!(u1["title"], "from user");
     assert!(u1["snippet"].as_str().unwrap().contains("**antenna**"), "{u1}");
     assert!(!u1["snippet"].as_str().unwrap().contains("provenance"), "headers are not indexed: {u1}");
-    // Stemming, and tool calls are part of the assistant's text.
+    // Stemming; a tool call is found as itself (`<entry>#<call>`).
     assert_eq!(refs(&find(&e, &user_caller(), json!({"query": "rotate"})).await.unwrap()), ["session:a1"]);
+    let calls = refs(&find(&e, &user_caller(), json!({"query": "ls"})).await.unwrap());
+    assert!(calls.contains(&"session:a1#c1".to_string()), "{calls:?}");
     assert_eq!(refs(&find(&e, &user_caller(), json!({"query": "gearbox replaced"})).await.unwrap()), ["session:a2"]);
 
     // A rewritten file (a new working directory in its header) is read again without duplicates.
     assert!(botler_hub::sessions::retarget_cwd(&session_path(&e, "chat-a"), "/workspace").await.unwrap());
-    assert_eq!(search::index_pending(&e.hub).await.unwrap().entries, 4);
+    assert_eq!(search::index_pending(&e.hub).await.unwrap().entries, 6);
     assert_eq!(find(&e, &user_caller(), json!({"query": "antenna"})).await.unwrap().len(), 2);
 }
 

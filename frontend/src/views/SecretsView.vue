@@ -81,8 +81,19 @@ async function save(name: string) {
           <p class="mt-1.5 text-sm text-muted">
             {{ g.description }}
             <template v-if="g.granted_to.length"> · used by {{ g.granted_to.join(", ") }}</template>
-            <template v-else> · not granted to anything yet</template>
+            <template v-else-if="!g.held_by.length"> · not granted to anything yet</template>
           </p>
+          <div v-if="g.held_by.length" class="mt-1.5 flex flex-wrap items-center gap-1.5 text-sm text-muted">
+            Held by chats:
+            <ULink
+              v-for="c in g.held_by"
+              :key="c"
+              :to="`/chat/${encodeURIComponent(c)}`"
+              class="font-medium text-default hover:underline"
+            >
+              {{ c }}
+            </ULink>
+          </div>
         </template>
         <form
           v-for="f in g.fields"

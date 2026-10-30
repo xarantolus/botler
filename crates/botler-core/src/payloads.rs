@@ -20,6 +20,19 @@ pub struct MessagePayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<String>>")]
     pub files: Vec<String>,
+    /// For a message from the user while the agent works: wait for the turn to end (`queue`, held
+    /// by the hub, cancellable until then) or interrupt it (`steer`). Absent: `steer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mode: Option<SendMode>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SendMode {
+    #[default]
+    Queue,
+    Steer,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -41,6 +54,43 @@ pub struct RunnableFinishedPayload {
     pub runnable: String,
     pub run_id: String,
     pub output: String,
+}
+
+/// How a trial run ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TrialOutcome {
+    /// Exited with code 0.
+    Succeeded,
+    /// Exited non-zero, could not start, or reported itself unhealthy.
+    Failed,
+    /// Still running when its minutes were up, and stopped (what a healthy service does).
+    TimeUp,
+}
+
+/// Something a trial run did that the hub recorded instead of carrying out.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct TrialEffect {
+    /// `emit_event`, `send_message` or `set_timer`.
+    pub op: String,
+    /// What it would have done: the event (emit_event, send_message) or the timer (set_timer).
+    pub detail: serde_json::Value,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct TrialFinishedPayload {
+    pub run_id: String,
+    pub job: String,
+    pub branch: String,
+    pub outcome: TrialOutcome,
+    pub exit_code: Option<i64>,
+    pub reason: Option<String>,
+    pub logs_tail: String,
+    /// The events, messages and timers it would have produced, in order.
+    pub effects: Vec<TrialEffect>,
+    /// Secret groups the job declares that it did not get, because you do not hold them.
+    pub withheld_secrets: Vec<String>,
 }
 
 /// What a credentials request did when the user answered it.
@@ -92,6 +142,10 @@ pub struct ProposalUpdatedPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub summary: Option<String>,
+    /// The user's reason for rejecting it, or comment on approving it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -159,6 +213,31 @@ pub struct AgentIdlePayload {
     pub last_reply: String,
 }
 
+/// `agent.turn_failed`: an agent's turn ended in a model error the hub gave up on (permanent, or
+/// transient after its retries). Delivered to whoever waits on that chat, like `agent.idle`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct AgentTurnFailedPayload {
+    pub instance: String,
+    pub class: crate::model_error::ErrorClass,
+    /// The provider's error message, clipped.
+    pub error: String,
+    /// Failed attempts at this turn (the first one plus the hub's retries).
+    pub attempts: u32,
+    /// The event whose delivery started the failed turn.
+    pub event_id: Option<String>,
+}
+
+/// `reply.overdue`: an agent you asked something (or spawned with a task) has neither answered
+/// nor ended its turn within the time you expected.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct ReplyOverduePayload {
+    pub instance: String,
+    /// The event waiting for an answer, if known.
+    pub event_id: Option<String>,
+    /// When the answer was due.
+    pub due_at: DateTime<Utc>,
+}
+
 /// A fired one-off timer. What the woken agent is told is the delivery's prompt.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct TimerPayload {
@@ -185,6 +264,27 @@ pub struct SchedulePayload {
 pub struct ManualPayload {
     /// The job.
     pub runnable: String,
+}
+
+/// `access.changed`: a grant of this chat was added without a request dialog (an `auto`
+/// policy) or revoked. Its container changes on the next wake.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct AccessChangedPayload {
+    pub grant_id: String,
+    /// `<kind>:<name>`, e.g. `secret:github`.
+    pub resource: String,
+    /// `granted` or `revoked`.
+    pub change: String,
+    /// What it means for the agent.
+    pub note: String,
+}
+
+/// `environment.updated`: this chat was restarted (or woke) with a changed container, e.g. after
+/// a merge. Delivered as a quiet note ahead of whatever is delivered next.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct EnvironmentUpdatedPayload {
+    /// What changed, in words (`new tools: weather.forecast`).
+    pub changes: Vec<String>,
 }
 
 /// What the hub sends pi for one delivery (`botler:delivery <json>`); the botler pi extension
@@ -230,6 +330,8 @@ pub enum BuiltinPayload {
     DialogAborted(DialogAbortedPayload),
     #[serde(rename = "proposal.updated")]
     ProposalUpdated(ProposalUpdatedPayload),
+    #[serde(rename = "trial.finished")]
+    TrialFinished(TrialFinishedPayload),
     #[serde(rename = "action.result")]
     ActionResult(ActionResultPayload),
     #[serde(rename = "breaker.tripped")]
@@ -238,12 +340,20 @@ pub enum BuiltinPayload {
     ArchiveRequested(ArchiveRequestedPayload),
     #[serde(rename = "agent.idle")]
     AgentIdle(AgentIdlePayload),
+    #[serde(rename = "agent.turn_failed")]
+    AgentTurnFailed(AgentTurnFailedPayload),
+    #[serde(rename = "reply.overdue")]
+    ReplyOverdue(ReplyOverduePayload),
     #[serde(rename = "timer")]
     Timer(TimerPayload),
     #[serde(rename = "schedule")]
     Schedule(SchedulePayload),
     #[serde(rename = "manual")]
     Manual(ManualPayload),
+    #[serde(rename = "access.changed")]
+    AccessChanged(AccessChangedPayload),
+    #[serde(rename = "environment.updated")]
+    EnvironmentUpdated(EnvironmentUpdatedPayload),
 }
 
 impl BuiltinPayload {
@@ -256,13 +366,18 @@ impl BuiltinPayload {
             Self::DialogAnswered(_) => kinds::DIALOG_ANSWERED,
             Self::DialogAborted(_) => kinds::DIALOG_ABORTED,
             Self::ProposalUpdated(_) => kinds::PROPOSAL_UPDATED,
+            Self::TrialFinished(_) => kinds::TRIAL_FINISHED,
             Self::ActionResult(_) => kinds::ACTION_RESULT,
             Self::BreakerTripped(_) => kinds::BREAKER_TRIPPED,
             Self::ArchiveRequested(_) => kinds::ARCHIVE_REQUESTED,
             Self::AgentIdle(_) => kinds::AGENT_IDLE,
+            Self::AgentTurnFailed(_) => kinds::AGENT_TURN_FAILED,
+            Self::ReplyOverdue(_) => kinds::REPLY_OVERDUE,
             Self::Timer(_) => kinds::TIMER,
             Self::Schedule(_) => kinds::SCHEDULE,
             Self::Manual(_) => kinds::MANUAL,
+            Self::AccessChanged(_) => kinds::ACCESS_CHANGED,
+            Self::EnvironmentUpdated(_) => kinds::ENVIRONMENT_UPDATED,
         }
     }
 
@@ -274,13 +389,18 @@ impl BuiltinPayload {
             Self::DialogAnswered(p) => serde_json::to_value(p),
             Self::DialogAborted(p) => serde_json::to_value(p),
             Self::ProposalUpdated(p) => serde_json::to_value(p),
+            Self::TrialFinished(p) => serde_json::to_value(p),
             Self::ActionResult(p) => serde_json::to_value(p),
             Self::BreakerTripped(p) => serde_json::to_value(p),
             Self::ArchiveRequested(p) => serde_json::to_value(p),
             Self::AgentIdle(p) => serde_json::to_value(p),
+            Self::AgentTurnFailed(p) => serde_json::to_value(p),
+            Self::ReplyOverdue(p) => serde_json::to_value(p),
             Self::Timer(p) => serde_json::to_value(p),
             Self::Schedule(p) => serde_json::to_value(p),
             Self::Manual(p) => serde_json::to_value(p),
+            Self::AccessChanged(p) => serde_json::to_value(p),
+            Self::EnvironmentUpdated(p) => serde_json::to_value(p),
         }
     }
 
@@ -288,6 +408,34 @@ impl BuiltinPayload {
     pub fn of(event: &Event) -> Option<Result<Self, serde_json::Error>> {
         crate::catalog::builtin(&event.kind)?;
         Some(serde_json::from_value(serde_json::json!({ "type": event.kind, "payload": event.payload })))
+    }
+}
+
+/// The JSON Schema of a built-in event type's payload.
+pub fn builtin_schema(kind: &str) -> Option<serde_json::Value> {
+    fn s<T: JsonSchema>() -> Option<serde_json::Value> {
+        serde_json::to_value(schemars::schema_for!(T)).ok()
+    }
+    match kind {
+        kinds::MESSAGE => s::<MessagePayload>(),
+        kinds::RUNNABLE_FAILED => s::<RunnableFailedPayload>(),
+        kinds::RUNNABLE_FINISHED => s::<RunnableFinishedPayload>(),
+        kinds::DIALOG_ANSWERED => s::<DialogAnsweredPayload>(),
+        kinds::DIALOG_ABORTED => s::<DialogAbortedPayload>(),
+        kinds::PROPOSAL_UPDATED => s::<ProposalUpdatedPayload>(),
+        kinds::ACTION_RESULT => s::<ActionResultPayload>(),
+        kinds::BREAKER_TRIPPED => s::<BreakerTrippedPayload>(),
+        kinds::ARCHIVE_REQUESTED => s::<ArchiveRequestedPayload>(),
+        kinds::AGENT_IDLE => s::<AgentIdlePayload>(),
+        kinds::AGENT_TURN_FAILED => s::<AgentTurnFailedPayload>(),
+        kinds::REPLY_OVERDUE => s::<ReplyOverduePayload>(),
+        kinds::TIMER => s::<TimerPayload>(),
+        kinds::SCHEDULE => s::<SchedulePayload>(),
+        kinds::MANUAL => s::<ManualPayload>(),
+        kinds::TRIAL_FINISHED => s::<TrialFinishedPayload>(),
+        kinds::ACCESS_CHANGED => s::<AccessChangedPayload>(),
+        kinds::ENVIRONMENT_UPDATED => s::<EnvironmentUpdatedPayload>(),
+        _ => None,
     }
 }
 
@@ -326,14 +474,22 @@ mod tests {
             (kinds::DIALOG_ANSWERED, fields::<DialogAnsweredPayload>()),
             (kinds::DIALOG_ABORTED, fields::<DialogAbortedPayload>()),
             (kinds::PROPOSAL_UPDATED, fields::<ProposalUpdatedPayload>()),
+            (kinds::TRIAL_FINISHED, fields::<TrialFinishedPayload>()),
             (kinds::ACTION_RESULT, fields::<ActionResultPayload>()),
             (kinds::BREAKER_TRIPPED, fields::<BreakerTrippedPayload>()),
             (kinds::ARCHIVE_REQUESTED, fields::<ArchiveRequestedPayload>()),
             (kinds::AGENT_IDLE, fields::<AgentIdlePayload>()),
+            (kinds::AGENT_TURN_FAILED, fields::<AgentTurnFailedPayload>()),
+            (kinds::REPLY_OVERDUE, fields::<ReplyOverduePayload>()),
             (kinds::TIMER, fields::<TimerPayload>()),
             (kinds::SCHEDULE, fields::<SchedulePayload>()),
             (kinds::MANUAL, fields::<ManualPayload>()),
+            (kinds::ACCESS_CHANGED, fields::<AccessChangedPayload>()),
+            (kinds::ENVIRONMENT_UPDATED, fields::<EnvironmentUpdatedPayload>()),
         ];
+        for b in BUILTIN {
+            assert!(builtin_schema(b.kind).is_some(), "{} has no schema", b.kind);
+        }
         assert_eq!(typed.len(), BUILTIN.len(), "every built-in event type has a payload type");
         for (kind, typed_fields) in typed {
             let entry = crate::catalog::builtin(kind).unwrap_or_else(|| panic!("{kind} is not in the catalog"));

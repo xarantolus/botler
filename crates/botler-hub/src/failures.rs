@@ -11,7 +11,7 @@ use crate::router;
 #[derive(Clone, Debug)]
 pub struct Failure {
     pub runnable: String,
-    /// exit | timeout | oom | unhealthy | crashloop | start
+    /// exit | timeout | oom | unhealthy | crashloop | start | build (an image; `runnable` is its Dockerfile)
     pub kind: &'static str,
     pub exit_code: Option<i64>,
     pub run_id: Option<String>,
@@ -48,7 +48,7 @@ pub async fn report(hub: &Hub, f: Failure) -> Result<()> {
         a => a,
     };
     let prompt = format!("Job `{}` failed ({}). Investigate and resolve the incident.", f.runnable, f.kind);
-    let d = Dispatch { trigger: None, action, prompt: Some(prompt), shadow: false };
+    let d = Dispatch { trigger: None, action, prompt: Some(prompt), shadow: false, quiet: false };
     router::dispatch(hub, ev, vec![d]).await
 }
 

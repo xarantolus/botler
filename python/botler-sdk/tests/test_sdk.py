@@ -147,6 +147,12 @@ def monorepo(tmp_path: Path) -> Path:
                 type: ClassVar[str] = "demo.greeted"
                 name: str
 
+            class Whispered(botler.Event):
+                """A secret was whispered."""
+                type: ClassVar[str] = "demo.whispered"
+                restricted: ClassVar[bool] = True
+                text: str
+
             @botler.tool(effects=["network"])
             def greet(name: str, times: int = 1) -> dict[str, str]:
                 """Greet someone."""
@@ -179,7 +185,19 @@ def test_manifests(tmp_path: Path) -> None:
                 "title": "Greeted",
                 "type": "object",
             },
-        }
+        },
+        {
+            "type": "demo.whispered",
+            "description": "A secret was whispered.",
+            "schema": {
+                "description": "A secret was whispered.",
+                "properties": {"text": {"title": "Text", "type": "string"}},
+                "required": ["text"],
+                "title": "Whispered",
+                "type": "object",
+            },
+            "restricted": True,
+        },
     ]
     tools = json.loads((root / "tools.manifest.json").read_text())
     assert tools == [
@@ -218,3 +236,65 @@ def test_call_protocol(tmp_path: Path) -> None:
     assert call("demo.greet", '{"name": "boom"}') == (1, {"ok": False, "error": {"type": "RuntimeError", "message": "exploded"}})
     code, out = call("demo.nope", "{}")
     assert code == 1 and out["error"]["type"] == "LookupError"
+
+
+def test_render_hints(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pydantic import BaseModel
+
+    from botler import tools
+    from botler.tools import Image, Json, KeyValue, Links, Markdown, Table
+
+    monkeypatch.setattr(tools, "_REGISTRY", {})
+
+    class Hit(BaseModel):
+        title: str
+        url: str
+
+    class Found(BaseModel):
+        backend: str
+        results: list[Hit] | None
+
+    def entry(render: Any, returns: Any) -> dict[str, Any]:
+        tools._REGISTRY.clear()
+
+        def fn() -> None:
+            """A tool."""
+
+        fn.__annotations__ = {"return": returns}
+        fn.__qualname__ = "fn"
+        tools.tool(name="t.fn", render=render)(fn)
+        return tools.manifest()[0]
+
+    assert entry(Links(items="results", url="url"), Found)["render"] == {"kind": "links", "items": "results", "url": "url"}
+    assert entry(Table(columns=["title"]), list[Hit])["render"] == {"kind": "table", "columns": ["title"]}
+    assert entry(Markdown(), str)["render"] == {"kind": "markdown"}
+    assert "render" not in entry(None, str)
+    # Without a pydantic return type a hint cannot be checked; it is kept as declared.
+    assert entry(Links(items="anything"), dict[str, Any])["render"]["items"] == "anything"
+    for bad, returns, name in [
+        (Links(items="hits"), Found, "hits"),
+        (Links(items="results", snippet="snippet"), Found, "snippet"),
+        (Table(columns=["title", "rank"]), list[Hit], "rank"),
+        (Image(field="png"), Found, "png"),
+    ]:
+        with pytest.raises(ValueError, match=f"names {name}, which"):
+            entry(bad, returns)
+    with pytest.raises(TypeError, match="render must be one of"):
+        tools.tool(name="t.x", render={"kind": "links"})  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        Links(itmes="results")  # type: ignore[call-arg]
+    assert KeyValue().kind == "keyvalue" and Json().kind == "json"
+
+
+def test_render_hints_match_the_hub() -> None:
+    """The hub's `ToolRender` (its JSON Schema, written by `BOTLER_BLESS=1 cargo test -p botler
+    --test sdk`) and these models have the same kinds and fields."""
+    from botler.tools import Image, Json, KeyValue, Links, Markdown, Table
+
+    schema = json.loads((SDK / "tests" / "tool_render.schema.json").read_text())
+    hub: dict[str, set[str]] = {}
+    for variant in schema["oneOf"]:
+        props = variant["properties"]
+        hub[props["kind"].get("const") or props["kind"]["enum"][0]] = set(props) - {"kind"}
+    models = (Links, Table, Markdown, KeyValue, Image, Json)
+    assert {m.model_fields["kind"].default: set(m.model_fields) - {"kind"} for m in models} == hub

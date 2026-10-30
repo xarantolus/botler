@@ -14,7 +14,7 @@ use crate::limits::RateLimit;
 
 pub const FORMAT_VERSION: u32 = 1;
 
-fn default_version() -> u32 {
+pub(crate) fn default_version() -> u32 {
     FORMAT_VERSION
 }
 
@@ -122,6 +122,10 @@ pub struct Defaults {
     /// How deep agent trees may grow: an agent at this depth cannot spawn further.
     #[serde(default = "Defaults::max_spawn_depth")]
     pub max_spawn_depth: u32,
+    /// How long a spawned agent (and the reviewer) may take to answer before whoever waits on it
+    /// is told (`reply.overdue`).
+    #[serde(default = "Defaults::reply_within")]
+    pub reply_within: HumanDuration,
 }
 
 impl Defaults {
@@ -134,6 +138,9 @@ impl Defaults {
     fn max_spawn_depth() -> u32 {
         8
     }
+    fn reply_within() -> HumanDuration {
+        HumanDuration::from_secs(20 * 60)
+    }
 }
 
 impl Default for Defaults {
@@ -143,6 +150,7 @@ impl Default for Defaults {
             job_timeout: Self::job_timeout(),
             budget: Budget::default(),
             max_spawn_depth: Self::max_spawn_depth(),
+            reply_within: Self::reply_within(),
         }
     }
 }
@@ -287,6 +295,10 @@ pub struct Job {
     pub description: String,
     #[serde(default)]
     pub lifetime: Lifetime,
+    /// `false` keeps it defined but never run: a service is not started, triggers skip it.
+    /// `trial_run` still runs it. Enabling a service needs the user's approval once.
+    #[serde(default = "enabled_default")]
+    pub enabled: bool,
     /// Command run inside the image built from this directory's Dockerfile.
     pub command: Vec<String>,
     #[serde(default)]
@@ -304,6 +316,20 @@ pub struct Job {
     pub limits: BTreeMap<String, RateLimit>,
     #[serde(default, rename = "trigger")]
     pub triggers: Vec<Trigger>,
+    /// Declared event types this job or service emits (listed as their producer).
+    #[serde(default)]
+    pub emits: Vec<String>,
+}
+
+fn enabled_default() -> bool {
+    true
+}
+
+impl Job {
+    /// An enabled service: the hub keeps it running.
+    pub fn is_service(&self) -> bool {
+        self.enabled && self.lifetime == Lifetime::Service
+    }
 }
 
 /// A service port published on the host: `<bind>:<host_port>` forwards to `port` in the container.
@@ -568,6 +594,9 @@ pub struct EventDecl {
     /// Optional JSON Schema for the payload.
     #[serde(default)]
     pub schema: Option<serde_json::Value>,
+    /// Subscribing at runtime needs an access grant (`event:<type>`), e.g. for raw mail contents.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restricted: bool,
 }
 
 /// `policies/capabilities.toml`: what forces human approval of a change.
@@ -613,4 +642,54 @@ pub struct ToolDecl {
     /// Python module path, e.g. `botler_tools_github.issues`.
     pub module: String,
     pub function: String,
+    /// How the web app shows the tool's result; heuristics when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render: Option<ToolRender>,
+}
+
+impl ToolDecl {
+    /// The name pi registers the tool under: model APIs accept `[A-Za-z0-9_-]{1,64}`, manifest
+    /// names are dotted (`weather.forecast` → `weather_forecast`). Mirrors the pi extension.
+    pub fn pi_name(&self) -> String {
+        self.name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).take(64).collect()
+    }
+}
+
+/// A render hint for a tool's result, declared with `@tool(render=...)`. Field names are keys of
+/// the result object; `items` names the key holding the list (the result itself when absent).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ToolRender {
+    /// Link cards: the title linking to the url, with a snippet.
+    Links {
+        #[ts(optional)]
+        items: Option<String>,
+        #[ts(optional)]
+        title: Option<String>,
+        #[ts(optional)]
+        url: Option<String>,
+        #[ts(optional)]
+        snippet: Option<String>,
+    },
+    /// A table of the list's objects with these columns (all keys when absent).
+    Table {
+        #[ts(optional)]
+        items: Option<String>,
+        #[ts(optional)]
+        columns: Option<Vec<String>>,
+    },
+    /// Sanitized markdown: the result string, or its `field`.
+    Markdown {
+        #[ts(optional)]
+        field: Option<String>,
+    },
+    /// The object's scalar fields as a key/value list.
+    Keyvalue,
+    /// An image: the result (a URL, path or data URI), or its `field`.
+    Image {
+        #[ts(optional)]
+        field: Option<String>,
+    },
+    /// Collapsible JSON.
+    Json,
 }

@@ -18,6 +18,13 @@ describe("phaseBadge", () => {
     expect(phaseBadge({ state: "running", status: { status: "paused", reason: "budget" } }).type).toBe("error");
   });
 
+  it("shows a scheduled retry with when and why", () => {
+    const at = new Date(Date.now() + 125_000).toISOString();
+    const b = phaseBadge({ state: "dormant", status: { status: "retrying", at, error: "Connection error." } });
+    expect([b.label, b.type, b.detail]).toEqual(["retrying", "warning", "retrying in 2m: Connection error."]);
+    expect(currentStatus({ phase: "retrying", at, error: "x" }, null)).toEqual({ status: "retrying", at, error: "x" });
+  });
+
   it("distinguishes working, running, queued and sleeping", () => {
     expect(phaseBadge({ state: "running", status: null, busy: true }).label).toBe("working");
     expect(phaseBadge({ state: "running", status: null }).label).toBe("running");

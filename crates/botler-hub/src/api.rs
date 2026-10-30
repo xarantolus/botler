@@ -8,10 +8,10 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use axum::{Extension, Json, Router};
 use botler_core::payloads::{
-    ArchiveRequestedPayload, BuiltinPayload, DialogAnsweredPayload, MessagePayload, SecretsOutcome,
+    ArchiveRequestedPayload, BuiltinPayload, DialogAnsweredPayload, MessagePayload, SecretsOutcome, SendMode,
 };
 use botler_core::{Event, Source};
 use botler_store::{ArchiveRecord, DialogStatus, EventQuery, Incident, Instance, Proposal, Run};
@@ -25,9 +25,9 @@ use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
 use crate::ops::{self, Caller, OpError};
 use crate::wire::{
-    ApiErrorBody, ArchiveOutcome, BreakerCleared, BudgetView, ChatCreated, ChatRestored, DialogAnswer, DialogView,
-    Dialogs, EventPosted, HubStatus, PauseState, ReachedChat, Reverted, RuntimeInfo, Saved, SecretFieldView,
-    SecretGroupView, SessionAnchor, SessionView, Trace, Usage,
+    ApiErrorBody, ArchiveOutcome, BreakerCleared, BudgetView, Cancelled, ChatCreated, ChatRestored, DialogAnswer,
+    DialogView, Dialogs, EventPosted, HubStatus, PauseState, ProposalView, QueuedMessage, ReachedChat, Reverted,
+    RuntimeInfo, Saved, SecretFieldView, SecretGroupView, SessionAnchor, SessionView, Trace, Usage,
 };
 
 type AppState = Arc<Hub>;
@@ -54,6 +54,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/usage", get(usage))
         .route("/api/v1/messages", post(user_message))
+        .route("/api/v1/messages/{id}", delete(cancel_message))
         .route("/api/v1/dialogs", get(dialogs))
         .route("/api/v1/dialogs/{id}/answer", post(answer_dialog))
         .route("/api/v1/dialogs/{id}/secrets", post(submit_secrets))
@@ -71,6 +72,9 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/secrets", get(secrets))
         .route("/api/v1/secrets/{name}", put(set_secret))
         .route("/api/v1/proposals", get(proposals))
+        .route("/api/v1/proposals/{id}", get(proposal))
+        .route("/api/v1/proposals/{id}/diff", get(proposal_diff))
+        .route("/api/v1/proposals/{id}/decision", post(decide_proposal))
         .route("/api/v1/revert", post(revert))
         .route("/api/v1/pause", post(pause))
         .route("/api/v1/resume", post(resume))
@@ -257,6 +261,10 @@ pub struct UserMessage {
     #[ts(optional, as = "Option<String>")]
     to: String,
     text: String,
+    /// While the agent works: wait for its turn to end (the default) or interrupt it.
+    #[serde(default)]
+    #[ts(optional, as = "Option<SendMode>")]
+    mode: SendMode,
 }
 
 fn main_instance() -> String {
@@ -269,9 +277,49 @@ async fn user_message(
     Json(m): Json<UserMessage>,
 ) -> ApiResult<Json<EventPosted>> {
     user_only(&p)?;
-    let ev = user_event(BuiltinPayload::Message(MessagePayload { text: m.text, files: vec![] }))?.to(m.to);
+    let payload = MessagePayload { text: m.text, files: vec![], mode: Some(m.mode) };
+    let ev = user_event(BuiltinPayload::Message(payload))?.to(m.to);
     let ev = hub.emit(ev).await?;
     Ok(Json(EventPosted { event_id: ev.id }))
+}
+
+/// Take back a message of the user that is not delivered yet (queued while the agent works).
+async fn cancel_message(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(delivery): Path<String>,
+) -> ApiResult<Json<Cancelled>> {
+    user_only(&p)?;
+    let d = hub.store.delivery(&delivery).await?;
+    if hub.store.event(&d.event_id).await?.source != Source::User {
+        return Err(ApiError(StatusCode::FORBIDDEN, "only your own messages can be taken back".into()));
+    }
+    if !hub.store.cancel_pending(&delivery, "taken back by the user").await? {
+        return Err(ApiError(StatusCode::CONFLICT, "the message was already delivered".into()));
+    }
+    hub.dispatch_notify.notify_one();
+    Ok(Json(Cancelled { delivery }))
+}
+
+/// The user's messages waiting for the agent's turn to end.
+async fn queued(hub: &Hub, instance: &str) -> Result<Vec<QueuedMessage>, ApiError> {
+    let mut out = Vec::new();
+    for d in hub.store.pending_deliveries(instance).await? {
+        let ev = hub.store.event(&d.event_id).await?;
+        if ev.source != Source::User || ev.kind != botler_core::event::kinds::MESSAGE {
+            continue;
+        }
+        let m: MessagePayload = serde_json::from_value(ev.payload.clone()).map_err(|e| {
+            ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("message {} is unreadable: {e}", ev.id))
+        })?;
+        out.push(QueuedMessage {
+            delivery: d.id,
+            text: m.text,
+            at: d.created_at,
+            mode: m.mode.unwrap_or(SendMode::Steer),
+        });
+    }
+    Ok(out)
 }
 
 /// An event from the user.
@@ -306,6 +354,10 @@ async fn dialogs(State(hub): State<AppState>, Extension(p): Extension<Principal>
 #[derive(Deserialize, ts_rs::TS)]
 pub struct Answer {
     answer: String,
+    /// Approvals: why the user rejects (required) or a comment on approving. The agent reads it.
+    #[serde(default)]
+    #[ts(optional)]
+    reason: Option<String>,
 }
 
 async fn answer_dialog(
@@ -315,20 +367,28 @@ async fn answer_dialog(
     Json(a): Json<Answer>,
 ) -> ApiResult<Json<DialogAnswer>> {
     user_only(&p)?;
-    if hub.store.dialog(&id).await?.kind == botler_store::DialogKind::Credentials {
-        return Err(ApiError(
-            StatusCode::BAD_REQUEST,
-            "credentials requests are answered with the secrets form".into(),
-        ));
+    match hub.store.dialog(&id).await?.kind {
+        botler_store::DialogKind::Credentials => {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "credentials requests are answered with the secrets form".into(),
+            ));
+        }
+        botler_store::DialogKind::Access => {
+            return Ok(Json(DialogAnswer { dialog: crate::grants::answer(&hub, &id, &a.answer).await? }));
+        }
+        _ => {}
     }
-    let d = hub.store.answer_dialog(&id, &a.answer).await?;
-    debug_assert_eq!(d.status, DialogStatus::Answered);
+    let d = hub.store.dialog(&id).await?;
     if d.kind == botler_store::DialogKind::Approval
+        && d.status == DialogStatus::Open
         && let Some(pid) = &d.proposal_id
     {
-        crate::transactions::on_approval(&hub, pid, a.answer == "approve").await?;
-        return Ok(Json(DialogAnswer { dialog: d }));
+        // Answers the dialog too.
+        decide(&hub, pid, a.answer == "approve", a.reason.as_deref()).await?;
+        return Ok(Json(DialogAnswer { dialog: hub.store.dialog(&id).await? }));
     }
+    let d = hub.store.answer_dialog(&id, &a.answer).await?;
     let ev = user_event(BuiltinPayload::DialogAnswered(DialogAnsweredPayload {
         dialog_id: d.id.clone(),
         question: d.question.clone(),
@@ -431,7 +491,10 @@ async fn session(
     let pending = hub.store.pending_deliveries(&inst.name).await?.len();
     let phase = hub.agents.phase(&inst.name).await;
     let items = crate::sessions::read(&hub, &inst.name).await?;
-    Ok(Json(SessionView { instance: inst, busy, pending, phase, items }))
+    let tool_renders =
+        hub.applied().await.defs.tools.values().filter_map(|t| Some((t.pi_name(), t.render.clone()?))).collect();
+    let queued = queued(&hub, &inst.name).await?;
+    Ok(Json(SessionView { instance: inst, busy, pending, phase, items, tool_renders, queued }))
 }
 
 #[derive(Deserialize, ts_rs::TS)]
@@ -452,7 +515,8 @@ async fn new_chat(
     user_only(&p)?;
     let def = c.definition.unwrap_or_else(|| "chat".into());
     let name = crate::router::new_instance(&hub, &def, None, None).await?;
-    let ev = user_event(BuiltinPayload::Message(MessagePayload { text: c.text, files: vec![] }))?.to(name.clone());
+    let ev = user_event(BuiltinPayload::Message(MessagePayload { text: c.text, files: vec![], mode: None }))?
+        .to(name.clone());
     hub.emit(ev).await?;
     Ok(Json(ChatCreated { instance: name }))
 }
@@ -593,6 +657,12 @@ async fn secrets(
             grantees.entry(sec.group.as_str()).or_default().push(format!("model route {r}"));
         }
     }
+    let mut holders: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for g in hub.store.all_live_grants().await? {
+        if g.kind == botler_core::defs::ResourceKind::Secret {
+            holders.entry(g.resource).or_default().push(g.holder);
+        }
+    }
     let groups = applied
         .defs
         .secret_groups
@@ -614,6 +684,7 @@ async fn secrets(
                 })
                 .collect(),
             granted_to: grantees.get(g.name.as_str()).cloned().unwrap_or_default(),
+            held_by: holders.remove(&g.name).unwrap_or_default(),
         })
         .collect();
     Ok(Json(groups))
@@ -645,6 +716,58 @@ async fn set_secret(
 async fn proposals(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Proposal>>> {
     user_only(&p)?;
     Ok(Json(hub.store.recent_proposals(50).await?))
+}
+
+async fn proposal(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ProposalView>> {
+    user_only(&p)?;
+    Ok(Json(proposal_view(&hub, &id).await?))
+}
+
+async fn proposal_view(hub: &Hub, id: &str) -> Result<ProposalView, ApiError> {
+    let proposal = hub.store.proposal(id).await?;
+    let tz = hub.applied().await.defs.timezone;
+    Ok(ProposalView { summary: proposal.summary.as_ref().map(|s| s.to_markdown(tz)), proposal })
+}
+
+async fn proposal_diff(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::review::ProposalDiff>> {
+    user_only(&p)?;
+    Ok(Json(crate::review::proposal_diff(&hub, &id).await?))
+}
+
+/// The user's decision on a proposal.
+#[derive(Deserialize, ts_rs::TS)]
+pub struct ProposalVerdict {
+    approve: bool,
+    /// Required to reject; an optional comment when approving. The agent reads it.
+    #[serde(default)]
+    #[ts(optional)]
+    reason: Option<String>,
+}
+
+async fn decide_proposal(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+    Json(v): Json<ProposalVerdict>,
+) -> ApiResult<Json<ProposalView>> {
+    user_only(&p)?;
+    decide(&hub, &id, v.approve, v.reason.as_deref()).await?;
+    Ok(Json(proposal_view(&hub, &id).await?))
+}
+
+async fn decide(hub: &Arc<Hub>, id: &str, approve: bool, reason: Option<&str>) -> Result<(), ApiError> {
+    if !approve && reason.is_none_or(|r| r.trim().is_empty()) {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "rejecting needs a reason; the agent reads it".into()));
+    }
+    Ok(crate::transactions::on_approval(hub, id, approve, reason).await?)
 }
 
 #[derive(Deserialize, ts_rs::TS)]

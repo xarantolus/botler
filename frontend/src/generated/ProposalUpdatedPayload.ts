@@ -8,4 +8,8 @@ status: string, detail: string,
 /**
  * The deployment summary (markdown), when it is known.
  */
-summary?: string, };
+summary?: string, 
+/**
+ * The user's reason for rejecting it, or comment on approving it.
+ */
+reason?: string, };

@@ -128,3 +128,70 @@ async fn live_streams_emitted_events() {
     assert_eq!((m["kind"].as_str(), m["instance"].as_str()), (Some("pi"), Some("main")));
     assert_eq!(m["event"]["type"], "agent_end");
 }
+
+/// While the agent works, a queued message waits in the hub (listed in the session, cancellable)
+/// until the turn ends; a steered one interrupts it.
+#[tokio::test]
+async fn queued_messages_wait_for_the_turn_and_can_be_taken_back() {
+    let e = env().await;
+    e.hub.store.set_secret(&e.hub.secret_key, "OPENROUTER_API_KEY", "sk-test").await.unwrap();
+    let app = botler_hub::api::router(e.hub.clone());
+    let token = e.hub.tokens.issue(&Principal::User, chrono::Duration::hours(1), Utc::now());
+    let req = |method: &str, uri: &str, body: Option<Value>| {
+        let app = app.clone();
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
+            .unwrap();
+        async move {
+            let resp = app.oneshot(req).await.unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+        }
+    };
+    let pump = || async {
+        for _ in 0..3 {
+            e.route().await;
+            botler_hub::agents::dispatch_pending(&e.hub).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    let chat = botler_hub::router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let container = botler_hub::agents::container_name(&e.hub, &chat);
+    let session = format!("/api/v1/sessions/{chat}");
+    e.fake.set_hold_turns(true);
+
+    let say = |text: &str, mode: &str| json!({ "to": chat, "text": text, "mode": mode });
+    assert_eq!(req("POST", "/api/v1/messages", Some(say("first", "queue"))).await.0, StatusCode::OK);
+    pump().await;
+    assert_eq!(e.fake.prompts(&container).len(), 1, "an idle agent gets a queued message right away");
+
+    req("POST", "/api/v1/messages", Some(say("later", "queue"))).await;
+    req("POST", "/api/v1/messages", Some(say("and this", "queue"))).await;
+    req("POST", "/api/v1/messages", Some(say("stop!", "steer"))).await;
+    pump().await;
+    assert_eq!(e.fake.prompt_behaviors(&container), [None, Some("steer".to_string())]);
+    let (_, view) = req("GET", &session, None).await;
+    let queued = view["queued"].as_array().unwrap();
+    assert_eq!(queued.iter().map(|q| q["text"].as_str().unwrap()).collect::<Vec<_>>(), ["later", "and this"]);
+    assert!(queued.iter().all(|q| q["mode"] == "queue"));
+
+    // Take one back; the other is delivered when the turn ends.
+    let id = queued[1]["delivery"].as_str().unwrap().to_string();
+    assert_eq!(req("DELETE", &format!("/api/v1/messages/{id}"), None).await.0, StatusCode::OK);
+    assert!(e.fake.pi_event(&container, json!({ "type": "agent_settled" })));
+    pump().await;
+    let prompts = e.fake.prompts(&container);
+    assert_eq!(prompts.len(), 3);
+    assert!(prompts[2].contains("later") && !prompts.iter().any(|p| p.contains("and this")));
+    assert_eq!(req("GET", &session, None).await.1["queued"], json!([]));
+
+    // Delivered (or already taken back) messages cannot be taken back.
+    let delivered = e.hub.store.last_delivered(&chat).await.unwrap().unwrap().id;
+    assert_eq!(req("DELETE", &format!("/api/v1/messages/{delivered}"), None).await.0, StatusCode::CONFLICT);
+    assert_eq!(req("DELETE", &format!("/api/v1/messages/{id}"), None).await.0, StatusCode::CONFLICT);
+}

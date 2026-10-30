@@ -10,3 +10,10 @@ class ExampleGreeting(botler.Event):
 
     type: ClassVar[str] = "example.greeting"
     name: str
+
+
+class ExampleTick(botler.Event):
+    """The example watcher service (jobs/example-watcher) ticked: a template for watcher events."""
+
+    type: ClassVar[str] = "example.tick"
+    count: int

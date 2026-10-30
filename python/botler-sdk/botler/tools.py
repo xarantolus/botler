@@ -22,7 +22,8 @@ import sys
 import traceback
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar, get_type_hints
+from types import UnionType
+from typing import Any, Literal, TypeVar, Union, get_args, get_origin, get_type_hints
 
 import pydantic
 import pydantic_core
@@ -35,16 +36,73 @@ _ATTR = "__botler_tool__"
 _REGISTRY: dict[str, Callable[..., Any]] = {}
 
 
-def tool(*, name: str | None = None, effects: list[str] | None = None) -> Callable[[F], F]:
+# Render hints: how the web app shows a tool's result (`ToolRender` in the hub, which checks the
+# manifest against the same shapes). Field names are keys of the result; `items` names the key
+# holding the list (the result itself when unset).
+class _Hint(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+
+class Links(_Hint):
+    """Link cards: the `title` linking to the `url`, with a `snippet`."""
+
+    kind: Literal["links"] = "links"
+    items: str | None = None
+    title: str | None = None
+    url: str | None = None
+    snippet: str | None = None
+
+
+class Table(_Hint):
+    """A table of the list's objects with these `columns` (all keys when unset)."""
+
+    kind: Literal["table"] = "table"
+    items: str | None = None
+    columns: list[str] | None = None
+
+
+class Markdown(_Hint):
+    """Sanitized markdown: the result string, or its `field`."""
+
+    kind: Literal["markdown"] = "markdown"
+    field: str | None = None
+
+
+class KeyValue(_Hint):
+    """The result object's scalar fields as a key/value list."""
+
+    kind: Literal["keyvalue"] = "keyvalue"
+
+
+class Image(_Hint):
+    """An image: the result (a URL, path or data URI), or its `field`."""
+
+    kind: Literal["image"] = "image"
+    field: str | None = None
+
+
+class Json(_Hint):
+    """Collapsible JSON."""
+
+    kind: Literal["json"] = "json"
+
+
+Render = Links | Table | Markdown | KeyValue | Image | Json
+
+
+def tool(*, name: str | None = None, effects: list[str] | None = None, render: Render | None = None) -> Callable[[F], F]:
     """Declare a function as a pi tool. `name` defaults to `<top-level package>.<function>`, which
     agent definitions grant with globs (`tools = ["weather.*"]`). `effects` lists side effects for
-    the reviewer, e.g. `network`, `fs_write`, `secret:GITLAB_TOKEN`."""
+    the reviewer, e.g. `network`, `fs_write`, `secret:GITLAB_TOKEN`. `render` tells the web app how
+    to show the result, e.g. `Links(items="results")`; it guesses from the result's shape without."""
+    if render is not None and not isinstance(render, _Hint):  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise TypeError(f"render must be one of Links, Table, Markdown, KeyValue, Image, Json, not {render!r}")
 
     def wrap(fn: F) -> F:
         full = name or f"{fn.__module__.split('.')[0]}.{fn.__name__}"
         if full in _REGISTRY and _REGISTRY[full] is not fn:
             raise ValueError(f"tool {full} is declared twice")
-        setattr(fn, _ATTR, {"name": full, "effects": list(effects or [])})
+        setattr(fn, _ATTR, {"name": full, "effects": list(effects or []), "render": render})
         _REGISTRY[full] = fn
         return fn
 
@@ -64,6 +122,39 @@ def _args_model(fn: Callable[..., Any]) -> type[pydantic.BaseModel]:
     return pydantic.create_model(fn.__name__, __config__=pydantic.ConfigDict(extra="forbid"), **fields)
 
 
+def _model(t: Any) -> type[pydantic.BaseModel] | None:
+    return t if inspect.isclass(t) and issubclass(t, pydantic.BaseModel) else None
+
+
+def _list_item(t: Any) -> Any:
+    """`X` of `list[X]` (also inside `| None`), else None."""
+    if get_origin(t) in (Union, UnionType):
+        t = next((a for a in get_args(t) if a is not type(None)), None)
+    return get_args(t)[0] if get_origin(t) is list and get_args(t) else None
+
+
+def _check_render(full: str, fn: Callable[..., Any], render: Render) -> None:
+    """The fields a hint names must exist when the tool returns a pydantic model (or a list of them)."""
+
+    def need(model: type[pydantic.BaseModel] | None, names: list[str | None]) -> None:
+        missing = [n for n in names if n is not None and model is not None and n not in model.model_fields]
+        if model is not None and missing:
+            raise ValueError(
+                f"tool {full}: render {render.kind} names {', '.join(missing)}, which "
+                f"{model.__name__} does not have (fields: {', '.join(model.model_fields)})"
+            )
+
+    ret = get_type_hints(fn).get("return")
+    if isinstance(render, Links | Table):
+        top = _model(ret)
+        need(top, [render.items])
+        holder = top.model_fields[render.items].annotation if top and render.items else ret
+        item = _model(_list_item(holder))
+        need(item, [render.title, render.url, render.snippet] if isinstance(render, Links) else [*(render.columns or [])])
+    elif isinstance(render, Markdown | Image):
+        need(_model(ret), [render.field])
+
+
 def manifest() -> list[dict[str, Any]]:
     """Every registered tool in the format of `tools.manifest.json`."""
     out: list[dict[str, Any]] = []
@@ -77,17 +168,20 @@ def manifest() -> list[dict[str, Any]]:
             raise ValueError(f"tool {full} needs a docstring: it is the description the model reads")
         schema = _args_model(fn).model_json_schema()
         schema.pop("title", None)
-        out.append(
-            {
-                "name": full,
-                "description": doc,
-                "parameters": schema,
-                "effects": meta["effects"],
-                "approval": False,
-                "module": fn.__module__,
-                "function": fn.__name__,
-            }
-        )
+        entry: dict[str, Any] = {
+            "name": full,
+            "description": doc,
+            "parameters": schema,
+            "effects": meta["effects"],
+            "approval": False,
+            "module": fn.__module__,
+            "function": fn.__name__,
+        }
+        render: Render | None = meta["render"]
+        if render is not None:
+            _check_render(full, fn, render)
+            entry["render"] = render.model_dump(exclude_none=True)
+        out.append(entry)
     return out
 
 

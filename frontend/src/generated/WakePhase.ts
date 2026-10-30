@@ -4,4 +4,4 @@ import type { WakeStep } from "./WakeStep";
 /**
  * Where waking an instance stands: in progress, or failed (until the next attempt).
  */
-export type WakePhase = { "phase": "waking", step: WakeStep, } | { "phase": "failed", error: string, };
+export type WakePhase = { "phase": "waking", step: WakeStep, } | { "phase": "failed", error: string, } | { "phase": "retrying", at: string, error: string, };

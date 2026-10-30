@@ -3,6 +3,7 @@
 
 import { getToken } from "./api/client";
 import type { ClientMessage, ServerMessage } from "./generated";
+import { noLive } from "./lib/transcript";
 import {
   addEvent,
   refreshAll,
@@ -14,6 +15,7 @@ import {
   refreshUsage,
   state,
   trackWake,
+  upsertProposal,
 } from "./store";
 
 let socket: WebSocket | null = null;
@@ -42,7 +44,7 @@ function send(msg: ClientMessage) {
 /** Follow one chat's pi events (or none). */
 export function watch(instance: string | null) {
   watched = instance;
-  state.streaming = { text: "", thinking: "" };
+  state.streaming = noLive();
   send({ type: "watch", instance });
 }
 
@@ -79,6 +81,12 @@ function setConnection(c: typeof state.connection) {
 function onPi(instance: string, ev: Record<string, unknown>) {
   if (instance !== watched) return;
   const type = ev.type;
+  const message = ev.message as { role?: unknown; timestamp?: unknown } | undefined;
+  if (type === "message_start" && message?.role === "assistant") {
+    // A new message replaces the last one (which the session has by now, or will have).
+    state.streaming = { ...noLive(), ts: typeof message.timestamp === "number" ? message.timestamp : null };
+    return;
+  }
   if (type === "message_update") {
     const delta = ev.assistantMessageEvent as { type?: unknown; delta?: unknown } | undefined;
     if (typeof delta?.delta !== "string") return;
@@ -86,12 +94,14 @@ function onPi(instance: string, ev: Record<string, unknown>) {
     else if (delta.type === "thinking_delta") state.streaming.thinking += delta.delta;
     return;
   }
-  if (type === "message_end") state.streaming = { text: "", thinking: "" };
+  // Kept until the refreshed session has the message (store.ts hands it over).
+  if (type === "message_end" && message?.role === "assistant") state.streaming.ended = true;
   if (
     type === "message_end" ||
     type === "agent_start" ||
     type === "agent_end" ||
     type === "agent_settled" ||
+    type === "tool_execution_start" ||
     type === "tool_execution_end"
   ) {
     soon("session", () => refreshSession(instance));
@@ -140,6 +150,9 @@ function onMessage(msg: ServerMessage) {
       return;
     case "pi":
       onPi(msg.instance, msg.event);
+      return;
+    case "proposal":
+      upsertProposal(msg.proposal);
       return;
   }
 }

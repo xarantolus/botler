@@ -407,3 +407,94 @@ async fn quiet_and_held_deliveries_and_pair_queries() {
     assert_eq!(s.release_held("pair:a|b").await.unwrap(), 1);
     assert_eq!(s.pending_deliveries("a").await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn turn_retries_and_reply_expectations() {
+    let s = store().await;
+    let t0 = Utc::now().trunc_subsecs(3);
+    let r = s.record_turn_failure("a", Some("e1"), "Connection error.").await.unwrap();
+    assert_eq!((r.attempts, r.event_id.as_deref(), r.next_at), (1, Some("e1"), None));
+    s.schedule_turn_retry("a", t0 + Duration::seconds(30)).await.unwrap();
+    assert!(s.take_due_retries(t0).await.unwrap().is_empty());
+    assert_eq!(s.next_wait_at().await.unwrap(), Some(t0 + Duration::seconds(30)));
+    assert_eq!(s.take_due_retries(t0 + Duration::seconds(31)).await.unwrap().len(), 1);
+    assert!(s.take_due_retries(t0 + Duration::seconds(31)).await.unwrap().is_empty(), "taken once");
+    let r = s.record_turn_failure("a", Some("e2"), "503").await.unwrap();
+    assert_eq!((r.attempts, r.event_id.as_deref()), (2, Some("e1")), "keeps what started the turn");
+    assert!(s.clear_turn_retry("a").await.unwrap());
+    assert!(s.turn_retry("a").await.unwrap().is_none());
+
+    s.expect_reply("p", "c", Some("e1"), t0).await.unwrap();
+    s.expect_reply("q", "c", None, t0).await.unwrap();
+    s.clear_expectations(Some("p"), "c").await.unwrap();
+    assert_eq!(s.expectations_on("c").await.unwrap().len(), 1);
+    let overdue = s.take_overdue(t0).await.unwrap();
+    assert_eq!(overdue.len(), 1);
+    assert_eq!(overdue[0].sender, "q");
+    assert!(s.take_overdue(t0).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn grants_and_subscriptions_follow_the_chat() {
+    use botler_core::defs::{MountMode, Resource};
+    let s = store().await;
+    s.create_instance(&NewInstance {
+        name: "dev-1".into(),
+        definition: "dev".into(),
+        persistent: false,
+        session_file: "dev-1.jsonl".into(),
+        branch: None,
+        parent: Some("botler".into()),
+        depth: 1,
+        task: None,
+    })
+    .await
+    .unwrap();
+    let nas: Resource = "secret:nas".parse().unwrap();
+    let g = s.add_grant("dev-1", &nas, None, "user").await.unwrap();
+    assert_eq!(s.add_grant("dev-1", &nas, None, "policy").await.unwrap().id, g.id, "holding it twice is one grant");
+    let m = s.add_grant("dev-1", &"mount:photos".parse().unwrap(), Some(MountMode::ReadOnly), "user").await.unwrap();
+    assert_eq!(m.mode, Some(MountMode::ReadOnly));
+    assert_eq!(s.live_grants("dev-1").await.unwrap().len(), 2);
+    let sub = s
+        .add_subscription(&NewSubscription {
+            instance: "dev-1".into(),
+            pattern: "mail.received".into(),
+            filter: [("folder".to_string(), json!("INBOX"))].into(),
+            wake: false,
+            note: Some("triage".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(s.subscription(&sub.id).await.unwrap(), sub);
+    assert_eq!(s.active_subscriptions().await.unwrap(), std::slice::from_ref(&sub));
+    assert_eq!(s.children("botler").await.unwrap(), ["dev-1"]);
+
+    // Archiving suspends both; restoring brings them back.
+    let rec = ArchiveRecord {
+        confirmed_by_agent: false,
+        forced: true,
+        reason: None,
+        report: None,
+        handed_to: None,
+        at: Utc::now(),
+    };
+    s.archive_instance("dev-1", &rec).await.unwrap();
+    assert!(s.active_subscriptions().await.unwrap().is_empty());
+    assert!(s.live_grants("dev-1").await.unwrap().iter().all(|g| g.suspended));
+    s.restore_instance("dev-1").await.unwrap();
+    assert_eq!(s.active_subscriptions().await.unwrap().len(), 1);
+    assert!(s.live_grants("dev-1").await.unwrap().iter().all(|g| !g.suspended));
+
+    // Renaming carries them along.
+    assert!(s.rename_instance("dev-1", "dev-2").await.unwrap());
+    assert_eq!(s.live_grants("dev-2").await.unwrap().len(), 2);
+    assert_eq!(s.subscriptions_of("dev-2").await.unwrap().len(), 1);
+
+    assert!(s.revoke_grant(&g.id).await.unwrap());
+    assert!(!s.revoke_grant(&g.id).await.unwrap(), "revoked already");
+    assert!(s.revoke_grant("nope").await.is_err());
+    assert_eq!(s.live_grants("dev-2").await.unwrap().len(), 1);
+    assert!(s.delete_subscription(&sub.id).await.unwrap());
+    assert!(s.active_subscriptions().await.unwrap().is_empty());
+}

@@ -132,13 +132,18 @@ pub mod kinds {
     pub const DIALOG_ANSWERED: &str = "dialog.answered";
     pub const DIALOG_ABORTED: &str = "dialog.aborted";
     pub const PROPOSAL_UPDATED: &str = "proposal.updated";
+    pub const TRIAL_FINISHED: &str = "trial.finished";
     pub const ACTION_RESULT: &str = "action.result";
     pub const BREAKER_TRIPPED: &str = "breaker.tripped";
     pub const TIMER: &str = "timer";
     pub const ARCHIVE_REQUESTED: &str = "archive.requested";
     pub const AGENT_IDLE: &str = "agent.idle";
+    pub const AGENT_TURN_FAILED: &str = "agent.turn_failed";
+    pub const REPLY_OVERDUE: &str = "reply.overdue";
     pub const SCHEDULE: &str = "schedule";
     pub const MANUAL: &str = "manual";
+    pub const ACCESS_CHANGED: &str = "access.changed";
+    pub const ENVIRONMENT_UPDATED: &str = "environment.updated";
 }
 
 #[cfg(test)]

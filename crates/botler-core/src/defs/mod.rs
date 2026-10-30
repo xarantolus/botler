@@ -4,6 +4,7 @@
 //! whole list of what to fix in one gate run.
 
 mod environment;
+mod grants;
 mod model;
 pub mod tree;
 
@@ -11,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub use environment::*;
+pub use grants::*;
 pub use model::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -66,6 +68,7 @@ pub struct Definitions {
     pub tools: BTreeMap<String, ToolDecl>,
     pub images: BTreeSet<String>,
     pub policy: CapabilityPolicy,
+    pub grant_policy: GrantPolicy,
 }
 
 impl Definitions {
@@ -83,8 +86,9 @@ impl Definitions {
         names.into_iter().filter_map(|n| self.secrets.get(n)).collect()
     }
 
+    /// The services that should run: enabled jobs with `lifetime = "service"`.
     pub fn services(&self) -> impl Iterator<Item = &JobDef> {
-        self.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Service)
+        self.jobs.values().filter(|j| j.spec.is_service())
     }
 
     pub fn persistent_agents(&self) -> impl Iterator<Item = &AgentDef> {
@@ -285,6 +289,16 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
             }
         }
         defs.policy = p;
+    }
+
+    if let Some(p) = l.toml::<GrantPolicy>("policies/grants.toml") {
+        l.check_version("policies/grants.toml", p.version);
+        for r in p.resources.keys() {
+            if let Err(e) = r.parse::<Resource>() {
+                l.err("policies/grants.toml", e);
+            }
+        }
+        defs.grant_policy = p;
     }
 
     if let Some(s) = l.toml::<SecretsFile>("secrets.toml") {
@@ -596,6 +610,20 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
                 None => l.err(&path, format!("mcp {m:?} is not a job in jobs/")),
             }
         }
+        // Every model route is reached over the network today (even a local `base_url` lies
+        // outside the container), so an agent without network could never call its model.
+        if a.spec.env.network() == Network::None
+            && let Some((route, r)) = defs.route_for(&a.spec)
+        {
+            l.err(
+                &path,
+                format!(
+                    "network = \"none\" cannot reach model route {route:?} ({}/{}): agents call their model over \
+                     the network. Remove `network = \"none\"`",
+                    r.provider, r.model
+                ),
+            );
+        }
         if !a.spec.env.mcp.is_empty() && a.spec.env.network() == Network::None {
             l.err(
                 &path,
@@ -667,6 +695,9 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
         }
         if let Some(t) = &j.spec.on_failure {
             check_target(l, defs, &path, t);
+        }
+        for e in j.spec.emits.iter().filter(|e| !defs.events.contains_key(*e)) {
+            l.err(&path, format!("emits {e:?}, which is not a declared event type (events/ or a pydantic model)"));
         }
     }
     if defs.jobs.values().any(|j| j.spec.on_failure.is_none()) && !defs.agents.contains_key("triage") {
@@ -776,6 +807,9 @@ fn is_builtin_event(kind: &str) -> bool {
         TIMER,
         ARCHIVE_REQUESTED,
         AGENT_IDLE,
+        ACCESS_CHANGED,
+        ENVIRONMENT_UPDATED,
+        TRIAL_FINISHED,
     ]
     .contains(&kind)
 }

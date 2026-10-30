@@ -57,27 +57,95 @@ impl Op for SetChatTitle {
 }
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]
+#[ts(optional_fields)]
 pub struct SpawnAgent {
     /// Agent definition under `agents/`, e.g. `dev`.
     pub definition: String,
     pub task: String,
+    /// What the new chat gets beyond its definition.
+    #[serde(default)]
+    pub env: Option<SpawnEnv>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema, TS)]
+#[ts(optional_fields)]
+pub struct SpawnEnv {
+    /// Secret groups (memory notes say which fits the work, e.g. `github-ssh`).
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub secrets: Vec<String>,
+    /// Network shares, mounted read-only.
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub mounts: Vec<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
 pub struct AgentSpawned {
     pub instance: String,
+    /// Resources it holds from the start (`secret:<group>`, `mount:<name>`).
+    pub granted: Vec<String>,
+    /// Access requests the user decides; the new chat is woken with each answer.
+    pub requested: Vec<String>,
 }
 
 impl Op for SpawnAgent {
     const NAME: &'static str = "spawn_agent";
-    const DESCRIPTION: &'static str =
-        "Start a new instance of an agent definition with a task. It reports back to you by message.";
+    const DESCRIPTION: &'static str = "Start a new instance of an agent definition with a task. It reports back to you by message; if it has not by `reply_within` (botler.toml, default 20m), you get a `reply.overdue` event. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user. Give the child the access its task needs; never tell it to work around missing access.";
     const WHO: Who = Who::UserAndAgents;
     type Output = AgentSpawned;
 
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<AgentSpawned, OpError> {
-        let instance = router::spawn(hub, &self.definition, caller.instance(), Some(&self.task), None, None).await?;
-        Ok(AgentSpawned { instance })
+        use botler_core::defs::{GrantMode, Resource, ResourceKind};
+        let env = self.env.unwrap_or_default();
+        let wanted: Vec<Resource> = env
+            .secrets
+            .iter()
+            .map(|s| Resource::new(ResourceKind::Secret, s.clone()))
+            .chain(env.mounts.iter().map(|m| Resource::new(ResourceKind::Mount, m.clone())))
+            .collect();
+        let applied = hub.applied().await;
+        let def = applied
+            .defs
+            .agents
+            .get(&self.definition)
+            .ok_or_else(|| HubError::Undefined { kind: "agent", name: self.definition.clone() })?;
+        let wanted: Vec<Resource> =
+            wanted.into_iter().filter(|r| !botler_core::defs::env_gives(&def.spec.env, r)).collect();
+        for r in &wanted {
+            crate::grants::check(&applied.defs, def, r)?;
+        }
+        let parent = caller.instance();
+        let instance = router::new_instance(hub, &self.definition, parent, Some(&self.task)).await?;
+        let (mut granted, mut requested) = (Vec::new(), Vec::new());
+        for r in &wanted {
+            // The user decides directly; a parent passes on what it holds; policy may allow it.
+            let by = match parent {
+                None => Some("user".to_string()),
+                Some(p) if crate::grants::holds(hub, p, r).await? => Some(format!("spawn:{p}")),
+                Some(_) if applied.defs.grant_policy.mode(r) == GrantMode::Auto => Some("policy".into()),
+                Some(_) => None,
+            };
+            match by {
+                Some(by) => {
+                    crate::grants::give(hub, &instance, r, None, &by, false).await?;
+                    granted.push(r.to_string());
+                }
+                None => {
+                    let reason = format!("{} spawned this chat for: {}", parent.unwrap_or("someone"), self.task);
+                    if let crate::grants::Requested::Asked(d) =
+                        crate::grants::request(hub, &instance, r, &reason, None).await?
+                    {
+                        requested.push(d.id);
+                    }
+                }
+            }
+        }
+        router::send_task(hub, &instance, parent, Some(&self.task), None, None).await?;
+        if let Some(me) = parent {
+            crate::turns::expect_reply(hub, me, &instance, None, None).await?;
+        }
+        Ok(AgentSpawned { instance, granted, requested })
     }
 }
 
@@ -232,7 +300,9 @@ impl Op for ReadSession {
             .collect();
         let range = match &self.around {
             Some(entry) => {
-                let i = messages.iter().position(|m| m.id == *entry).ok_or_else(|| {
+                // A tool call's ref (`<entry>#<call>`) reads around its entry.
+                let entry = entry.split('#').next().unwrap_or(entry);
+                let i = messages.iter().position(|m| m.id == entry).ok_or_else(|| {
                     OpError::BadRequest(format!("no message {entry} in {}'s current session", inst.name))
                 })?;
                 let n = self.n.unwrap_or(5).min(50) as usize;
@@ -303,8 +373,13 @@ impl Op for ArchiveReady {
         if let Some(h) = &self.handoff {
             handed_to = Some(match (&h.to, &h.spawn) {
                 (Some(to), None) => {
-                    let message =
-                        SendMessage { to: to.clone(), text: h.message.clone(), urgent: false, reply_to: None };
+                    let message = SendMessage {
+                        to: to.clone(),
+                        text: h.message.clone(),
+                        urgent: false,
+                        reply_to: None,
+                        expect_reply_within: None,
+                    };
                     message.call(hub, caller).await?;
                     to.clone()
                 }

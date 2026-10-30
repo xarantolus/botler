@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use botler_core::catalog;
 use botler_core::defs::{AgentDef, Budget, Environment, Workspace};
 use botler_core::loops::TurnLog;
-use botler_core::payloads::{AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, MessagePayload};
+use botler_core::payloads::{
+    AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, EnvironmentUpdatedPayload, MessagePayload, SendMode,
+};
 use botler_core::{Event, Source};
 use botler_runtime::{ContainerSpec, Mount, PiClient, PiError, PiEvent, PiEventKind, Streaming};
 use botler_store::{Delivery, Instance, InstanceState};
@@ -17,6 +19,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+use crate::agent_env::AgentEnv;
 use crate::auth::Principal;
 use crate::environment::{self, Runnable};
 use crate::hub::{Hub, HubError, Live, Result, builtin};
@@ -35,12 +38,21 @@ pub struct LiveAgent {
     pub wake: String,
     pub container: String,
     pub pi: PiClient,
+    /// What this container was started with. When the applied definitions or the chat's grants
+    /// change it, the agent is restarted between turns (see [`drifted`]).
+    env: AgentEnv,
+    /// The applied commit and grants `env` was last found current for (skips recomputing it).
+    checked: std::sync::Mutex<String>,
+    /// What changed since its previous container, told with its next delivery.
+    changes: std::sync::Mutex<Vec<String>>,
     busy: AtomicBool,
     last_active: std::sync::Mutex<DateTime<Utc>>,
     /// Set when the hub stops the agent on purpose (idle, kill switch), so the exit is not a crash.
     stopping: AtomicBool,
     /// What it did this turn: decides whether its parent hears about the end of the turn.
     turn: std::sync::Mutex<TurnLog>,
+    /// The error of the turn's last model call, if it failed: the turn failed when it settles.
+    error: std::sync::Mutex<Option<String>>,
     /// Held while a delivery is handed to pi and recorded as delivered. pi can start and settle
     /// the turn before its response to the prompt is processed, so the end-of-turn handling takes
     /// it before looking up the delivery that started the turn.
@@ -64,6 +76,10 @@ impl LiveAgent {
 
     fn turn(&self) -> std::sync::MutexGuard<'_, TurnLog> {
         self.turn.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn error(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn last_active(&self) -> DateTime<Utc> {
@@ -94,6 +110,8 @@ pub struct Agents {
     phases: Mutex<HashMap<String, WakePhase>>,
     /// Serialises waking per hub so one instance is never started twice.
     waking: Mutex<()>,
+    /// The applied commit and when it was first seen, to restart agents once per burst of merges.
+    applied_at: Mutex<Option<(String, DateTime<Utc>)>>,
 }
 
 impl std::fmt::Debug for Agents {
@@ -156,11 +174,44 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
         tracing::debug!(instance = %name, reason = %b.reason, "instance paused by breaker; deliveries wait");
         return Ok(());
     }
+    if let Some(agent) = hub.agents.get(name).await
+        && drifted(hub, &agent).await?
+    {
+        // A merge or a grant changed what its container should be: restart it (once its turn is
+        // over) so the delivery reaches the new one. The exit wakes the dispatcher again.
+        if !agent.busy() {
+            tracing::info!(instance = %name, "environment changed; restarting the container");
+            agent.stop().await;
+        }
+        return Ok(());
+    }
     let agent = ensure_awake(hub, &instance).await?;
+    // A turn this loop started may not show as busy yet: queued messages wait for it too.
+    let mut started = false;
+    let changes = std::mem::take(&mut *agent.changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    if !changes.is_empty() {
+        // Ahead of the rest, as a note: the agent reads it with what woke it.
+        let payload = BuiltinPayload::EnvironmentUpdated(EnvironmentUpdatedPayload { changes });
+        let ev = builtin(payload, Source::Hub)?.to(name);
+        hub.store.append_event(&ev).await?;
+        hub.store.mark_routed(&ev.id.to_string()).await?;
+        let d = hub.store.enqueue_delivery_with(&ev.id.to_string(), name, None, None, true, None).await?;
+        started |= deliver_one(hub, &agent, &d, started).await?;
+    }
     for d in hub.store.pending_deliveries(name).await? {
-        deliver_one(hub, &agent, &d).await?;
+        started |= deliver_one(hub, &agent, &d, started).await?;
     }
     Ok(())
+}
+
+/// A message the user queued: held (pending, cancellable) until the agent's turn ends.
+fn is_queued_message(ev: &Event) -> Result<bool> {
+    if ev.source != Source::User || ev.kind != botler_core::event::kinds::MESSAGE {
+        return Ok(false);
+    }
+    let m: MessagePayload =
+        serde_json::from_value(ev.payload.clone()).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+    Ok(m.mode == Some(SendMode::Queue))
 }
 
 /// The text pi receives for one delivery. The botler extension recognises the prefix, drops
@@ -189,11 +240,18 @@ pub fn envelope(
     Ok(format!("botler:delivery {json}"))
 }
 
-async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
+/// Hand one delivery to pi. Returns whether it started a turn; a queued message is left pending
+/// while one runs (`turn_started`: by this dispatch, maybe not reported busy yet).
+async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: bool) -> Result<bool> {
     let ev = hub.store.event(&d.event_id).await?;
+    let busy = agent.pi.is_busy().await?;
+    if (busy || turn_started) && is_queued_message(&ev)? {
+        tracing::debug!(delivery = %d.id, "queued message waits for the turn to end");
+        return Ok(false);
+    }
     let previous = hub.store.last_delivered(&d.instance).await?.and_then(|p| p.delivered_at);
     let text = envelope(d, &ev, hub.applied().await.defs.timezone, Utc::now(), previous)?;
-    let streaming = if agent.pi.is_busy().await? {
+    let streaming = if busy {
         // The user and urgent events interrupt at the next turn boundary; everything else waits.
         Some(if ev.urgent || ev.source == Source::User { Streaming::Steer } else { Streaming::FollowUp })
     } else {
@@ -208,12 +266,12 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
             // would race with a settle that arrives before this response is processed.
             tracing::debug!(delivery = %d.id, ?disposition, "delivered");
             agent.touch();
-            Ok(())
+            Ok(!busy && !d.quiet)
         }
         Err(PiError::Rejected { error, .. }) if d.attempts + 1 >= MAX_ATTEMPTS => {
             tracing::error!(delivery = %d.id, %error, "pi keeps rejecting delivery; dropping it");
             hub.store.drop_delivery(&d.id, &format!("rejected by pi: {error}")).await?;
-            Ok(())
+            Ok(false)
         }
         Err(e) => Err(e.into()),
     }
@@ -285,7 +343,12 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     }
     set_phase(hub, &instance.name, WakeStep::StartingContainer).await;
     let wake = uuid::Uuid::now_v7().simple().to_string();
-    let spec = container_spec(hub, instance, def, &applied, image, branch.as_deref(), &wake).await?;
+    // The definition's environment plus what the chat holds, on every wake.
+    let agent_env = crate::agent_env::compute(hub, instance, def, &applied, Some(image.clone())).await?;
+    let checked = check_key(hub, &applied, &instance.name).await?;
+    let changes = remember_env(hub, &instance.name, &agent_env).await?;
+    let env = agent_env.env.clone();
+    let spec = container_spec(hub, instance, def, &env, &applied, image, branch.as_deref(), &wake).await?;
     tracing::info!(instance = %instance.name, %wake, "waking agent");
     hub.agents.wakes.lock().await.insert(instance.name.clone(), wake.clone());
     let attached = match hub.containers.run_attached(&spec).await {
@@ -301,10 +364,14 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         wake,
         container: spec.name.clone(),
         pi,
+        env: agent_env,
+        checked: std::sync::Mutex::new(checked),
+        changes: std::sync::Mutex::new(changes),
         busy: AtomicBool::new(false),
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
         turn: std::sync::Mutex::default(),
+        error: std::sync::Mutex::default(),
         delivering: Mutex::default(),
         kill: Mutex::new(Some(attached.kill)),
     });
@@ -314,6 +381,85 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     tokio::spawn(pump(hub.clone(), agent.clone(), events));
     tokio::spawn(watch_exit(hub.clone(), agent.clone(), attached.exited, attached.stderr));
     Ok(agent)
+}
+
+/// kv owner of each instance's last container environment (to tell it what changed).
+const ENV_KV: &str = "hub:agent-env";
+/// A burst of merges within this long restarts an idle agent once.
+pub const RESTART_DEBOUNCE_SECS: i64 = 10;
+
+/// Store `env` as `instance`'s current environment; returns what changed since the previous one.
+async fn remember_env(hub: &Hub, instance: &str, env: &AgentEnv) -> Result<Vec<String>> {
+    let json = |e: serde_json::Error| HubError::Io(std::io::Error::other(e));
+    let previous: Option<AgentEnv> = match hub.store.kv_get(ENV_KV, instance).await? {
+        // A shape from an older hub is no basis for a comparison.
+        Some(v) => serde_json::from_str(&v).ok(),
+        None => None,
+    };
+    hub.store.kv_set(ENV_KV, instance, &serde_json::to_string(env).map_err(json)?).await?;
+    Ok(previous.map(|p| crate::agent_env::changes(&p, env)).unwrap_or_default())
+}
+
+/// What `agent`'s environment was computed for: the applied commit and its grants.
+async fn check_key(hub: &Hub, applied: &crate::hub::Applied, instance: &str) -> Result<String> {
+    let (_, grants) = crate::grants::environment(hub, instance).await?;
+    Ok(format!("{} {}", applied.commit, grants.join(",")))
+}
+
+/// Whether `agent`'s container no longer matches what it would get now (after a merge or a
+/// grant). Cheap when nothing changed since the last check.
+async fn drifted(hub: &Hub, agent: &LiveAgent) -> Result<bool> {
+    let applied = hub.applied().await;
+    let key = check_key(hub, &applied, &agent.instance).await?;
+    let lock = || agent.checked.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *lock() == key {
+        return Ok(false);
+    }
+    let instance = hub.store.instance(&agent.instance).await?;
+    // A removed definition keeps running agents as they are until they sleep.
+    let Some(def) = applied.defs.agents.get(&instance.definition) else { return Ok(false) };
+    let now = crate::agent_env::compute(hub, &instance, def, &applied, None).await?;
+    if now == agent.env {
+        *lock() = key;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// After a merge (or a grant): build the images running agents now need, then restart those whose
+/// environment changed, each once its turn is over and no further merge came within
+/// [`RESTART_DEBOUNCE_SECS`]. They resume the same session with the same home; always-on agents
+/// are started again right away, others when their next message arrives.
+pub async fn refresh_environments(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
+    let applied = hub.applied().await;
+    let since = {
+        let mut seen = hub.agents.applied_at.lock().await;
+        match &*seen {
+            Some((commit, at)) if *commit == applied.commit => *at,
+            _ => {
+                *seen = Some((applied.commit.clone(), now));
+                now
+            }
+        }
+    };
+    for agent in hub.agents.all().await {
+        if !drifted(hub, &agent).await? {
+            continue;
+        }
+        let instance = hub.store.instance(&agent.instance).await?;
+        if let Some(def) = applied.defs.agents.get(&instance.definition)
+            && let Err(e) = images::ensure_agent_image(hub, def.spec.env.image(), &applied.commit).await
+        {
+            tracing::error!(instance = %agent.instance, error = %e, "could not build the new image; restart waits");
+            continue;
+        }
+        if agent.busy() || now - since < Duration::seconds(RESTART_DEBOUNCE_SECS) {
+            continue;
+        }
+        tracing::info!(instance = %agent.instance, "environment changed; restarting between turns");
+        agent.stop().await;
+    }
+    Ok(())
 }
 
 /// The host directory mounted as an instance's home: its own, or the shared one its definition
@@ -388,10 +534,12 @@ async fn git_fresh(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn container_spec(
     hub: &Hub,
     instance: &Instance,
     def: &AgentDef,
+    env: &Environment,
     applied: &crate::hub::Applied,
     image: String,
     branch: Option<&str>,
@@ -435,14 +583,14 @@ async fn container_spec(
 
     let route_key: Vec<String> = route.api_key_secret.iter().cloned().collect();
     let what = Runnable::Agent { instance, wake };
-    let mut spec = environment::container_spec(hub, &def.spec.env, what, image, command, &route_key).await?;
-    let env = &mut spec.env;
-    env.insert("PI_OFFLINE".into(), "1".into());
-    env.insert("BOTLER_INSTANCE".into(), instance.name.clone());
+    let mut spec = environment::container_spec(hub, env, what, image, command, &route_key).await?;
+    let vars = &mut spec.env;
+    vars.insert("PI_OFFLINE".into(), "1".into());
+    vars.insert("BOTLER_INSTANCE".into(), instance.name.clone());
     // Lets git in the workspace push to the hub without storing the token in .git/config.
-    env.insert("GIT_CONFIG_COUNT".into(), "1".into());
-    env.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
-    env.insert("GIT_CONFIG_VALUE_0".into(), format!("Authorization: Bearer {}", env["BOTLER_TOKEN"]));
+    vars.insert("GIT_CONFIG_COUNT".into(), "1".into());
+    vars.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
+    vars.insert("GIT_CONFIG_VALUE_0".into(), format!("Authorization: Bearer {}", vars["BOTLER_TOKEN"]));
 
     // Rendered pi config: a tmpfs agent dir with read-only files on top (pi needs to write locks).
     let dir = hub.paths.agent_dir(&instance.name);
@@ -469,7 +617,7 @@ async fn container_spec(
             "toolExposure": ops::turn_ending().map(|n| (n, "hidden")).collect::<BTreeMap<_, _>>(),
         }),
     );
-    servers.extend(mcp_servers(applied, def));
+    servers.extend(mcp_servers(applied, env));
     // Python tools this agent is granted (`tools` globs); the extension registers them.
     let tools = applied.defs.tools_for(&def.spec.env);
     // Hub ops that end the turn; the extension registers them with `terminate: true`.
@@ -500,12 +648,6 @@ async fn container_spec(
         dst: "/botler/extension".into(),
         read_only: true,
     });
-    if !tools.is_empty() {
-        // Tool code runs from the applied main commit (not the agent's own checkout), like
-        // agent-authored pi resources.
-        let export = images::applied_tree(hub, &applied.commit).await?;
-        mounts.push(Mount::Bind { src: export, dst: "/botler/applied".into(), read_only: true });
-    }
     if let Some(src) = pi_res {
         mounts.push(Mount::Bind { src, dst: "/botler/pi".into(), read_only: true });
     }
@@ -514,15 +656,15 @@ async fn container_spec(
 
 /// `mcp.json` entries besides the hub: granted services, reached directly on the services network
 /// (they get no botler token), and stdio servers pi starts inside the container.
-fn mcp_servers(applied: &crate::hub::Applied, def: &AgentDef) -> serde_json::Map<String, serde_json::Value> {
+fn mcp_servers(applied: &crate::hub::Applied, env: &Environment) -> serde_json::Map<String, serde_json::Value> {
     let mut servers = serde_json::Map::new();
-    for svc in &def.spec.env.mcp {
+    for svc in &env.mcp {
         // Validation guarantees a service with a port.
         let Some(port) = applied.defs.jobs.get(svc).and_then(|j| j.spec.env.port) else { continue };
         let url = format!("http://{svc}:{port}/mcp"); // the service's alias on the network
         servers.insert(svc.clone(), json!({ "url": url }));
     }
-    for (name, s) in &def.spec.env.mcp_stdio {
+    for (name, s) in &env.mcp_stdio {
         let Some((command, args)) = s.command.split_first() else { continue };
         servers.insert(name.clone(), json!({ "command": command, "args": args, "env": s.env }));
     }
@@ -558,8 +700,12 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
             PiEventKind::AgentStart => {
                 agent.busy.store(true, Ordering::SeqCst);
                 agent.turn().reset();
+                *agent.error() = None;
                 // pi is up and working: the instance is healthy again.
                 hub.agents.crashes.lock().await.remove(&agent.instance);
+                if hub.agents.phases.lock().await.remove(&agent.instance).is_some() {
+                    broadcast_state(&hub, &agent.instance, AgentStatus::Running);
+                }
             }
             PiEventKind::AgentSettled => {
                 agent.busy.store(false, Ordering::SeqCst);
@@ -567,19 +713,26 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                 if let Err(e) = hub.store.touch_instance(&agent.instance).await {
                     tracing::error!(instance = %agent.instance, error = %e, "could not record activity");
                 }
-                if let Err(e) = notify_parent(&hub, &agent).await {
-                    tracing::error!(instance = %agent.instance, error = %e, "could not notify parent");
+                let failed = agent.error().take();
+                let ended = match failed {
+                    Some(err) => crate::turns::failed(&hub, &agent, &err).await,
+                    None => turn_succeeded(&hub, &agent).await,
+                };
+                if let Err(e) = ended {
+                    tracing::error!(instance = %agent.instance, error = %e, "could not handle the end of the turn");
                 }
                 hub.dispatch_notify.notify_one();
             }
-            PiEventKind::MessageEnd { usage: Some(u), error, .. } => {
-                if let Some(err) = error {
-                    tracing::warn!(instance = %agent.instance, %err, "model call failed");
-                    if let Err(e) = on_provider_error(&hub, &agent, err).await {
-                        tracing::error!(instance = %agent.instance, error = %e, "could not record provider error");
+            PiEventKind::MessageEnd { role, usage, error } => {
+                if role == "assistant" {
+                    if let Some(err) = error {
+                        tracing::warn!(instance = %agent.instance, %err, "model call failed");
                     }
+                    agent.error().clone_from(error);
                 }
-                if let Err(e) = meter(&hub, &agent, u).await {
+                if let Some(u) = usage
+                    && let Err(e) = meter(&hub, &agent, u).await
+                {
                     tracing::error!(instance = %agent.instance, error = %e, "usage metering failed");
                 }
             }
@@ -589,28 +742,17 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
     }
 }
 
-/// Auth and billing errors from the model provider will not fix themselves by retrying: pause the
-/// agent and open an incident for the user. No triage is dispatched (it would use the same key).
-async fn on_provider_error(hub: &Hub, agent: &LiveAgent, err: &str) -> Result<()> {
-    let code = err.trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
-    let kind = match code {
-        "401" | "403" => "provider auth",
-        "402" => "provider billing",
-        _ => return Ok(()),
-    };
-    let reason = format!("{kind} error: {}", err.chars().take(300).collect::<String>());
-    if hub.store.trip_breaker(&format!("instance:{}", agent.instance), "provider", &reason).await? {
-        let (incident, _) = hub.store.record_failure(&format!("agent:{}", agent.instance), "provider", None).await?;
-        tracing::error!(instance = %agent.instance, incident = %incident.id, %reason, "agent paused: provider rejected requests");
-        if hub
-            .live
-            .send(Live::Instance { instance: agent.instance.clone(), status: AgentStatus::Paused { reason } })
-            .is_err()
-        {
-            tracing::trace!("no live viewers");
-        }
-    }
-    Ok(())
+async fn turn_succeeded(hub: &Hub, agent: &LiveAgent) -> Result<()> {
+    crate::turns::succeeded(hub, &agent.instance).await?;
+    notify_parent(hub, agent).await
+}
+
+/// The delivery that started the agent's current turn. A delivery still being recorded may be
+/// it: wait for it. pi's response to the prompt is read by the client's reader task, not the
+/// pump, so this cannot deadlock, and the prompt is bounded by the pi timeout.
+pub(crate) async fn turn_start(hub: &Hub, agent: &LiveAgent) -> Result<Option<Delivery>> {
+    let _delivering = agent.delivering.lock().await;
+    Ok(hub.store.last_delivered(&agent.instance).await?)
 }
 
 /// Tell the agent that spawned this one that it ended its turn, with its final answer, unless
@@ -639,14 +781,7 @@ async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
         last_reply,
     });
     let mut ev = builtin(idle, Source::Agent(instance.name.clone()))?.to(parent);
-    // A delivery still being recorded may be the one that started this turn: wait for it. pi's
-    // response to the prompt is read by the client's reader task, not this pump, so this cannot
-    // deadlock, and the prompt is bounded by the pi timeout.
-    let last = {
-        let _delivering = agent.delivering.lock().await;
-        hub.store.last_delivered(&instance.name).await?
-    };
-    if let Some(d) = last {
+    if let Some(d) = turn_start(hub, agent).await? {
         let started = hub.store.event(&d.event_id).await?;
         ev = ev.in_reply_to(&started);
     }
@@ -731,7 +866,9 @@ async fn watch_exit(
     if let Err(e) = hub.store.set_instance_state(&agent.instance, state, None).await {
         tracing::error!(instance = %agent.instance, error = %e, "could not record agent exit");
     }
-    broadcast_state(&hub, &agent.instance, AgentStatus::Dormant);
+    // A scheduled retry or a failed turn stays visible while it sleeps.
+    let status = hub.agents.phase(&agent.instance).await.map_or(AgentStatus::Dormant, AgentStatus::from);
+    broadcast_state(&hub, &agent.instance, status);
     if !deliberate {
         let tail = stderr.text();
         tracing::warn!(instance = %agent.instance, ?code, stderr = %tail, "agent container exited unexpectedly");
@@ -854,7 +991,13 @@ pub async fn reconcile_on_boot(hub: &Hub) -> Result<()> {
     Ok(())
 }
 
-fn broadcast_state(hub: &Hub, instance: &str, status: AgentStatus) {
+/// Record a phase that outlives the wake (a scheduled retry, a failed turn) and show it.
+pub(crate) async fn show_phase(hub: &Hub, instance: &str, phase: WakePhase) {
+    hub.agents.phases.lock().await.insert(instance.to_string(), phase.clone());
+    broadcast_state(hub, instance, phase.into());
+}
+
+pub(crate) fn broadcast_state(hub: &Hub, instance: &str, status: AgentStatus) {
     if hub.live.send(Live::Instance { instance: instance.into(), status }).is_err() {
         tracing::trace!("no live viewers");
     }
@@ -862,9 +1005,10 @@ fn broadcast_state(hub: &Hub, instance: &str, status: AgentStatus) {
 
 /// An urgent note to the front door (`botler`) from the hub.
 pub async fn alarm(hub: &Hub, text: &str) -> Result<()> {
-    let ev = builtin(BuiltinPayload::Message(MessagePayload { text: text.into(), files: vec![] }), Source::Hub)?
-        .to(botler_core::FRONT_DOOR)
-        .urgent(true);
+    let ev =
+        builtin(BuiltinPayload::Message(MessagePayload { text: text.into(), files: vec![], mode: None }), Source::Hub)?
+            .to(botler_core::FRONT_DOOR)
+            .urgent(true);
     hub.emit(ev).await?;
     Ok(())
 }
@@ -911,6 +1055,9 @@ pub async fn run(hub: Arc<Hub>) {
     loop {
         if let Err(e) = keep_always_on(&hub).await {
             tracing::error!(error = %e, "always-on check failed");
+        }
+        if let Err(e) = refresh_environments(&hub, Utc::now()).await {
+            tracing::error!(error = %e, "environment refresh failed");
         }
         if let Err(e) = dispatch_pending(&hub).await {
             tracing::error!(error = %e, "dispatch failed");

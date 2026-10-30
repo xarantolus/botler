@@ -16,6 +16,7 @@ const INERT = [
   /^https:\/\/vuejs\.org\/error-reference\/?(#[\w${}-]*)?$/, // Vue's error messages
   /^https:\/\/tailwindcss\.com\/?$/, // license comment
   /^https:\/\/github\.com\/markedjs\/marked\.?$/, // marked's error message
+  /^https:\/\/github\.com\/highlightjs\/highlight\.js\/(issues\/2277|wiki\/security)$/, // highlight.js console warnings
 ];
 
 function files(dir, out = []) {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The chat's title bar: its name and what it is doing, what it cost, and its actions.
 import type { DropdownMenuItem } from "@nuxt/ui";
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { call } from "../../api/client";
 import { confirm } from "../../confirm";
@@ -10,14 +10,19 @@ import { chatTitle } from "../../lib/events";
 import type { Badge } from "../../lib/phase";
 import { usd } from "../../lib/time";
 import { notifyError, notifySuccess } from "../../notify";
-import { frontDoorName, refreshInstances, refreshSession } from "../../store";
+import { inFlight, stageLabel } from "../../lib/proposals";
+import { frontDoorName, refreshInstances, refreshSession, state } from "../../store";
 import PhaseBadge from "../common/PhaseBadge.vue";
+import ConnectionsSlideover from "./ConnectionsSlideover.vue";
 
 const props = defineProps<{ name: string; instance: Instance | null; badge: Badge | null; cost?: number; pending?: number }>();
 const router = useRouter();
 
 const title = computed(() => (props.instance ? chatTitle(props.instance, frontDoorName.value) : props.name));
 const isFrontDoor = computed(() => props.name === frontDoorName.value);
+const connections = ref(false);
+/** This chat's proposals still in flight, linked to their review pages. */
+const proposals = computed(() => (state.proposals ?? []).filter((p) => p.instance === props.name && inFlight(p)));
 
 async function archive(force: boolean) {
   const ok = await confirm({
@@ -98,6 +103,21 @@ const menu = computed((): DropdownMenuItem[][] => {
       <PhaseBadge v-if="badge" :badge="badge" />
     </template>
     <template #right>
+      <UButton
+        v-for="(p, i) in proposals.slice(0, 2)"
+        :key="p.id"
+        :to="`/proposals/${p.id}`"
+        :color="p.status === 'awaiting_user' ? 'warning' : 'info'"
+        variant="subtle"
+        size="xs"
+        icon="i-lucide-git-pull-request-arrow"
+        :title="`Proposal: ${p.title}`"
+        :class="['max-w-56 shrink-0', i > 0 && 'hidden sm:inline-flex']"
+      >
+        <span class="truncate">
+          {{ stageLabel(p) }}<span class="hidden sm:inline">: {{ p.title }}</span>
+        </span>
+      </UButton>
       <UTooltip v-if="pending" :text="`${pending} message(s) waiting to be delivered`">
         <UBadge color="info" variant="subtle" icon="i-lucide-inbox" :label="String(pending)" class="hidden sm:inline-flex" />
       </UTooltip>
@@ -114,6 +134,10 @@ const menu = computed((): DropdownMenuItem[][] => {
         class="hidden sm:inline-flex"
         @click="restore"
       />
+      <UTooltip text="Connections: access, subscriptions, related chats">
+        <UButton icon="i-lucide-waypoints" color="neutral" variant="ghost" aria-label="Connections" @click="connections = true" />
+      </UTooltip>
+      <ConnectionsSlideover v-model:open="connections" :name="name" />
       <UDropdownMenu :items="menu" :content="{ align: 'end' }">
         <UButton icon="i-lucide-ellipsis-vertical" color="neutral" variant="ghost" aria-label="Chat actions" />
       </UDropdownMenu>

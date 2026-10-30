@@ -1,5 +1,6 @@
 //! The botler hub.
 
+pub mod agent_env;
 pub mod agents;
 pub mod api;
 pub mod assets;
@@ -10,6 +11,7 @@ pub mod control;
 pub mod embedded;
 pub mod environment;
 pub mod failures;
+pub mod grants;
 pub mod health;
 pub mod hub;
 pub mod images;
@@ -25,6 +27,7 @@ pub mod ops;
 pub mod phase;
 
 pub mod prompt;
+pub mod review;
 pub mod router;
 pub mod scheduler;
 pub mod search;
@@ -36,6 +39,8 @@ pub mod supervisor;
 pub mod system;
 pub mod template;
 pub mod transactions;
+pub mod trials;
+pub mod turns;
 pub mod web;
 pub mod wire;
 

@@ -34,6 +34,9 @@ impl Op for RunJob {
         if hub.paused().await? {
             return Err(HubError::Paused.into());
         }
+        if hub.applied().await.defs.jobs.get(&self.job).is_some_and(|j| !j.spec.enabled) {
+            return Err(OpError::Conflict(format!("{} is disabled (enabled = false in its job.toml)", self.job)));
+        }
         // A job has no overlap policy of its own; its triggers do. Use the first one's.
         let overlap = hub
             .applied()

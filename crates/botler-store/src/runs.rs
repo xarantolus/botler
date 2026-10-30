@@ -12,6 +12,8 @@ text_enum!(RunKind {
     Action = "action",
     Gate = "gate",
     Replay = "replay",
+    /// `trial_run`: a job or service from an agent's branch, its effects recorded, not routed.
+    Trial = "trial",
 });
 
 text_enum!(RunStatus {
@@ -143,12 +145,15 @@ impl Store {
         Ok(r.rows_affected() == 1)
     }
 
-    /// Queued runs of one runnable, oldest first (overlap = queue).
+    /// Queued runs of one runnable, oldest first (overlap = queue). Trials never count as the
+    /// runnable's own runs, here and in [`Self::runs_for`] and [`Self::failures_since`].
     pub async fn queued_runs(&self, runnable: &str) -> Result<Vec<Run>> {
-        let rows = sqlx::query("SELECT * FROM runs WHERE runnable = ? AND status = 'queued' ORDER BY created_at")
-            .bind(runnable)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT * FROM runs WHERE runnable = ? AND status = 'queued' AND kind != 'trial' ORDER BY created_at",
+        )
+        .bind(runnable)
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter().map(row).collect()
     }
 
@@ -161,11 +166,12 @@ impl Store {
     }
 
     pub async fn runs_for(&self, runnable: &str, limit: u32) -> Result<Vec<Run>> {
-        let rows = sqlx::query("SELECT * FROM runs WHERE runnable = ? ORDER BY created_at DESC LIMIT ?")
-            .bind(runnable)
-            .bind(limit)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query("SELECT * FROM runs WHERE runnable = ? AND kind != 'trial' ORDER BY created_at DESC LIMIT ?")
+                .bind(runnable)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?;
         rows.iter().map(row).collect()
     }
 
@@ -188,7 +194,7 @@ impl Store {
     /// How many runs of `runnable` ended in failure since `since` (crash-loop detection).
     pub async fn failures_since(&self, runnable: &str, since: DateTime<Utc>) -> Result<i64> {
         let r = sqlx::query(
-            "SELECT COUNT(*) AS n FROM runs WHERE runnable = ? AND status IN ('failed', 'timeout') AND finished_at >= ?",
+            "SELECT COUNT(*) AS n FROM runs WHERE runnable = ? AND kind != 'trial' AND status IN ('failed', 'timeout') AND finished_at >= ?",
         )
         .bind(runnable)
         .bind(ts(since))

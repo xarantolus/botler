@@ -12,8 +12,9 @@
 //
 // Hub tools come from the hub's MCP server (see mcp.json). Python tools from the monorepo's
 // `tools/` are registered here: the hub renders the ones this agent is granted into
-// /botler/agent-dir/tools.json (entries of tools.manifest.json) and mounts the applied main commit
-// at /botler/applied; each call runs `python -m botler.tools call <name>` there.
+// /botler/agent-dir/tools.json (entries of tools.manifest.json). The agent image has them, with
+// their dependencies, installed in /opt/botler/tools-venv; each call runs
+// `python -m botler.tools call <name>` with that venv's Python and installs nothing.
 //
 // Hub ops after which the turn is over (ask_user, propose_change, ...) are registered here too,
 // from /botler/agent-dir/turn-tools.json (rendered by the hub from its op specs): MCP results
@@ -27,8 +28,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const TOOLS_FILE = "/botler/agent-dir/tools.json";
 const TURN_TOOLS_FILE = "/botler/agent-dir/turn-tools.json";
-const APPLIED = "/botler/applied";
-const TOOL_TIMEOUT_MS = 300_000; // the first call may install the tools' dependencies
+const TOOLS_PYTHON = "/opt/botler/tools-venv/bin/python";
+const TOOL_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT = 50_000;
 
 interface ToolDecl {
@@ -87,11 +88,12 @@ export async function callOp(name: string, args: unknown, signal?: AbortSignal):
 
 /** Run one tool call in a subprocess: JSON args on stdin, `{ok, result | error}` on stdout. */
 export function runTool(name: string, args: unknown, signal?: AbortSignal): Promise<unknown> {
-  const argv = ["run", "--frozen", "--no-dev", "--all-packages", "--project", APPLIED, "python", "-m", "botler.tools", "call", name];
+  // -P: the working directory is not on sys.path, so nothing there shadows the tools' modules.
+  const argv = ["-P", "-m", "botler.tools", "call", name, "--manifest", TOOLS_FILE];
   return new Promise((resolve, reject) => {
-    const child = spawn("uv", argv, {
-      cwd: APPLIED,
-      env: { ...process.env, UV_PROJECT_ENVIRONMENT: "/tmp/botler-tools-venv", PYTHONDONTWRITEBYTECODE: "1" },
+    const child = spawn(TOOLS_PYTHON, argv, {
+      cwd: "/",
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
       timeout: TOOL_TIMEOUT_MS,
       signal,
     });
@@ -99,7 +101,13 @@ export function runTool(name: string, args: unknown, signal?: AbortSignal): Prom
     let stderr = "";
     child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
     child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
-    child.on("error", reject);
+    child.on("error", (e: NodeJS.ErrnoException) =>
+      reject(
+        e.code === "ENOENT"
+          ? new Error(`tool ${name}: this agent image has no ${TOOLS_PYTHON}; its Dockerfile must install the tools (see the template's images/agent/Dockerfile)`)
+          : e,
+      ),
+    );
     child.on("close", (code, sig) => {
       const tail = stderr.slice(-2000);
       const last = stdout.trim().split("\n").pop() ?? "";

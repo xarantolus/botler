@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::defs::{
-    CapabilityPolicy, Definitions, EnvEscalation, Environment, Lifetime, ResolvedTrigger, SecretClass, Target,
-    TriggerKind,
+    CapabilityPolicy, Definitions, EnvEscalation, Environment, GrantMode, Lifetime, ResolvedTrigger, SecretClass,
+    Target, TriggerKind,
 };
 use crate::limits::default_limit;
 
@@ -72,6 +72,10 @@ pub enum Escalation {
         server: String,
         command: String,
     },
+    /// `policies/grants.toml` lets chats get a resource without asking the user.
+    GrantAuto {
+        resource: String,
+    },
     /// The protection policy itself could not be evaluated; treated as touching everything.
     InvalidPolicy {
         detail: String,
@@ -101,6 +105,7 @@ impl Escalation {
             Self::McpStdioAdded { agent, server, command } => {
                 format!("runs MCP server `{server}` (`{command}`) inside agent `{agent}`'s container")
             }
+            Self::GrantAuto { resource } => format!("lets any chat get `{resource}` without asking you"),
             Self::InvalidPolicy { detail } => {
                 format!("cannot evaluate protected paths ({detail}); treating all paths as protected")
             }
@@ -168,19 +173,13 @@ pub struct ChangeSummary {
 
 pub const UPCOMING: usize = 5;
 
-/// Compare two definition sets. `changed_paths` are repo paths touched by the change.
-pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], now: DateTime<Utc>) -> ChangeSummary {
-    let mut esc = BTreeSet::new();
-
-    // Protection is judged by the *old* policy plus the built-ins, so a change cannot unprotect
-    // paths and edit them in the same step.
-    let mut protected: Vec<String> = old.policy.protected_paths.clone();
-    protected.extend(CapabilityPolicy::ALWAYS_PROTECTED.iter().map(|s| (*s).to_string()));
-    protected.push("policies/capabilities.toml".into());
-    // Fail closed: if the protection set cannot be built, every changed path counts as protected.
+/// The paths only the user may approve changes to: `defs`' protection policy plus the built-ins.
+/// `Err` (why) if the policy has invalid globs; callers then treat every path as protected.
+pub fn protected_paths(defs: &Definitions) -> Result<globset::GlobSet, String> {
     let mut builder = globset::GlobSetBuilder::new();
     let mut invalid = Vec::new();
-    for p in &protected {
+    let builtin = CapabilityPolicy::ALWAYS_PROTECTED.iter().copied().chain(["policies/capabilities.toml"]);
+    for p in defs.policy.protected_paths.iter().map(String::as_str).chain(builtin) {
         match globset::Glob::new(p) {
             Ok(g) => {
                 builder.add(g);
@@ -188,14 +187,22 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
             Err(e) => invalid.push(format!("{p:?}: {e}")),
         }
     }
-    let set = match builder.build() {
-        Ok(set) if invalid.is_empty() => Some(set),
-        Ok(_) => {
-            esc.insert(Escalation::InvalidPolicy { detail: invalid.join("; ") });
-            None
-        }
-        Err(e) => {
-            esc.insert(Escalation::InvalidPolicy { detail: e.to_string() });
+    if !invalid.is_empty() {
+        return Err(invalid.join("; "));
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+/// Compare two definition sets. `changed_paths` are repo paths touched by the change.
+pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], now: DateTime<Utc>) -> ChangeSummary {
+    let mut esc = BTreeSet::new();
+
+    // Protection is judged by the *old* policy plus the built-ins, so a change cannot unprotect
+    // paths and edit them in the same step.
+    let set = match protected_paths(old) {
+        Ok(set) => Some(set),
+        Err(detail) => {
+            esc.insert(Escalation::InvalidPolicy { detail });
             None
         }
     };
@@ -276,11 +283,13 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
     }
     for j in new.jobs.values() {
         let prev = old.jobs.get(&j.name);
-        if j.spec.lifetime == Lifetime::Service && !prev.is_some_and(|p| p.spec.lifetime == Lifetime::Service) {
+        // Ask once per service: when it first runs (new, enabled, or turned from a oneshot). Later
+        // code-only changes do not ask; new secrets, ports and network still do.
+        if j.spec.is_service() && !prev.is_some_and(|p| p.spec.is_service()) {
             esc.insert(Escalation::ServiceAdded { job: j.name.clone() });
         }
-        if j.spec.lifetime == Lifetime::Service {
-            let before = prev.filter(|o| o.spec.lifetime == Lifetime::Service).map_or(&none, |o| &o.spec.env);
+        if j.spec.is_service() {
+            let before = prev.filter(|o| o.spec.is_service()).map_or(&none, |o| &o.spec.env);
             for e in before.escalations(&j.spec.env) {
                 if let EnvEscalation::Port(p) = e {
                     esc.insert(Escalation::PortPublished { job: j.name.clone(), reach: p.reach() });
@@ -305,6 +314,12 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         }
         if prev.is_some_and(|p| p.approval) && !t.approval {
             esc.insert(Escalation::ApprovalRemoved { tool: t.name.clone() });
+        }
+    }
+
+    for (resource, mode) in &new.grant_policy.resources {
+        if *mode == GrantMode::Auto && old.grant_policy.resources.get(resource) != Some(&GrantMode::Auto) {
+            esc.insert(Escalation::GrantAuto { resource: resource.clone() });
         }
     }
 
@@ -436,7 +451,7 @@ fn likely_mistakes(old: &Definitions, new: &Definitions, now: DateTime<Utc>) -> 
             out.push(format!("`{}` listens for `{pattern}`, which matches no declared event type.", t.id));
         }
     }
-    for j in new.jobs.values().filter(|j| j.spec.lifetime == crate::defs::Lifetime::Oneshot) {
+    for j in new.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Oneshot) {
         let ran_before = old.triggers.values().any(|t| t.target == crate::defs::Target::Run(j.name.clone()));
         let runs_now = new.triggers.values().any(|t| t.target == crate::defs::Target::Run(j.name.clone()))
             || new.jobs.values().any(|o| o.spec.on_failure == Some(crate::defs::Target::Run(j.name.clone())));
@@ -500,7 +515,7 @@ fn diff_items<T: PartialEq>(
     }
 }
 
-fn describe_target(t: &Target) -> String {
+pub fn describe_target(t: &Target) -> String {
     match t {
         Target::Resume(n) => format!("message the `{n}` agent"),
         Target::Spawn(n) => format!("start a new `{n}` agent"),
@@ -661,13 +676,14 @@ pub enum Decision {
     Reject,
 }
 
-/// The transaction decision table. Gate failures never reach this point.
-pub fn decide(summary: &ChangeSummary, verdict: Verdict) -> Decision {
+/// The transaction decision table. Gate failures never reach this point. `None` means there is
+/// no review (no reviewer defined, or it failed or timed out): the user decides, never auto-merge.
+pub fn decide(summary: &ChangeSummary, verdict: Option<Verdict>) -> Decision {
     match verdict {
-        Verdict::Reject => Decision::Reject,
-        Verdict::Escalate => Decision::AskUser,
-        Verdict::Approve if summary.escalations.is_empty() => Decision::Merge,
-        Verdict::Approve => Decision::AskUser,
+        Some(Verdict::Reject) => Decision::Reject,
+        None | Some(Verdict::Escalate) => Decision::AskUser,
+        Some(Verdict::Approve) if summary.escalations.is_empty() => Decision::Merge,
+        Some(Verdict::Approve) => Decision::AskUser,
     }
 }
 
@@ -701,7 +717,8 @@ mod tests {
         let new = defs(&new_tree);
         let s = preview(&old, &new, &["triggers/digest.toml".into()], Utc::now());
         assert!(s.escalations.is_empty(), "{:?}", s.escalations);
-        assert_eq!(decide(&s, Verdict::Approve), Decision::Merge);
+        assert_eq!(decide(&s, Some(Verdict::Approve)), Decision::Merge);
+        assert_eq!(decide(&s, None), Decision::AskUser, "a missing review never merges");
         let t = &s.triggers[0];
         assert_eq!(t.status, Status::Added);
         assert_eq!(t.upcoming.len(), UPCOMING);
@@ -749,6 +766,34 @@ mod tests {
     }
 
     #[test]
+    fn a_service_asks_once() {
+        let svc = |toml: &str| defs(&base().with("jobs/w/job.toml", toml).with("jobs/w/Dockerfile", "FROM x"));
+        let added = Escalation::ServiceAdded { job: "w".into() };
+        let paths = ["jobs/w/src/w/__main__.py".to_string()];
+        let esc = |old: &Definitions, new: &Definitions| preview(old, new, &paths, Utc::now()).escalations;
+        let v1 = svc("lifetime = \"service\"\ncommand = [\"w\"]\n");
+        assert_eq!(esc(&defs(&base()), &v1), std::slice::from_ref(&added), "the first deployment asks");
+        let v2 = svc("lifetime = \"service\"\ncommand = [\"w\", \"--fast\"]\n");
+        let s = preview(&v1, &v2, &paths, Utc::now());
+        assert!(s.escalations.is_empty(), "code-only changes do not: {:?}", s.escalations);
+        assert_eq!(decide(&s, Some(Verdict::Approve)), Decision::Merge);
+        let v3 = svc("lifetime = \"service\"\ncommand = [\"w\"]\nsecrets = [\"gitlab\"]\n");
+        assert_eq!(
+            esc(&v2, &v3),
+            [Escalation::SecretGranted { secret: "GITLAB_TOKEN".into(), group: "gitlab".into(), to: "job `w`".into() }],
+            "new secrets still do"
+        );
+
+        // Turning a oneshot into a service asks; a disabled service asks when it is enabled.
+        let oneshot = svc("command = [\"w\"]\n");
+        assert_eq!(esc(&oneshot, &v1), std::slice::from_ref(&added));
+        let disabled = svc("lifetime = \"service\"\nenabled = false\ncommand = [\"w\"]\n");
+        assert!(esc(&defs(&base()), &disabled).is_empty());
+        assert!(disabled.services().next().is_none(), "a disabled service does not run");
+        assert_eq!(esc(&disabled, &v1), [added]);
+    }
+
+    #[test]
     fn service_ports_are_validated() {
         let errors = |t: MemTree| -> Vec<String> {
             load(&t)
@@ -788,8 +833,8 @@ mod tests {
             to: "agent `main`".into()
         }));
         assert!(s.escalations.contains(&Escalation::ProtectedPath { path: "policies/reviewer.md".into() }));
-        assert_eq!(decide(&s, Verdict::Approve), Decision::AskUser);
-        assert_eq!(decide(&s, Verdict::Reject), Decision::Reject);
+        assert_eq!(decide(&s, Some(Verdict::Approve)), Decision::AskUser);
+        assert_eq!(decide(&s, Some(Verdict::Reject)), Decision::Reject);
     }
 
     #[test]
@@ -896,5 +941,21 @@ mod tests {
             "kind = \"persistent\"\n[limits.send_message]\nburst = 500\nper = \"1m\"\n",
         ));
         assert!(!preview(&old, &loose, &[], Utc::now()).escalations.is_empty());
+    }
+
+    #[test]
+    fn auto_grant_policy_escalates() {
+        let old = defs(&base());
+        let new = defs(
+            &base().with("policies/grants.toml", "[resources]\n\"secret:nas\" = \"auto\"\n\"secret:x\" = \"ask\"\n"),
+        );
+        let s = preview(&old, &new, &["policies/grants.toml".into()], Utc::now());
+        assert!(s.escalations.contains(&Escalation::GrantAuto { resource: "secret:nas".into() }), "{s:?}");
+        assert!(
+            !s.escalations.iter().any(|e| matches!(e, Escalation::GrantAuto { resource } if resource == "secret:x"))
+        );
+        let t = base().with("policies/grants.toml", "[resources]\n\"disk:x\" = \"auto\"\n");
+        let bad: Vec<String> = load(&t).errors().map(|d| d.message.clone()).collect();
+        assert!(bad.iter().any(|m| m.contains("unknown resource kind")), "{bad:?}");
     }
 }

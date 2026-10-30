@@ -4,4 +4,8 @@ export type TimerSet = { timer_id: string, fires_at: string,
 /**
  * `fires_at` in the instance's time zone, for people.
  */
-local: string, };
+local: string, 
+/**
+ * A trial run: recorded, not carried out.
+ */
+dry_run?: boolean, };

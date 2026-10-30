@@ -70,6 +70,7 @@ pub enum Live {
     Pi { instance: String, event: serde_json::Value },
     Instance { instance: String, status: crate::phase::AgentStatus },
     Dialog { notice: crate::notify::DialogNotice },
+    Proposal { proposal: Box<botler_store::Proposal> },
 }
 
 pub struct Hub {
@@ -167,9 +168,10 @@ impl Hub {
                     "The monorepo's main ({commit}) does not load, so botler is still running {last}. Problems:\n{}",
                     diagnostics.iter().map(|d| format!("- {d}")).collect::<Vec<_>>().join("\n")
                 );
-                let ev = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![] }), Source::Hub)?
-                    .to(botler_core::FRONT_DOOR)
-                    .urgent(true);
+                let ev =
+                    builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None }), Source::Hub)?
+                        .to(botler_core::FRONT_DOOR)
+                        .urgent(true);
                 store.append_event(&ev).await?;
                 load_at(repo, &last).await
             }
@@ -187,12 +189,18 @@ impl Hub {
         *self.applied.write().await = Arc::new(applied);
         self.schedule_notify.notify_one();
         self.reconcile_notify.notify_one();
+        // Running agents whose environment changed are restarted (`agents::refresh_environments`).
+        self.dispatch_notify.notify_one();
         Ok(())
     }
 
     /// Journal an event and wake the router. The single entry point for everything that happens.
     pub async fn emit(&self, event: Event) -> Result<Event> {
         self.store.append_event(&event).await?;
+        // An agent writing to someone who waits on it answers them (a reply, an end-of-turn notice).
+        if let (Source::Agent(from), Some(to)) = (&event.source, &event.to) {
+            self.store.clear_expectations(Some(to), from).await?;
+        }
         if self.live.send(Live::Event { event: event.clone() }).is_err() {
             tracing::trace!("no live viewers");
         }

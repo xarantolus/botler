@@ -33,7 +33,7 @@ pub struct RequestOpened {
 
 impl Op for SecretRequest {
     const NAME: &'static str = "request_secrets";
-    const DESCRIPTION: &'static str = "Ask the user for secrets, asynchronously: create a group, add fields to one, re-enter values (`fill`) or remove fields. The user gets a form; you get a request id now and a `dialog.answered` event later saying what was provided (never the values). Do not continue work that needs the secrets until that event arrives. Using a group in a container still needs a grant (`secrets = [\"<group>\"]` in a definition, proposed as a change).";
+    const DESCRIPTION: &'static str = "Ask the user for secrets, asynchronously: create a group, add fields to one, re-enter values (`fill`) or remove fields. The user gets a form; you get a request id now and a `dialog.answered` event later saying what was provided (never the values). Do not continue work that needs the secrets until that event arrives. Using a group in a container still needs a grant: `request_access(\"secret:<group>\")` for this chat, or `secrets = [\"<group>\"]` in a definition, proposed as a change.";
     const WHO: Who = Who::UserAndAgents;
     const ENDS_TURN: bool = true;
     type Output = RequestOpened;

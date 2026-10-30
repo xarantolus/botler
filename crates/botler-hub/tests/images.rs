@@ -42,13 +42,16 @@ async fn tags_follow_declared_inputs_only() {
 
     e.commit(&[("packages/shared/src/shared/x.py", "")]).await;
     let shared = tags(&e, &recipes).await;
-    assert_eq!(shared[..2], after[..2]);
-    assert!(shared[2] != after[2] && shared[3] != after[3], "shared packages feed every job");
+    assert!(shared.iter().zip(&after).all(|(s, a)| s != a), "shared packages feed every job and agent image");
+
+    e.commit(&[("tools/example/src/example/y.py", "")]).await;
+    let tool = tags(&e, &recipes).await;
+    assert!(tool.iter().zip(&shared).all(|(t, s)| t != s), "agent images bake in the tools");
 
     e.commit(&[("images/dev/Dockerfile", "FROM botler/agent-base:latest\nRUN true\n")]).await;
     let dev = tags(&e, &recipes).await;
-    assert_eq!(dev[0], shared[0]);
-    assert_ne!(dev[1], shared[1]);
+    assert_eq!(dev[0], tool[0]);
+    assert_ne!(dev[1], tool[1]);
 }
 
 #[tokio::test]
