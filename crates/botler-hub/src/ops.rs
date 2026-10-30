@@ -131,9 +131,6 @@ fn everyone(_: &Caller) -> bool {
 fn agents(c: &Caller) -> bool {
     !matches!(c.principal, Principal::Run { .. })
 }
-fn spawners(c: &Caller) -> bool {
-    c.may(Capability::Spawn)
-}
 fn session_readers(c: &Caller) -> bool {
     c.may(Capability::ReadSessions)
 }
@@ -188,7 +185,7 @@ pub const OPS: &[OpSpec] = &[
         name: "spawn_agent",
         description: "Start a new instance of an agent definition with a task. It reports back to you by message.",
         schema: schema::<SpawnAgent>,
-        visible: spawners,
+        visible: agents,
     },
     OpSpec {
         name: "list_chats",

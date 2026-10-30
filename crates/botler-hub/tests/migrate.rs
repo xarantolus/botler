@@ -47,6 +47,7 @@ async fn old_data_dir(root: &Path) -> Paths {
             session_file: "main.jsonl".into(),
             branch: None,
             parent: None,
+            depth: 0,
             task: None,
         })
         .await

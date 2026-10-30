@@ -4,5 +4,5 @@ kind = "persistent"
 always_on = true
 image = "agent"
 workspace = "monorepo"
-capabilities = ["read_sessions", "spawn"]
+capabilities = ["read_sessions"]
 idle_timeout = "30m"

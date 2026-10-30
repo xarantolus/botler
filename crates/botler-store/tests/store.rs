@@ -54,6 +54,7 @@ async fn instance_and_delivery_flow() {
             session_file: "main/session.jsonl".into(),
             branch: None,
             parent: None,
+            depth: 0,
             task: None,
         })
         .await
@@ -67,6 +68,7 @@ async fn instance_and_delivery_flow() {
             session_file: "x".into(),
             branch: None,
             parent: None,
+            depth: 0,
             task: None
         })
         .await,
@@ -292,6 +294,7 @@ async fn slugs_are_unique_aliases() {
             session_file: format!("{n}.jsonl"),
             branch: None,
             parent: None,
+            depth: 0,
             task: None,
         })
         .await
@@ -318,6 +321,7 @@ async fn renaming_an_instance_moves_its_live_references() {
         session_file: format!("{name}.jsonl"),
         branch: None,
         parent: parent.map(String::from),
+        depth: 0,
         task: None,
     };
     s.create_instance(&new("main", None)).await.unwrap();

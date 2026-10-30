@@ -79,6 +79,7 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
                                 session_file: format!("{name}.jsonl"),
                                 branch: None,
                                 parent: None,
+                                depth: 0,
                                 task: None,
                             })
                             .await?
@@ -113,6 +114,18 @@ pub async fn new_instance(hub: &Hub, definition: &str, parent: Option<&str>, tas
     if !applied.defs.agents.contains_key(definition) {
         return Err(HubError::Undefined { kind: "agent", name: definition.into() });
     }
+    let depth = match parent {
+        Some(p) => match hub.store.find_instance(p).await? {
+            Some(parent) => parent.depth + 1,
+            // A parent that is not an instance (e.g. a hub-side caller name) starts a new tree.
+            None => 0,
+        },
+        None => 0,
+    };
+    let max = applied.defs.instance.defaults.max_spawn_depth;
+    if depth > max {
+        return Err(HubError::SpawnTooDeep { parent: parent.unwrap_or_default().into(), depth: depth - 1 });
+    }
     let suffix = &uuid::Uuid::now_v7().simple().to_string()[20..];
     let name = format!("{definition}-{suffix}");
     hub.store
@@ -123,6 +136,7 @@ pub async fn new_instance(hub: &Hub, definition: &str, parent: Option<&str>, tas
             session_file: format!("{name}.jsonl"),
             branch: None,
             parent: parent.map(String::from),
+            depth,
             task: task.map(String::from),
         })
         .await?;

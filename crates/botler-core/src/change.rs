@@ -236,7 +236,8 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         if a.spec.network == Network::Default && prev.is_some_and(|p| p.spec.network == Network::None) {
             esc.insert(Escalation::NetworkOpened { agent: a.name.clone() });
         }
-        for c in &a.spec.capabilities {
+        // Spawning is a base capability; listing it changes nothing.
+        for c in a.spec.capabilities.iter().filter(|c| **c != crate::defs::Capability::Spawn) {
             if !prev.is_some_and(|p| p.spec.capabilities.contains(c)) {
                 esc.insert(Escalation::CapabilityAdded { agent: a.name.clone(), capability: c.as_str().into() });
             }

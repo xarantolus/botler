@@ -25,6 +25,8 @@ pub struct Instance {
     pub branch: Option<String>,
     pub container_id: Option<String>,
     pub parent: Option<String>,
+    /// Spawn depth: 0 for chats not spawned by an agent, the parent's depth + 1 otherwise.
+    pub depth: u32,
     pub task: Option<String>,
     pub title: Option<String>,
     /// Unique human-friendly alias, e.g. `groundstation-antenna-fix`.
@@ -45,6 +47,7 @@ pub struct NewInstance {
     pub session_file: String,
     pub branch: Option<String>,
     pub parent: Option<String>,
+    pub depth: u32,
     pub task: Option<String>,
 }
 
@@ -59,6 +62,8 @@ fn row(r: &SqliteRow) -> Result<Instance> {
         branch: r.get("branch"),
         container_id: r.get("container_id"),
         parent: r.get("parent"),
+        depth: u32::try_from(r.get::<i64, _>("depth"))
+            .map_err(|e| Error::Corrupt { table: T, detail: format!("bad depth: {e}") })?,
         task: r.get("task"),
         title: r.get("title"),
         slug: r.get("slug"),
@@ -76,8 +81,8 @@ impl Store {
     pub async fn create_instance(&self, n: &NewInstance) -> Result<Instance> {
         let now = ts(Utc::now());
         let res = sqlx::query(
-            "INSERT INTO instances (name, definition, persistent, state, session_file, branch, parent, task, created_at, last_active)
-             VALUES (?, ?, ?, 'dormant', ?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO NOTHING",
+            "INSERT INTO instances (name, definition, persistent, state, session_file, branch, parent, depth, task, created_at, last_active)
+             VALUES (?, ?, ?, 'dormant', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO NOTHING",
         )
         .bind(&n.name)
         .bind(&n.definition)
@@ -85,6 +90,7 @@ impl Store {
         .bind(&n.session_file)
         .bind(&n.branch)
         .bind(&n.parent)
+        .bind(n.depth)
         .bind(&n.task)
         .bind(&now)
         .bind(&now)

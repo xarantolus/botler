@@ -160,7 +160,7 @@ async fn ping_pong_trips_the_cycle_breaker() {
     let e = env().await;
     let root = Event::new(kinds::MESSAGE, Source::Agent("a".into()), Provenance::Trusted, Utc::now()).to("botler");
     let mut last = root.clone();
-    for _ in 0..20 {
+    for _ in 0..=botler_core::limits::MAX_CHAIN_HOPS {
         last = Event::new(kinds::MESSAGE, Source::Agent("b".into()), Provenance::Trusted, Utc::now())
             .to("botler")
             .in_reply_to(&last);

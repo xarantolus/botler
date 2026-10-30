@@ -122,6 +122,9 @@ pub struct Defaults {
     /// Default per-instance budget for agents that do not declare one.
     #[serde(default)]
     pub budget: Budget,
+    /// How deep agent trees may grow: an agent at this depth cannot spawn further.
+    #[serde(default = "Defaults::max_spawn_depth")]
+    pub max_spawn_depth: u32,
 }
 
 impl Defaults {
@@ -131,11 +134,19 @@ impl Defaults {
     fn job_timeout() -> HumanDuration {
         HumanDuration::from_secs(10 * 60)
     }
+    fn max_spawn_depth() -> u32 {
+        8
+    }
 }
 
 impl Default for Defaults {
     fn default() -> Self {
-        Self { idle_timeout: Self::idle(), job_timeout: Self::job_timeout(), budget: Budget::default() }
+        Self {
+            idle_timeout: Self::idle(),
+            job_timeout: Self::job_timeout(),
+            budget: Budget::default(),
+            max_spawn_depth: Self::max_spawn_depth(),
+        }
     }
 }
 
@@ -263,7 +274,8 @@ pub enum Network {
 pub enum Capability {
     /// Read other instances' sessions.
     ReadSessions,
-    /// Spawn other agents.
+    /// Spawn other agents. Every agent may spawn now (trees are bounded by `max_spawn_depth`);
+    /// kept so definitions that list it still load.
     Spawn,
     /// Submit review verdicts on proposals (the reviewer).
     Review,

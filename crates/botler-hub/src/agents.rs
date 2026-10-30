@@ -850,6 +850,7 @@ pub async fn keep_always_on(hub: &Arc<Hub>) -> Result<()> {
                         session_file: format!("{}.jsonl", def.name),
                         branch: None,
                         parent: None,
+                        depth: 0,
                         task: None,
                     })
                     .await?

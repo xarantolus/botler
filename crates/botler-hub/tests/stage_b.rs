@@ -559,3 +559,54 @@ async fn waiting_on_the_user_sleeps_after_a_grace_and_the_answer_wakes_it() {
     settle().await;
     assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running);
 }
+
+#[tokio::test]
+async fn deep_agent_trees_report_up_without_tripping_and_depth_is_bounded() {
+    use botler_hub::HubError;
+    use botler_hub::auth::Principal;
+    use botler_hub::ops::{self, Caller};
+    let e = env().await;
+    with_key(&e).await;
+    // Every agent may spawn: a 5-deep tree of dev agents under a chat.
+    let mut chain = vec![router::new_instance(&e.hub, "chat", None, None).await.unwrap()];
+    for level in 1..=5 {
+        let parent = chain.last().unwrap().clone();
+        let child = router::spawn(&e.hub, "dev", Some(&parent), Some(&format!("level {level} work")), None, None)
+            .await
+            .unwrap();
+        assert_eq!(e.hub.store.instance(&child).await.unwrap().depth, level);
+        chain.push(child);
+    }
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    // Each child reports up, deepest first, threading the reply.
+    let mut last: Option<String> = None;
+    for pair in chain.windows(2).rev() {
+        let (parent, child) = (&pair[0], &pair[1]);
+        let wake = e.hub.agents.get(child).await.unwrap().wake.clone();
+        let me = Caller::resolve(&e.hub, Principal::Agent { instance: child.clone(), wake }).await.unwrap();
+        let mut args = json!({"to": parent, "text": format!("{child} finished: built the parser and its tests")});
+        if let Some(id) = &last {
+            args["reply_to"] = json!(id);
+        }
+        let sent = ops::call(&e.hub, &me, "send_message", args).await.unwrap();
+        last = Some(sent["event_id"].as_str().unwrap().to_string());
+        e.route().await;
+        agents::dispatch_pending(&e.hub).await.unwrap();
+        settle().await;
+        e.route().await;
+    }
+    assert!(e.hub.store.breakers().await.unwrap().is_empty(), "{:?}", e.hub.store.breakers().await.unwrap());
+    assert!(e.fake.prompts(&agents::container_name(&chain[0])).iter().any(|p| p.contains("finished")));
+
+    // Depth is bounded by max_spawn_depth (8 by default).
+    let mut parent = chain.last().unwrap().clone();
+    for _ in 6..=8 {
+        parent = router::new_instance(&e.hub, "dev", Some(&parent), None).await.unwrap();
+    }
+    assert_eq!(e.hub.store.instance(&parent).await.unwrap().depth, 8);
+    match router::spawn(&e.hub, "dev", Some(&parent), Some("go deeper"), None, None).await {
+        Err(e @ HubError::SpawnTooDeep { .. }) => assert!(e.to_string().contains("do the work yourself"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+}

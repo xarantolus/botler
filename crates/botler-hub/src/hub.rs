@@ -36,6 +36,10 @@ pub enum HubError {
     Paused,
     #[error("secret {0} has no value; enter it in the web app")]
     MissingSecret(String),
+    #[error(
+        "{parent} is {depth} spawns deep, the most allowed (max_spawn_depth); do the work yourself or report back to whoever started you"
+    )]
+    SpawnTooDeep { parent: String, depth: u32 },
     #[error("migrating the data directory: {0}")]
     Migration(String),
     #[error("{instance} keeps crashing; next start allowed at {until}")]
