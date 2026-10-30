@@ -6,7 +6,7 @@ use botler_hub::{agents, router};
 use botler_store::InstanceState;
 use chrono::{Duration, Utc};
 use common::env;
-use serde_json::json;
+use serde_json::{Value, json};
 
 async fn with_key(e: &common::Env) {
     e.hub.store.set_secret(&e.hub.secret_key, "OPENROUTER_API_KEY", "sk-test").await.unwrap();
@@ -48,7 +48,11 @@ async fn message_wakes_botler_and_is_delivered_once() {
     };
     let turn = read_json("turn-tools.json");
     let names: Vec<&str> = turn.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["propose_change", "request_secrets", "archive_ready", "ask_user"], "botler is no reviewer");
+    assert_eq!(
+        names,
+        ["propose_change", "request_secrets", "request_access", "archive_ready", "ask_user"],
+        "botler is no reviewer"
+    );
     let ask = turn.as_array().unwrap().iter().find(|t| t["name"] == "ask_user").unwrap();
     assert_eq!(ask["parameters"]["required"], json!(["question"]), "{ask}");
     let hidden = &read_json("mcp.json")["mcpServers"]["botler"]["toolExposure"];
@@ -207,7 +211,8 @@ async fn emit_event_validates_and_explains() {
         other => panic!("{other:?}"),
     }
     let types = ops::call(&e.hub, &caller, "list_event_types", json!({})).await.unwrap();
-    assert_eq!(types["declared"][0]["type"], "mail.received");
+    let declared: Vec<&Value> = types["types"].as_array().unwrap().iter().filter(|t| t["builtin"] == false).collect();
+    assert!(declared.iter().any(|t| t["type"] == "mail.received"), "{declared:?}");
 }
 
 #[tokio::test]
