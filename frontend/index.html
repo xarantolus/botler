@@ -2,18 +2,32 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>botler</title>
+    <script>
+      // Apply the color mode before the first paint (the app's color-mode plugin keeps it in sync
+      // later): the stored choice, else the system's.
+      (function () {
+        var mode = "auto";
+        try {
+          mode = localStorage.getItem("vueuse-color-scheme") || "auto";
+        } catch (_) {
+          // Storage disabled (private mode): follow the system.
+        }
+        var dark = mode === "dark" || (mode === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+      })();
+    </script>
     <style>
       html, body, #app { height: 100%; margin: 0; }
-      body { background: #fff; }
-      @media (prefers-color-scheme: dark) { body { background: #101014; } }
+      html { background: #fff; }
+      html.dark { background: #18181b; }
     </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app" class="isolate"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

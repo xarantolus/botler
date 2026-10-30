@@ -33,8 +33,8 @@ export interface AppState {
   wakeStarted: Record<string, number>;
   session: SessionView | null;
   sessionError: string | null;
-  /** Assistant text streaming in for the viewed chat. */
-  streaming: string;
+  /** Assistant text and thinking streaming in for the viewed chat. */
+  streaming: { text: string; thinking: string };
   showArchived: boolean;
 }
 
@@ -54,7 +54,7 @@ export const state = plainReactive<AppState>({
   wakeStarted: {},
   session: null,
   sessionError: null,
-  streaming: "",
+  streaming: { text: "", thinking: "" },
   showArchived: false,
 });
 
@@ -165,7 +165,7 @@ export function clearSession() {
   sessionFor = null;
   state.session = null;
   state.sessionError = null;
-  state.streaming = "";
+  state.streaming = { text: "", thinking: "" };
 }
 
 export function trackWake(instance: string, waking: boolean) {
