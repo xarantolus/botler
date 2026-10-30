@@ -92,6 +92,7 @@
       <div style="margin-top:8px"><button id="newchat" class="primary" style="width:100%">New chat</button></div>
     </header>
     <div id="chats"></div>
+    <label style="padding:4px 12px;font-size:12px" class="muted"><input type="checkbox" id="showarchived" style="width:auto"> show archived</label>
     <footer>
       <button id="pause">Pause everything</button>
       <button id="logout" style="float:right">Log out</button>
@@ -99,7 +100,13 @@
   </aside>
 
   <section id="main">
-    <div id="chathead"><h2 id="title">main</h2><span id="sub" class="muted"></span></div>
+    <div id="chathead"><h2 id="title">main</h2><span id="sub" class="muted"></span>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button id="archive" title="Ask the agent to hand over, then archive">Archive</button>
+        <button id="forcearchive" title="Archive without the agent's handover">Force archive</button>
+        <button id="restore">Restore</button>
+      </span></div>
+    <div id="report" style="display:none;padding:8px 16px;border-bottom:1px solid var(--line);font-size:13px"></div>
     <div id="log"></div>
     <form id="composer">
       <textarea id="input" rows="2" placeholder="Message (Enter to send, Shift+Enter for a new line)"></textarea>
@@ -187,7 +194,7 @@ async function refreshSide() {
   $("#pause").textContent = paused ? "Resume" : "Pause everything";
   $("#pause").dataset.paused = paused ? "1" : "";
   const list = instances
-    .filter((i) => i.state !== "ended" || i.name === current)
+    .filter((i) => i.state !== "archived" || i.name === current || $("#showarchived").checked)
     .sort((a, b) => (a.name === "main" ? -1 : b.name === "main" ? 1 : b.last_active.localeCompare(a.last_active)));
   $("#chats").innerHTML = list.map((i) => `
     <button class="chat ${i.name === current ? "sel" : ""}" data-chat="${esc(i.name)}">
@@ -231,7 +238,20 @@ async function refreshChat() {
   $("#title").textContent = i.title || i.slug || i.name;
   $("#sub").innerHTML = `${esc(i.name)} · ${esc(i.definition)} · ${esc(i.state)}` +
     (s.busy ? ' · <span class="ok">working…</span>' : "") + (s.pending ? ` · ${s.pending} queued` : "");
-  const key = JSON.stringify([s.items.length, s.busy, s.pending, s.items.at(-1)?.id]);
+  const archived = i.state === "archived";
+  $("#archive").style.display = archived || i.name === "main" ? "none" : "";
+  $("#forcearchive").style.display = i.archive_requested_at && !archived ? "" : "none";
+  $("#restore").style.display = archived ? "" : "none";
+  const rep = i.archive_report;
+  $("#report").style.display = rep || i.archive_requested_at ? "block" : "none";
+  $("#report").innerHTML = rep
+    ? `<b>Archived</b>${rep.confirmed_by_agent ? "" : ' <span class="warn">(without the agent\'s handover)</span>'}` +
+      (rep.report ? `<div style="white-space:pre-wrap">${esc(rep.report.summary)}</div>` +
+        (rep.report.outstanding?.length ? `<div><b>Outstanding:</b> ${rep.report.outstanding.map(esc).join("; ")}</div>` : "") +
+        (rep.report.state?.length ? `<div><b>State:</b> ${rep.report.state.map(esc).join("; ")}</div>` : "") +
+        (rep.handed_to ? `<div><b>Handed to:</b> <a href="#" data-goto="${esc(rep.handed_to)}">${esc(rep.handed_to)}</a></div>` : "") : "")
+    : i.archive_requested_at ? '<span class="muted">Waiting for the agent to hand over before archiving…</span>' : "";
+  const key = JSON.stringify([s.items.length, s.busy, s.pending, s.items.at(-1)?.id, i.state, !!rep]);
   if (key === lastSessionKey && !flashDelivery) return;
   lastSessionKey = key;
   const log = $("#log");
@@ -381,6 +401,13 @@ $("#go").onclick = login;
 $("#tok").onkeydown = (e) => { if (e.key === "Enter") login(); };
 $("#logout").onclick = () => logout();
 $("#newchat").onclick = newChat;
+$("#showarchived").onchange = () => refreshSide().catch(report);
+const chatAction = (path, body) => api(`/api/v1/chats/${encodeURIComponent(current)}/${path}`, { method: "POST", body: JSON.stringify(body || {}) })
+  .then(() => { lastSessionKey = ""; refreshAll(); }).catch((e) => alert(e.message));
+$("#archive").onclick = () => { const reason = prompt("Archive this chat? The agent will hand over first. Reason (optional):"); if (reason !== null) chatAction("archive", { reason }); };
+$("#forcearchive").onclick = () => { if (confirm("Archive without waiting for the agent's handover?")) chatAction("archive", { force: true }); };
+$("#restore").onclick = () => chatAction("restore");
+$("#report").onclick = (e) => { const g = e.target.closest("[data-goto]"); if (g) { e.preventDefault(); openChat(g.dataset.goto); } };
 $("#composer").onsubmit = send;
 $("#input").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) send(e); };
 $("#chats").onclick = (e) => { const c = e.target.closest("[data-chat]"); if (c) openChat(c.dataset.chat); };

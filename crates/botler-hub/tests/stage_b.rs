@@ -204,3 +204,47 @@ async fn sleeping_chat_is_woken_by_a_message_with_its_workspace() {
     let prompts = e.fake.prompts(&agents::container_name(&chat));
     assert!(prompts.last().unwrap().contains("continue"));
 }
+
+#[tokio::test]
+async fn archive_hands_over_and_messaging_restores() {
+    use botler_hub::auth::Principal;
+    use botler_hub::ops::{self, Caller, OpError};
+    let e = env().await;
+    with_key(&e).await;
+    let chat = router::spawn(&e.hub, "dev", Some("main"), Some("build x"), None, None).await.unwrap();
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    settle().await;
+    let wake = e.hub.agents.get(&chat).await.unwrap().wake.clone();
+    let me = Caller::resolve(&e.hub, Principal::Agent { instance: chat.clone(), wake }).await.unwrap();
+    let report = json!({
+        "summary": "Built half of x on branch agents/dev/work; tests pass for the parser.",
+        "outstanding": ["wire x into the scheduler"],
+        "state": ["branch agents/<me>/work", "notes in memory: x-design"],
+        "handoff": { "spawn": "dev", "message": "Wire x into the scheduler; see branch agents/<me>/work." }
+    });
+    assert!(
+        matches!(ops::call(&e.hub, &me, "archive_ready", report.clone()).await, Err(OpError::BadRequest(_))),
+        "only after a request"
+    );
+
+    e.hub.store.request_archive(&chat).await.unwrap();
+    let out = ops::call(&e.hub, &me, "archive_ready", report).await.unwrap();
+    let successor = out["handed_to"].as_str().unwrap().to_string();
+    assert!(successor.starts_with("dev-") && successor != chat);
+    let archived = e.hub.store.instance(&chat).await.unwrap();
+    assert_eq!(archived.state, InstanceState::Archived);
+    assert_eq!(archived.archive_report.as_ref().unwrap()["report"]["outstanding"][0], "wire x into the scheduler");
+    assert_eq!(e.hub.store.pending_deliveries(&successor).await.unwrap().len(), 1, "successor got the handoff");
+    assert!(e.hub.paths.workspace(&chat).exists(), "nothing is deleted");
+
+    e.hub
+        .emit(
+            Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+                .to(chat.clone())
+                .payload(json!({"text": "one more thing"})),
+        )
+        .await
+        .unwrap();
+    e.route().await;
+    assert_ne!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Archived, "messaging restores");
+}

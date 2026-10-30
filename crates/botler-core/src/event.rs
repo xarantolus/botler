@@ -132,6 +132,7 @@ pub mod kinds {
     pub const ACTION_RESULT: &str = "action.result";
     pub const BREAKER_TRIPPED: &str = "breaker.tripped";
     pub const TIMER: &str = "timer";
+    pub const ARCHIVE_REQUESTED: &str = "archive.requested";
 }
 
 #[cfg(test)]

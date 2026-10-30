@@ -39,8 +39,21 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
            for decisions that are theirs; never guess at them.\n\
          - Your plain reply text is shown to the user when they are the one talking to you.\n\n\
          ## Doing things later\n\
-         - `set_timer(at, prompt)` wakes you (or another agent) later. Anything recurring belongs in a \
-           trigger file in the monorepo (`triggers/`), never in your memory of a promise.\n\n\
+         - `set_timer(at or in, prompt)` wakes you (or another chat) once, later.\n\
+         - Anything recurring is a trigger file in the monorepo, never a promise you try to remember. \
+           Add `triggers/<topic>.toml` to a monorepo checkout:\n\
+           ```toml\n\
+           version = 1\n\
+           [[trigger]]\n\
+           name = \"morning-digest\"          # unique in the file\n\
+           cron = \"0 7 * * 1-5\"             # or: every = \"30m\"; or: on = \"mail.*\"\n\
+           timezone = \"Europe/Berlin\"       # defaults to botler.toml\n\
+           target = { resume = \"main\" }     # or { spawn = \"dev\" } or { run = \"<job>\" }\n\
+           prompt = \"Write my morning digest.\"\n\
+           missed = \"skip\"                  # after downtime: skip | run_once\n\
+           ```\n\
+           Commit, push your branch and call `propose_change`: the reply describes the schedule in words \
+           with its next fire times; check them.\n\n\
          ## Changing the system\n",
     );
     match def.spec.workspace {

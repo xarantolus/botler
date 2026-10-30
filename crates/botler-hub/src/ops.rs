@@ -194,6 +194,12 @@ pub const OPS: &[OpSpec] = &[
         visible: agents,
     },
     OpSpec {
+        name: "archive_ready",
+        description: "Hand over before this chat is archived (only after an archive.requested event): what you did, what is outstanding, where your state lives, and optionally who should continue.",
+        schema: schema::<ArchiveReady>,
+        visible: agents,
+    },
+    OpSpec {
         name: "list_event_types",
         description: "Declared event types with their payload schemas. emit_event validates payloads against these.",
         schema: schema::<Empty>,
@@ -304,6 +310,33 @@ pub struct SetChatTitle {
     pub title: String,
     /// Lowercase words joined by dashes, 3 to 60 characters.
     pub slug: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, serde::Serialize)]
+pub struct ArchiveReady {
+    /// Everything you did in this chat, for someone who has not read it.
+    pub summary: String,
+    /// Work you did not finish.
+    #[serde(default)]
+    pub outstanding: Vec<String>,
+    /// Where your state lives: branches, files, memory notes, external systems.
+    #[serde(default)]
+    pub state: Vec<String>,
+    /// Who should continue the outstanding work, if anyone.
+    #[serde(default)]
+    pub handoff: Option<Handoff>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, serde::Serialize)]
+pub struct Handoff {
+    /// An existing chat (name or slug) to send the work to...
+    #[serde(default)]
+    pub to: Option<String>,
+    /// ...or an agent definition to spawn for it.
+    #[serde(default)]
+    pub spawn: Option<String>,
+    /// What they should do; include everything they need.
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -423,6 +456,7 @@ pub async fn call(hub: &Hub, caller: &Caller, name: &str, input: Value) -> OpRes
         "spawn_agent" => spawn_agent(hub, caller, args(input)?).await,
         "list_chats" => list_chats(hub).await,
         "list_event_types" => list_event_types(hub).await,
+        "archive_ready" => archive_ready(hub, caller, args(input)?).await,
         "read_session" => read_session(hub, args(input)?).await,
         "get_events" => get_events(hub, args(input)?).await,
         "ask_user" => ask_user(hub, caller, args(input)?).await,
@@ -503,6 +537,40 @@ async fn emit_event(hub: &Hub, caller: &Caller, a: EmitEvent) -> OpResult {
         Some(warning) => json!({ "event_id": ev.id, "warning": warning }),
         None => json!({ "event_id": ev.id }),
     })
+}
+
+async fn archive_ready(hub: &Hub, caller: &Caller, a: ArchiveReady) -> OpResult {
+    let Some(name) = caller.instance() else { return Err(OpError::Forbidden("only agents archive".into())) };
+    let inst = hub.store.instance(name).await?;
+    if inst.archive_requested_at.is_none() {
+        return Err(OpError::BadRequest("nobody asked to archive this chat; keep working".into()));
+    }
+    if a.summary.trim().len() < 20 {
+        return Err(OpError::BadRequest("the summary must describe what you did".into()));
+    }
+    let mut handed_to = None;
+    if let Some(h) = &a.handoff {
+        handed_to = Some(match (&h.to, &h.spawn) {
+            (Some(to), None) => {
+                send_message(
+                    hub,
+                    caller,
+                    SendMessage { to: to.clone(), text: h.message.clone(), urgent: false, reply_to: None },
+                )
+                .await?;
+                to.clone()
+            }
+            (None, Some(def)) => router::spawn(hub, def, Some(name), Some(&h.message), None, None).await?,
+            _ => return Err(OpError::BadRequest("handoff needs exactly one of `to` or `spawn`".into())),
+        });
+    }
+    let report = json!({ "report": a, "handed_to": handed_to, "confirmed_by_agent": true, "at": Utc::now() });
+    hub.store.archive_instance(name, &report).await?;
+    crate::agents::stop_after_reply(hub, name).await;
+    tracing::info!(instance = name, handed_to = ?handed_to, "chat archived");
+    Ok(
+        json!({ "archived": name, "handed_to": handed_to, "note": "Archived. Stop now; you will be restored if messaged." }),
+    )
 }
 
 async fn list_event_types(hub: &Hub) -> OpResult {

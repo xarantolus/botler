@@ -53,6 +53,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/instances", get(instances))
         .route("/api/v1/sessions/{instance}", get(session))
         .route("/api/v1/chats", post(new_chat))
+        .route("/api/v1/chats/{instance}/archive", post(archive_chat))
+        .route("/api/v1/chats/{instance}/restore", post(restore_chat))
         .route("/api/v1/runs", get(runs))
         .route("/api/v1/incidents", get(incidents))
         .route("/api/v1/secrets", get(secrets))
@@ -321,6 +323,63 @@ async fn new_chat(
         .payload(json!({ "text": c.text }));
     hub.emit(ev).await?;
     Ok(Json(json!({ "instance": name })))
+}
+
+#[derive(Deserialize, Default)]
+struct ArchiveRequest {
+    /// Archive without waiting for the agent's handover (e.g. it no longer answers).
+    #[serde(default)]
+    force: bool,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+async fn archive_chat(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(instance): Path<String>,
+    body: Option<Json<ArchiveRequest>>,
+) -> ApiResult {
+    user_only(&p)?;
+    let req = body.map(|Json(b)| b).unwrap_or_default();
+    let inst = hub
+        .store
+        .resolve_instance(&instance)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no chat {instance}")))?;
+    if inst.persistent
+        && inst.definition == inst.name
+        && hub.applied().await.defs.agents.get(&inst.name).is_some_and(|d| d.spec.always_on)
+    {
+        return Err(ApiError(StatusCode::CONFLICT, format!("{} is always on and cannot be archived", inst.name)));
+    }
+    if req.force {
+        let report = json!({ "forced": true, "confirmed_by_agent": false, "reason": req.reason, "at": Utc::now() });
+        hub.store.archive_instance(&inst.name, &report).await?;
+        crate::agents::stop_after_reply(&hub, &inst.name).await;
+        return Ok(Json(json!({ "archived": inst.name, "confirmed_by_agent": false })));
+    }
+    hub.store.request_archive(&inst.name).await?;
+    let ev = Event::new(kinds::ARCHIVE_REQUESTED, Source::User, Provenance::Trusted, Utc::now())
+        .to(inst.name.clone())
+        .payload(json!({ "reason": req.reason }));
+    hub.emit(ev).await?;
+    Ok(Json(json!({ "requested": inst.name, "note": "The agent will hand over and then archive itself." })))
+}
+
+async fn restore_chat(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(instance): Path<String>,
+) -> ApiResult {
+    user_only(&p)?;
+    let inst = hub
+        .store
+        .resolve_instance(&instance)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no chat {instance}")))?;
+    hub.store.restore_instance(&inst.name).await?;
+    Ok(Json(json!({ "restored": inst.name })))
 }
 
 async fn instances(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult {

@@ -141,6 +141,17 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         guidance: "Find out why the loop happened and fix its cause. Only the user can clear a breaker.",
     },
     BuiltinEvent {
+        kind: kinds::ARCHIVE_REQUESTED,
+        summary: "This chat is about to be archived. Nothing is deleted, but you will be asleep until someone messages you again.",
+        fields: &[("reason", "why it is being archived, if given")],
+        follow_up: &[FollowUp {
+            tool: "archive_ready",
+            args: &[],
+            why: "hand over: summary, outstanding work, where your state lives, and who should continue",
+        }],
+        guidance: "Prepare to be archived. 1) Commit and push any uncommitted work in your workspace to your branch                    (or propose it). 2) Write anything worth remembering to memory. 3) Call `archive_ready` once with a                    summary of everything you did, what is still outstanding, where your state lives (branch, files,                    notes), and a `handoff` if someone should continue the outstanding work (an existing chat, or a new                    agent to spawn). Be complete: whoever picks this up only has your report.",
+    },
+    BuiltinEvent {
         kind: kinds::TIMER,
         summary: "A timer you (or another agent) set has fired.",
         fields: &[("timer_id", "the timer"), ("note", "what it was set for")],
@@ -259,6 +270,7 @@ mod tests {
             kinds::ACTION_RESULT,
             kinds::BREAKER_TRIPPED,
             kinds::TIMER,
+            kinds::ARCHIVE_REQUESTED,
         ] {
             assert!(builtin(k).is_some(), "{k} missing from catalog");
         }

@@ -28,8 +28,6 @@ pub enum HubError {
     InvalidDefinitions { commit: String, diagnostics: Vec<Diagnostic> },
     #[error("{kind} {name} is not defined")]
     Undefined { kind: &'static str, name: String },
-    #[error("instance {0} has ended")]
-    InstanceEnded(String),
     #[error("{operation} is rate limited; retry in {retry_after:?}")]
     RateLimited { operation: String, retry_after: std::time::Duration },
     #[error("forbidden: {0}")]

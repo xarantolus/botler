@@ -62,7 +62,12 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
     match &d.action {
         Action::Deliver(name) => {
             let instance = match hub.store.resolve_instance(name).await? {
-                Some(i) if i.state == InstanceState::Ended => return Err(HubError::InstanceEnded(name.clone())),
+                // Messaging an archived chat restores it: archiving hides, it never locks away.
+                Some(i) if i.state == InstanceState::Archived => {
+                    tracing::info!(instance = %i.name, "restoring archived chat for a new message");
+                    hub.store.restore_instance(&i.name).await?;
+                    i
+                }
                 Some(i) => i,
                 None => match applied.defs.agents.get(name) {
                     Some(def) if def.spec.kind == AgentKind::Persistent => {

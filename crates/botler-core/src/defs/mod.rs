@@ -625,6 +625,7 @@ fn is_builtin_event(kind: &str) -> bool {
         ACTION_RESULT,
         BREAKER_TRIPPED,
         TIMER,
+        ARCHIVE_REQUESTED,
     ]
     .contains(&kind)
 }

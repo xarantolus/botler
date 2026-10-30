@@ -10,7 +10,8 @@ text_enum!(InstanceState {
     Dormant = "dormant",
     Starting = "starting",
     Running = "running",
-    Ended = "ended",
+    /// Hidden, with a handover report; restored by messaging it. Nothing is deleted.
+    Archived = "archived",
 });
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -28,6 +29,10 @@ pub struct Instance {
     pub title: Option<String>,
     /// Unique human-friendly alias, e.g. `groundstation-antenna-fix`.
     pub slug: Option<String>,
+    /// Set while the hub waits for the agent's handover before archiving.
+    pub archive_requested_at: Option<DateTime<Utc>>,
+    /// The agent's handover report (summary, outstanding work, where state lives).
+    pub archive_report: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub last_active: DateTime<Utc>,
 }
@@ -57,6 +62,11 @@ fn row(r: &SqliteRow) -> Result<Instance> {
         task: r.get("task"),
         title: r.get("title"),
         slug: r.get("slug"),
+        archive_requested_at: crate::parse_opt_ts(T, r.get("archive_requested_at"))?,
+        archive_report: r
+            .get::<Option<String>, _>("archive_report")
+            .map(|s| serde_json::from_str(&s).map_err(|e| Error::Corrupt { table: T, detail: e.to_string() }))
+            .transpose()?,
         created_at: parse_ts(T, r.get("created_at"))?,
         last_active: parse_ts(T, r.get("last_active"))?,
     })
@@ -130,7 +140,7 @@ impl Store {
 
     /// All instances that have not ended, newest first.
     pub async fn live_instances(&self) -> Result<Vec<Instance>> {
-        let rows = sqlx::query("SELECT * FROM instances WHERE state != 'ended' ORDER BY created_at DESC")
+        let rows = sqlx::query("SELECT * FROM instances WHERE state != 'archived' ORDER BY created_at DESC")
             .fetch_all(&self.pool)
             .await?;
         rows.iter().map(row).collect()
@@ -161,6 +171,42 @@ impl Store {
             .bind(name)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    /// Mark that the hub asked this chat to prepare for archiving.
+    pub async fn request_archive(&self, name: &str) -> Result<()> {
+        sqlx::query("UPDATE instances SET archive_requested_at = ? WHERE name = ?")
+            .bind(ts(Utc::now()))
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Archive with the agent's (or a forced) handover report.
+    pub async fn archive_instance(&self, name: &str, report: &serde_json::Value) -> Result<()> {
+        let r = sqlx::query(
+            "UPDATE instances SET state = 'archived', container_id = NULL, archive_report = ?, archive_requested_at = NULL WHERE name = ?",
+        )
+        .bind(crate::encode("archive report", report)?)
+        .bind(name)
+        .execute(&self.pool)
+        .await?;
+        if r.rows_affected() == 0 {
+            return Err(crate::not_found("instance", name));
+        }
+        Ok(())
+    }
+
+    /// Restore an archived chat to sleeping; its report stays for reference.
+    pub async fn restore_instance(&self, name: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE instances SET state = 'dormant', archive_requested_at = NULL WHERE name = ? AND state = 'archived'",
+        )
+        .bind(name)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

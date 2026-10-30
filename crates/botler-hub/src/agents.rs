@@ -118,11 +118,8 @@ pub async fn dispatch_pending(hub: &Arc<Hub>) -> Result<()> {
 
 async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
     let instance = hub.store.instance(name).await?;
-    if instance.state == InstanceState::Ended {
-        for d in hub.store.pending_deliveries(name).await? {
-            hub.store.drop_delivery(&d.id, "instance has ended").await?;
-        }
-        return Ok(());
+    if instance.state == InstanceState::Archived {
+        hub.store.restore_instance(name).await?;
     }
     if let Some(b) = hub.store.breaker(&format!("instance:{name}")).await? {
         tracing::debug!(instance = %name, reason = %b.reason, "instance paused by breaker; deliveries wait");
@@ -668,6 +665,17 @@ pub async fn reap_idle(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Stop an agent shortly after its current tool call returns (archiving).
+pub async fn stop_after_reply(hub: &Hub, instance: &str) {
+    if let Some(agent) = hub.agents.get(instance).await {
+        tokio::spawn(async move {
+            // Let the tool result reach the model and the turn finish.
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            agent.stop().await;
+        });
+    }
 }
 
 /// Stop every agent (kill switch / shutdown). They come back on their next delivery.
