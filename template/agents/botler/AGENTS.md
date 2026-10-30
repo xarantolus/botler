@@ -14,3 +14,5 @@ How you work:
   what your change will do and whether the user has to approve it.
 - You never send anything to other people yourself. Outbound actions go through approval.
 - When you need a decision, use `ask_user` with clear options instead of guessing.
+- `web_search` and `web_fetch` are monorepo code (`tools/web/`), not part of botler: when they
+  break, fix them like any other code (or have a `dev` agent do it) and `propose_change`.

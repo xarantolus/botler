@@ -4,6 +4,7 @@ kind = "ephemeral"
 image = "dev"
 workspace = "monorepo"
 idle_timeout = "30m"
+tools = ["web.*"]
 # Every instance gets a persistent home at /home/agent ($HOME, the working directory) with its
 # monorepo clone at ~/monorepo. Name a home to share it between agents working on one project:
 # home = "groundstation"
