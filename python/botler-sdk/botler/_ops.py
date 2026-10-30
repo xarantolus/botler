@@ -182,6 +182,17 @@ def archive_ready(*, summary: str, handoff: Any = None, outstanding: list[str] |
     return call("archive_ready", {"summary": summary, "handoff": handoff, "outstanding": outstanding, "state": state})
 
 
+def stop_chat(*, chat: str, cascade: bool | None = None, reason: str | None = None) -> dict[str, Any]:
+    """Stop a chat: abort its running turn and cancel what is queued for it; with `cascade`, also every chat it started (recursively). The chat and its parent are told with a `chat.stopped` note.
+
+    Args:
+        chat: The chat (name or slug).
+        cascade: Also stop every chat it started, and theirs.
+        reason: Why; the chat reads it when it next wakes.
+    """
+    return call("stop_chat", {"chat": chat, "cascade": cascade, "reason": reason})
+
+
 def list_event_types(*, query: str | None = None) -> dict[str, Any]:
     """Event types (built-in and declared) with their description, payload schema, producers and current subscribers; `query` narrows by words or a glob. `emit_event` validates payloads against these; `subscribe` takes their names.
 

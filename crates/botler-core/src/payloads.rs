@@ -280,6 +280,26 @@ pub struct EnvironmentUpdatedPayload {
     pub changes: Vec<String>,
 }
 
+/// `chat.stopped`: the user stopped a chat: its running turn was aborted and what was queued for
+/// it cancelled. Sent to the chat (read when it next wakes) and to its parent, as notes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct ChatStoppedPayload {
+    /// The stopped chat.
+    pub chat: String,
+    /// Why, if the user said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+    /// Whether a turn was running and aborted.
+    pub aborted: bool,
+    /// Queued deliveries that were cancelled instead of delivered.
+    pub cancelled: u64,
+    /// When stopped along with an ancestor (`cascade`): that ancestor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub with: Option<String>,
+}
+
 /// What the hub sends pi for one delivery (`botler:delivery <json>`); the botler pi extension
 /// parses it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -345,6 +365,8 @@ pub enum BuiltinPayload {
     AccessChanged(AccessChangedPayload),
     #[serde(rename = "environment.updated")]
     EnvironmentUpdated(EnvironmentUpdatedPayload),
+    #[serde(rename = "chat.stopped")]
+    ChatStopped(ChatStoppedPayload),
 }
 
 impl BuiltinPayload {
@@ -368,6 +390,7 @@ impl BuiltinPayload {
             Self::Schedule(_) => kinds::SCHEDULE,
             Self::AccessChanged(_) => kinds::ACCESS_CHANGED,
             Self::EnvironmentUpdated(_) => kinds::ENVIRONMENT_UPDATED,
+            Self::ChatStopped(_) => kinds::CHAT_STOPPED,
         }
     }
 
@@ -390,6 +413,7 @@ impl BuiltinPayload {
             Self::Schedule(p) => serde_json::to_value(p),
             Self::AccessChanged(p) => serde_json::to_value(p),
             Self::EnvironmentUpdated(p) => serde_json::to_value(p),
+            Self::ChatStopped(p) => serde_json::to_value(p),
         }
     }
 
@@ -423,6 +447,7 @@ pub fn builtin_schema(kind: &str) -> Option<serde_json::Value> {
         kinds::TRIAL_FINISHED => s::<TrialFinishedPayload>(),
         kinds::ACCESS_CHANGED => s::<AccessChangedPayload>(),
         kinds::ENVIRONMENT_UPDATED => s::<EnvironmentUpdatedPayload>(),
+        kinds::CHAT_STOPPED => s::<ChatStoppedPayload>(),
         _ => None,
     }
 }
@@ -473,6 +498,7 @@ mod tests {
             (kinds::SCHEDULE, fields::<SchedulePayload>()),
             (kinds::ACCESS_CHANGED, fields::<AccessChangedPayload>()),
             (kinds::ENVIRONMENT_UPDATED, fields::<EnvironmentUpdatedPayload>()),
+            (kinds::CHAT_STOPPED, fields::<ChatStoppedPayload>()),
         ];
         for b in BUILTIN {
             assert!(builtin_schema(b.kind).is_some(), "{} has no schema", b.kind);

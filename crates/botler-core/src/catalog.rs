@@ -289,6 +289,20 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         follow_up: &[],
         guidance: "Use what is new from now on (new tools are in your tool list). Nothing to answer.",
     },
+    BuiltinEvent {
+        kind: kinds::CHAT_STOPPED,
+        summary: "The user stopped a chat: its turn was aborted and what was queued for it cancelled.",
+        fields: &[
+            ("chat", "the stopped chat (you, or a chat you started)"),
+            ("reason", "why, if the user said"),
+            ("aborted", "whether a turn was running"),
+            ("cancelled", "how many queued messages and events were cancelled"),
+            ("with", "the ancestor it was stopped along with, if any"),
+        ],
+        follow_up: &[],
+        guidance: "Do not resume the stopped work on your own. If it was you, wait for the user's next message; \
+                   if it was a chat you started, do not message it to continue unless the user asks.",
+    },
 ];
 
 pub fn builtin(kind: &str) -> Option<&'static BuiltinEvent> {
@@ -407,6 +421,7 @@ mod tests {
             kinds::REPLY_OVERDUE,
             kinds::ACCESS_CHANGED,
             kinds::ENVIRONMENT_UPDATED,
+            kinds::CHAT_STOPPED,
         ] {
             assert!(builtin(k).is_some(), "{k} missing from catalog");
         }

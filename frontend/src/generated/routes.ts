@@ -9,6 +9,7 @@ import type { BreakerCleared } from "./BreakerCleared";
 import type { Cancelled } from "./Cancelled";
 import type { ChatCreated } from "./ChatCreated";
 import type { ChatRestored } from "./ChatRestored";
+import type { ChatsStopped } from "./ChatsStopped";
 import type { ClearBreaker } from "./ClearBreaker";
 import type { Connections } from "./Connections";
 import type { DialogAnswer } from "./DialogAnswer";
@@ -48,6 +49,7 @@ import type { SecretGroupView } from "./SecretGroupView";
 import type { SecretValue } from "./SecretValue";
 import type { SecretsOutcome } from "./SecretsOutcome";
 import type { SessionView } from "./SessionView";
+import type { StopChat } from "./StopChat";
 import type { Submission } from "./Submission";
 import type { Trace } from "./Trace";
 import type { Unsubscribe } from "./Unsubscribe";
@@ -93,6 +95,7 @@ export interface Routes {
   connections: { method: "POST"; path: "/api/v1/ops/list_connections"; params: Record<string, never>; query: never; body: ListConnections; response: Connections };
   revoke_access: { method: "POST"; path: "/api/v1/ops/revoke_access"; params: Record<string, never>; query: never; body: RevokeAccess; response: AccessRevoked };
   unsubscribe: { method: "POST"; path: "/api/v1/ops/unsubscribe"; params: Record<string, never>; query: never; body: Unsubscribe; response: Unsubscribed };
+  stop_chat: { method: "POST"; path: "/api/v1/ops/stop_chat"; params: Record<string, never>; query: never; body: StopChat; response: ChatsStopped };
 }
 
 export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path: Routes[K]["path"] } } = {
@@ -132,4 +135,5 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   connections: { method: "POST", path: "/api/v1/ops/list_connections" },
   revoke_access: { method: "POST", path: "/api/v1/ops/revoke_access" },
   unsubscribe: { method: "POST", path: "/api/v1/ops/unsubscribe" },
+  stop_chat: { method: "POST", path: "/api/v1/ops/stop_chat" },
 };

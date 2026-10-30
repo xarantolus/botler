@@ -204,6 +204,20 @@ pub async fn send_task(
     Ok(())
 }
 
+/// Journal a built-in event for `to` and queue it as a quiet note: added to its session without a
+/// turn, read with whatever wakes it next.
+pub async fn note(hub: &Hub, to: &str, payload: BuiltinPayload) -> Result<()> {
+    let ev = builtin(payload, Source::Hub)?.to(to);
+    hub.store.append_event(&ev).await?;
+    hub.store.mark_routed(&ev.id.to_string()).await?;
+    hub.store.enqueue_delivery_with(&ev.id.to_string(), to, None, None, true, None).await?;
+    if hub.live.send(crate::hub::Live::Event { event: ev }).is_err() {
+        tracing::trace!("no live viewers");
+    }
+    hub.dispatch_notify.notify_one();
+    Ok(())
+}
+
 /// Fire a trigger's target directly (schedules and timers).
 pub async fn fire(hub: &Hub, target: &Target, prompt: Option<&str>, trigger: Option<&str>, ev: Event) -> Result<()> {
     let d = Dispatch {

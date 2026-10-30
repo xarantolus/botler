@@ -6,6 +6,7 @@
 mod access;
 mod chats;
 mod incidents;
+mod lifecycle;
 mod messages;
 mod proposals;
 mod requests;
@@ -31,6 +32,7 @@ use ts_rs::TS;
 pub use access::*;
 pub use chats::*;
 pub use incidents::*;
+pub use lifecycle::*;
 pub use messages::*;
 pub use proposals::*;
 pub use requests::*;
@@ -143,6 +145,8 @@ impl Caller {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Who {
     Everyone,
+    /// Only the user.
+    User,
     /// The user and agents, not jobs or services.
     UserAndAgents,
     /// The user and runs: the callers without a memory mount.
@@ -160,6 +164,7 @@ impl Who {
         let run = matches!(c.principal, Principal::Run { .. });
         match self {
             Self::Everyone => true,
+            Self::User => matches!(c.principal, Principal::User),
             Self::UserAndAgents => !run,
             Self::UserAndRuns => !matches!(c.principal, Principal::Agent { .. }),
             Self::Runs => run,
@@ -250,6 +255,7 @@ pub static OPS: &[OpSpec] = &[
     op::<ListRequests>(),
     op::<CancelRequest>(),
     op::<ArchiveReady>(),
+    op::<StopChat>(),
     op::<ListEventTypes>(),
     op::<Subscribe>(),
     op::<Unsubscribe>(),

@@ -20,7 +20,7 @@ use crate::api::{
     UserMessage,
 };
 use crate::memory::{MemoryConflict, MemoryHistory, MemoryList, MemoryRead, MemoryWrite};
-use crate::ops::{GetProposal, GetRunLogs, ListConnections, Op, RevokeAccess, Unsubscribe};
+use crate::ops::{GetProposal, GetRunLogs, ListConnections, Op, RevokeAccess, StopChat, Unsubscribe};
 use crate::phase::WakePhase;
 use crate::review::ProposalDiff;
 use crate::search::{SearchQuery, SearchResults};
@@ -348,6 +348,7 @@ routes! {
         connections: ListConnections;
         revoke_access: RevokeAccess;
         unsubscribe: Unsubscribe;
+        stop_chat: StopChat;
     }
     status: GET "/api/v1/status" => HubStatus;
     usage: GET "/api/v1/usage" => Usage;

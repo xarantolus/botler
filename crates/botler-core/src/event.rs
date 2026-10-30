@@ -143,6 +143,7 @@ pub mod kinds {
     pub const SCHEDULE: &str = "schedule";
     pub const ACCESS_CHANGED: &str = "access.changed";
     pub const ENVIRONMENT_UPDATED: &str = "environment.updated";
+    pub const CHAT_STOPPED: &str = "chat.stopped";
 }
 
 #[cfg(test)]
