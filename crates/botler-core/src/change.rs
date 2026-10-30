@@ -168,19 +168,13 @@ pub struct ChangeSummary {
 
 pub const UPCOMING: usize = 5;
 
-/// Compare two definition sets. `changed_paths` are repo paths touched by the change.
-pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], now: DateTime<Utc>) -> ChangeSummary {
-    let mut esc = BTreeSet::new();
-
-    // Protection is judged by the *old* policy plus the built-ins, so a change cannot unprotect
-    // paths and edit them in the same step.
-    let mut protected: Vec<String> = old.policy.protected_paths.clone();
-    protected.extend(CapabilityPolicy::ALWAYS_PROTECTED.iter().map(|s| (*s).to_string()));
-    protected.push("policies/capabilities.toml".into());
-    // Fail closed: if the protection set cannot be built, every changed path counts as protected.
+/// The paths only the user may approve changes to: `defs`' protection policy plus the built-ins.
+/// `Err` (why) if the policy has invalid globs; callers then treat every path as protected.
+pub fn protected_paths(defs: &Definitions) -> Result<globset::GlobSet, String> {
     let mut builder = globset::GlobSetBuilder::new();
     let mut invalid = Vec::new();
-    for p in &protected {
+    let builtin = CapabilityPolicy::ALWAYS_PROTECTED.iter().copied().chain(["policies/capabilities.toml"]);
+    for p in defs.policy.protected_paths.iter().map(String::as_str).chain(builtin) {
         match globset::Glob::new(p) {
             Ok(g) => {
                 builder.add(g);
@@ -188,14 +182,22 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
             Err(e) => invalid.push(format!("{p:?}: {e}")),
         }
     }
-    let set = match builder.build() {
-        Ok(set) if invalid.is_empty() => Some(set),
-        Ok(_) => {
-            esc.insert(Escalation::InvalidPolicy { detail: invalid.join("; ") });
-            None
-        }
-        Err(e) => {
-            esc.insert(Escalation::InvalidPolicy { detail: e.to_string() });
+    if !invalid.is_empty() {
+        return Err(invalid.join("; "));
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+/// Compare two definition sets. `changed_paths` are repo paths touched by the change.
+pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], now: DateTime<Utc>) -> ChangeSummary {
+    let mut esc = BTreeSet::new();
+
+    // Protection is judged by the *old* policy plus the built-ins, so a change cannot unprotect
+    // paths and edit them in the same step.
+    let set = match protected_paths(old) {
+        Ok(set) => Some(set),
+        Err(detail) => {
+            esc.insert(Escalation::InvalidPolicy { detail });
             None
         }
     };

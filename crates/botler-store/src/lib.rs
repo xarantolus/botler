@@ -30,7 +30,7 @@ pub use dialogs::{Dialog, DialogKind, DialogStatus, NewDialog, Priority};
 pub use events::EventQuery;
 pub use incidents::{Incident, IncidentStatus};
 pub use instances::{ArchiveRecord, Handoff, HandoverReport, Instance, InstanceState, NewInstance};
-pub use proposals::{NewProposal, Proposal, ProposalKind, ProposalStatus};
+pub use proposals::{NewProposal, Proposal, ProposalDecision, ProposalKind, ProposalStage, ProposalStatus};
 pub use runs::{NewRun, Run, RunKind, RunStatus};
 pub use schedules::ScheduleState;
 pub use secrets::SecretKey;

@@ -25,6 +25,7 @@ pub mod ops;
 pub mod phase;
 
 pub mod prompt;
+pub mod review;
 pub mod router;
 pub mod scheduler;
 pub mod search;

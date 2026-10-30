@@ -29,6 +29,11 @@ pub enum Runnable<'a> {
     Gate { id: &'a str },
 }
 
+/// The name of the container running the gate for proposal `id`.
+pub fn gate_container(hub: &Hub, id: &str) -> String {
+    format!("botler-{}-gate-{id}", hub.id)
+}
+
 /// The container for `what` in `env`, running `command` in `image`. `extra_secrets` are single
 /// secrets besides the environment's groups (a model route's API key).
 pub async fn container_spec(
@@ -83,7 +88,7 @@ pub async fn container_spec(
             Some((Principal::Run { run_id: run.id.clone() }, ttl, secrets))
         }
         Runnable::Gate { id } => {
-            spec.name = format!("botler-{}-gate-{id}", hub.id);
+            spec.name = gate_container(hub, id);
             spec.labels = hub.labels("gate");
             spec.remove_on_exit = true;
             None

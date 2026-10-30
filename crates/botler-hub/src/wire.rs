@@ -15,10 +15,14 @@ use serde::Serialize;
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::api::{Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, RevertRequest, SecretValue, UserMessage};
+use crate::api::{
+    Answer, ArchiveRequest, ClearBreaker, EventsQuery, NewChat, ProposalVerdict, RevertRequest, SecretValue,
+    UserMessage,
+};
 use crate::memory::{MemoryConflict, MemoryHistory, MemoryList, MemoryRead, MemoryWrite};
 use crate::ops::{GetProposal, GetRunLogs, Op};
 use crate::phase::WakePhase;
+use crate::review::ProposalDiff;
 use crate::search::{SearchQuery, SearchResults};
 use crate::secret_requests::{NewField, Submission};
 use crate::sessions::Item;
@@ -112,6 +116,13 @@ pub struct Dialogs {
     pub open: Vec<DialogView>,
     /// The latest dialogs in any state, newest first.
     pub recent: Vec<Dialog>,
+}
+
+/// A proposal for the user's review, its deployment summary as markdown.
+#[derive(Debug, Serialize, TS)]
+pub struct ProposalView {
+    pub proposal: Proposal,
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -333,6 +344,9 @@ routes! {
     secrets: GET "/api/v1/secrets" => Vec<SecretGroupView>;
     set_secret: PUT "/api/v1/secrets/{name}", body: SecretValue => Saved;
     proposals: GET "/api/v1/proposals" => Vec<Proposal>;
+    proposal_view: GET "/api/v1/proposals/{id}" => ProposalView;
+    proposal_diff: GET "/api/v1/proposals/{id}/diff" => ProposalDiff;
+    decide_proposal: POST "/api/v1/proposals/{id}/decision", body: ProposalVerdict => ProposalView;
     revert: POST "/api/v1/revert", body: RevertRequest => Reverted;
     pause: POST "/api/v1/pause" => PauseState;
     resume: POST "/api/v1/resume" => PauseState;
