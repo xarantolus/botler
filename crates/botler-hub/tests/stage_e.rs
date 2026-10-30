@@ -41,7 +41,9 @@ fn push_branch(e: &common::Env, branch: &str, files: &[(&str, &str)]) {
 async fn wait_for(e: &common::Env, id: &str, want: &[ProposalStatus]) -> botler_store::Proposal {
     for _ in 0..200 {
         let p = e.hub.store.proposal(id).await.unwrap();
-        if want.contains(&p.status) {
+        // The reviewer is recorded just after the status moves to reviewing.
+        let settled = p.status != ProposalStatus::Reviewing || p.reviewer.is_some();
+        if want.contains(&p.status) && settled {
             return p;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
