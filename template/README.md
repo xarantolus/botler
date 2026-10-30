@@ -13,6 +13,6 @@ branch and calling `propose_change` (gate → reviewer → user if needed → me
 | `events/` | Declared event types |
 | `tools/`, `connectors/`, `packages/` | Python code agents and jobs use |
 | `pi/` | pi skills, prompts and extensions loaded into agent sessions |
-| `images/` | Container images (`FROM botler/agent-base`) |
+| `images/` | Container images (`FROM botler/agent-base`); `images/<x>/` is the whole build context |
 | `policies/` | The reviewer's policy and what needs the user's approval |
 | `gate/` | The deterministic checks every change must pass |

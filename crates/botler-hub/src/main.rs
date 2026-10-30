@@ -91,7 +91,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let args = Args::parse();
-    let paths = Paths::new(&args.data);
+    // Absolute, so nothing depends on the working directory of the git or podman it runs.
+    let paths = Paths::new(std::path::absolute(&args.data).context("resolving the data directory")?);
     match args.command {
         Command::Init => init(&paths).await,
         Command::Serve { listen, container_url, runtime } => {

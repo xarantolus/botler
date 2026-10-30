@@ -36,6 +36,7 @@ pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()
     tokio::spawn(route_loop(hub.clone()));
     tokio::spawn(scheduler::run(hub.clone()));
     tokio::spawn(supervisor::run(hub.clone()));
+    tokio::spawn(images::collect_garbage_loop(hub.clone()));
     tokio::spawn(agents::run(hub.clone()));
 
     let listener = tokio::net::TcpListener::bind(hub.config.listen).await?;

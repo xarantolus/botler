@@ -476,7 +476,7 @@ async fn container_spec(
     if !tools.is_empty() {
         // Tool code runs from the applied main commit (not the agent's own checkout), like
         // agent-authored pi resources below.
-        let export = images::export(hub, &applied.commit).await?;
+        let export = images::applied_tree(hub, &applied.commit).await?;
         mounts.push(Mount::Bind { src: export, dst: "/botler/applied".into(), read_only: true });
     }
 
@@ -499,8 +499,7 @@ async fn container_spec(
     }
     // Agent-authored pi resources come from the applied main commit, never from the agent's own
     // branch, so an agent cannot load unreviewed code into itself.
-    let pi_res = hub.paths.exports().join(&applied.commit).join("pi");
-    if pi_res.exists() {
+    if let Some(pi_res) = crate::images::pi_resources(hub, &applied.commit).await? {
         mounts.push(Mount::Bind { src: pi_res.clone(), dst: "/botler/pi".into(), read_only: true });
         for (flag, sub) in [("--skill", "skills"), ("--prompt-template", "prompts")] {
             if has_entries(&pi_res.join(sub)) {

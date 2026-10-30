@@ -81,6 +81,10 @@ pub struct ContainerInfo {
     pub exit_code: Option<i64>,
     pub oom_killed: bool,
     pub labels: BTreeMap<String, String>,
+    /// The image reference the container was started from.
+    pub image: String,
+    /// Host paths mounted into the container.
+    pub mounts: Vec<PathBuf>,
 }
 
 /// A lifecycle event for a hub-managed container.
@@ -134,9 +138,15 @@ pub struct RuntimeInfo {
 #[async_trait]
 pub trait Containers: Send + Sync {
     fn info(&self) -> &RuntimeInfo;
-    async fn image_exists(&self, image: &str) -> Result<bool>;
+    /// The image's id, or `None` if there is no such image.
+    async fn image_id(&self, image: &str) -> Result<Option<String>>;
     /// Build `dockerfile` (relative to `context`) with `context` as the build context.
-    async fn build(&self, context: &Path, dockerfile: &str, tag: &str) -> Result<()>;
+    async fn build(&self, context: &Path, dockerfile: &str, tag: &str, labels: &BTreeMap<String, String>)
+    -> Result<()>;
+    /// Tags (`repository:tag`) of images carrying all `labels`.
+    async fn images(&self, labels: &BTreeMap<String, String>) -> Result<Vec<String>>;
+    /// Remove one tag; the image goes when its last tag does.
+    async fn remove_image(&self, tag: &str) -> Result<()>;
     /// Start detached; returns the container id.
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String>;
     async fn run_attached(&self, spec: &ContainerSpec) -> Result<Attached>;
@@ -258,6 +268,14 @@ struct InspectState {
 struct InspectConfig {
     #[serde(rename = "Labels", default)]
     labels: Option<BTreeMap<String, String>>,
+    #[serde(rename = "Image", default)]
+    image: String,
+}
+
+#[derive(Deserialize)]
+struct InspectMount {
+    #[serde(rename = "Source", default)]
+    source: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -270,6 +288,8 @@ struct Inspect {
     state: InspectState,
     #[serde(rename = "Config")]
     config: InspectConfig,
+    #[serde(rename = "Mounts", default)]
+    mounts: Vec<InspectMount>,
 }
 
 impl From<Inspect> for ContainerInfo {
@@ -281,6 +301,8 @@ impl From<Inspect> for ContainerInfo {
             exit_code: if i.state.running { None } else { i.state.exit_code },
             oom_killed: i.state.oom_killed,
             labels: i.config.labels.unwrap_or_default(),
+            image: i.config.image,
+            mounts: i.mounts.into_iter().map(|m| m.source).collect(),
         }
     }
 }
@@ -291,23 +313,48 @@ impl Containers for Cli {
         &self.info
     }
 
-    async fn image_exists(&self, image: &str) -> Result<bool> {
-        let status = self
-            .cmd()
-            .args(["image", "inspect", "--format", "{{.Id}}", image])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map_err(|source| ContainerError::Io { binary: self.info.binary.clone(), source })?;
-        Ok(status.success())
+    async fn image_id(&self, image: &str) -> Result<Option<String>> {
+        match run(&self.info.binary, &["image", "inspect", "--format", "{{.Id}}", image]).await {
+            Ok(id) => Ok(Some(id.trim().to_string())),
+            // podman: "image not known"; docker: "No such image".
+            Err(ContainerError::Command { stderr, .. })
+                if stderr.contains("image not known") || stderr.to_lowercase().contains("no such image") =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
     }
 
-    async fn build(&self, context: &Path, dockerfile: &str, tag: &str) -> Result<()> {
-        let ctx = context.to_string_lossy();
-        let file = context.join(dockerfile);
-        let file = file.to_string_lossy();
-        run(&self.info.binary, &["build", "--quiet", "--file", &file, "--tag", tag, &ctx]).await.map(|_| ())
+    async fn build(
+        &self,
+        context: &Path,
+        dockerfile: &str,
+        tag: &str,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<()> {
+        let file = context.join(dockerfile).to_string_lossy().into_owned();
+        let mut args = vec!["build".to_string(), "--quiet".into(), "--file".into(), file, "--tag".into(), tag.into()];
+        for (k, v) in labels {
+            args.extend(["--label".into(), format!("{k}={v}")]);
+        }
+        args.push(context.to_string_lossy().into_owned());
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        run(&self.info.binary, &refs).await.map(|_| ())
+    }
+
+    async fn images(&self, labels: &BTreeMap<String, String>) -> Result<Vec<String>> {
+        let mut args = vec!["images".to_string(), "--format".into(), "{{.Repository}}:{{.Tag}}".into()];
+        for (k, v) in labels {
+            args.extend(["--filter".into(), format!("label={k}={v}")]);
+        }
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = run(&self.info.binary, &refs).await?;
+        Ok(out.lines().map(str::trim).filter(|l| !l.is_empty() && !l.contains("<none>")).map(String::from).collect())
+    }
+
+    async fn remove_image(&self, tag: &str) -> Result<()> {
+        run(&self.info.binary, &["rmi", tag]).await.map(|_| ())
     }
 
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {
