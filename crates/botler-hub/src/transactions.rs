@@ -405,12 +405,20 @@ pub async fn revert(hub: &Hub, commit: &str) -> Result<String> {
     Ok(head)
 }
 
-/// After a restart: proposals that were mid-pipeline start over; reviews in progress continue.
-pub async fn resume_on_boot(hub: &Arc<Hub>) -> Result<()> {
-    for p in hub.store.unfinished_proposals().await? {
-        if p.status == ProposalStatus::Gating {
-            tracing::info!(proposal = %p.id, "restarting interrupted proposal");
-            spawn_pipeline(hub.clone(), p.id);
+/// Proposals a restart interrupted mid-pipeline. Collected before anything at boot opens new
+/// ones (whose pipelines already run), and passed to [`resume_on_boot`].
+pub async fn interrupted(hub: &Hub) -> Result<Vec<String>> {
+    let all = hub.store.unfinished_proposals().await?;
+    Ok(all.into_iter().filter(|p| p.status == ProposalStatus::Gating).map(|p| p.id).collect())
+}
+
+/// After a restart: interrupted proposals start over, unless finished meanwhile (superseded);
+/// reviews in progress continue.
+pub async fn resume_on_boot(hub: &Arc<Hub>, interrupted: Vec<String>) -> Result<()> {
+    for id in interrupted {
+        if hub.store.proposal(&id).await?.status == ProposalStatus::Gating {
+            tracing::info!(proposal = %id, "restarting interrupted proposal");
+            spawn_pipeline(hub.clone(), id);
         }
     }
     Ok(())
