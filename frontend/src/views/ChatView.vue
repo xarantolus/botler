@@ -1,33 +1,16 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCollapse, NCollapseItem, NEmpty, NInput, NSpace, NSpin, NText } from "naive-ui";
-import { computed, h, nextTick, onBeforeUnmount, ref, watch } from "vue";
+// One chat: its title bar and banners, the transcript, and the composer.
+import { computed, nextTick, onBeforeUnmount, useTemplateRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { call } from "../api/client";
-import DialogCard from "../components/DialogCard.vue";
-import EnvelopeCard from "../components/EnvelopeCard.vue";
-import MarkdownText from "../components/MarkdownText.vue";
-import PhaseTag from "../components/PhaseTag.vue";
-import ToolCallView from "../components/ToolCallView.vue";
-import BreakerResume from "../components/BreakerResume.vue";
-import WakeProgress from "../components/WakeProgress.vue";
-import type { Dialog, SessionItem } from "../generated";
-import { envelopeOf, isUserMessage } from "../lib/envelope";
-import { heldFor, pausing } from "../lib/breakers";
-import { chatTitle, linkedDialog, redirectChat } from "../lib/events";
+import ChatBanners from "../components/chat/ChatBanners.vue";
+import ChatComposer from "../components/chat/ChatComposer.vue";
+import ChatNavbar from "../components/chat/ChatNavbar.vue";
+import ChatTranscript from "../components/chat/ChatTranscript.vue";
+import { redirectChat } from "../lib/events";
 import { currentStatus, phaseBadge } from "../lib/phase";
-import { ago, usd } from "../lib/time";
+import { buildTranscript } from "../lib/transcript";
 import { watch as watchLive } from "../live";
-import { dialog as confirmDialog, notifyError } from "../notify";
-import {
-  allDialogs,
-  clearSession,
-  frontDoorName,
-  queueSent,
-  refreshInstances,
-  refreshSession,
-  state,
-  waitingByInstance,
-} from "../store";
+import { allDialogs, clearSession, frontDoorName, refreshSession, state, waitingByInstance } from "../store";
 
 const props = defineProps<{ instance?: string }>();
 const route = useRoute();
@@ -40,7 +23,7 @@ const name = computed(() =>
     : frontDoorName.value,
 );
 const session = computed(() => (state.session?.instance.name === name.value ? state.session : null));
-const inst = computed(() => session.value?.instance ?? null);
+const inst = computed(() => session.value?.instance ?? state.instances.find((i) => i.name === name.value) ?? null);
 
 // Open the front door when no chat is named, and for a remembered `main`.
 watch(
@@ -51,8 +34,6 @@ watch(
   },
   { immediate: true },
 );
-const held = computed(() => (name.value ? heldFor(name.value, state.status?.breakers ?? []) : []));
-const paused = computed(() => (name.value ? pausing(name.value, state.status?.breakers ?? []) : []));
 
 watch(
   name,
@@ -84,363 +65,158 @@ const badge = computed(() =>
 );
 const cost = computed(() => (name.value ? state.usage?.total_by_instance[name.value]?.cost_usd : undefined));
 
-type ToolResult = Extract<SessionItem, { kind: "tool_result" }>;
-
-/** Tool results by the call they answer, so each call shows its result in place. */
-const results = computed(() => {
-  const m = new Map<string, ToolResult>();
-  for (const it of session.value?.items ?? []) if (it.kind === "tool_result" && it.tool_call_id) m.set(it.tool_call_id, it);
-  return m;
-});
-const paired = computed(() => {
-  const ids = new Set<string>();
-  for (const it of session.value?.items ?? []) {
-    if (it.kind !== "assistant") continue;
-    for (const c of it.tool_calls) {
-      const r = c.id ? results.value.get(c.id) : undefined;
-      if (r) ids.add(r.id);
-    }
-  }
-  return ids;
-});
-
-/** Dialogs opened by the tool calls of an item (shown right after it). */
-function dialogsOf(it: SessionItem): Dialog[] {
-  const rs: ToolResult[] =
-    it.kind === "assistant"
-      ? it.tool_calls.flatMap((c) => (c.id && results.value.get(c.id) ? [results.value.get(c.id)!] : []))
-      : it.kind === "tool_result" && !paired.value.has(it.id)
-        ? [it]
-        : [];
-  const out: Dialog[] = [];
-  for (const r of rs) {
-    const d = linkedDialog(r, allDialogs.value);
-    if (d) out.push(d);
-  }
-  return out;
-}
-
-/** Linked dialogs that are older than what the dialogs list holds are fetched with it. */
-const unresolvedLinks = computed(() =>
-  (session.value?.items ?? []).filter(
-    (it) => it.kind === "tool_result" && (it.dialog_id || it.proposal_id) && !linkedDialog(it, allDialogs.value),
-  ).length,
+const transcript = computed(() =>
+  session.value
+    ? buildTranscript({
+        items: session.value.items,
+        dialogs: allDialogs.value,
+        outbox: state.outbox[session.value.instance.name] ?? [],
+        streaming: state.streaming,
+        busy: session.value.busy,
+      })
+    : null,
+);
+const queuedNote = computed(() =>
+  badge.value?.type === "error" ? "the agent cannot start, see above" : "delivered when the agent is ready",
 );
 
 // ---- scrolling ----
-const log = ref<HTMLElement | null>(null);
-let stickToBottom = true;
+const body = useTemplateRef<HTMLElement>("body");
+/** The panel body, which scrolls the transcript. */
+const scroller = () => body.value?.closest<HTMLElement>("[data-slot=body]") ?? null;
+let atBottom = true;
 function onScroll() {
-  const el = log.value;
-  if (el) stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  const el = scroller();
+  if (el) atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
 }
-async function scrollToEnd() {
+watch(body, (el, _, onCleanup) => {
+  const s = el?.closest<HTMLElement>("[data-slot=body]");
+  if (!s) return;
+  s.addEventListener("scroll", onScroll, { passive: true });
+  onCleanup(() => s.removeEventListener("scroll", onScroll));
+});
+async function toBottom(force = false) {
+  if (!force && !atBottom) return;
   await nextTick();
-  if (log.value && stickToBottom) log.value.scrollTop = log.value.scrollHeight;
+  const el = scroller();
+  if (el) el.scrollTop = el.scrollHeight;
+  atBottom = true;
 }
-watch(() => [session.value?.items.length, state.streaming, name.value && state.outbox[name.value]?.length], scrollToEnd);
+// New messages keep the view at the end when it was there.
 watch(
-  () => [route.query.delivery, session.value?.items.length] as const,
-  async ([delivery]) => {
-    if (typeof delivery !== "string" || !session.value) return;
-    await nextTick();
-    const el = log.value?.querySelector(`[data-delivery="${CSS.escape(delivery)}"]`);
-    if (!el) return;
-    stickToBottom = false;
-    el.scrollIntoView({ block: "center" });
-    el.classList.remove("flash");
-    void (el as HTMLElement).offsetWidth;
-    el.classList.add("flash");
-    void router.replace({ query: {} });
-  },
+  () => transcript.value?.messages.length,
+  () => typeof route.query.delivery !== "string" && void toBottom(),
 );
-watch(name, () => (stickToBottom = true));
+watch(name, () => (atBottom = true));
 
-// ---- sending ----
-const draft = ref("");
-const sending = ref(false);
-async function send() {
-  const text = draft.value.trim();
-  if (!text || !name.value) return;
-  sending.value = true;
-  try {
-    await call("send_message", { body: { to: name.value, text } });
-    queueSent(name.value, text);
-    draft.value = "";
-    stickToBottom = true;
-    window.setTimeout(() => name.value && refreshSession(name.value), 400);
-  } catch (e) {
-    notifyError("Could not send", e);
-  } finally {
-    sending.value = false;
-  }
-}
-function onKey(e: KeyboardEvent) {
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-    e.preventDefault();
-    void send();
-  }
+/** Bring a message (or request) into view and flash it. */
+async function reveal(selector: string): Promise<boolean> {
+  await nextTick();
+  const el = body.value?.querySelector<HTMLElement>(selector);
+  if (!el) return false;
+  atBottom = false;
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  const target = el.querySelector<HTMLElement>("[data-slot=container]") ?? el;
+  target.classList.remove("flash");
+  void target.offsetWidth;
+  target.classList.add("flash");
+  return true;
 }
 
-// ---- archive ----
-const archiveReason = ref("");
-async function chatAction(kind: "archive" | "force" | "restore") {
-  if (!name.value) return;
-  try {
-    if (kind === "restore") await call("restore_chat", { params: { instance: name.value } });
-    else {
-      const r = await call("archive_chat", {
-        params: { instance: name.value },
-        body: { force: kind === "force", reason: archiveReason.value.trim() || undefined },
-      });
-      notifyNote(r.note);
-    }
-    await Promise.all([refreshSession(name.value), refreshInstances()]);
-  } catch (e) {
-    notifyError(kind === "restore" ? "Could not restore" : "Could not archive", e);
-  }
+// `?delivery=` (from an event's trace): scroll to that delivery once it is loaded.
+watch(
+  () => [route.query.delivery, transcript.value?.messages.length] as const,
+  async ([delivery]) => {
+    if (typeof delivery !== "string" || !transcript.value) return;
+    if (await reveal(`[data-delivery="${CSS.escape(delivery)}"]`)) void router.replace({ query: {} });
+  },
+  { immediate: true },
+);
+
+function showRequest() {
+  void reveal("[aria-label^='Question'], [aria-label^='Approval'], [aria-label^='Secrets']");
 }
-function notifyNote(note: string) {
-  confirmDialog.info({ title: "Archive", content: note, positiveText: "OK" });
-}
-function confirmArchive(force: boolean) {
-  archiveReason.value = "";
-  const text = force
-    ? "The chat is archived now, without waiting for the agent's handover report."
-    : "The agent writes a handover report (summary, outstanding work, where its state lives), then archives itself. Nothing is deleted.";
-  confirmDialog.warning({
-    title: force ? "Archive without handover?" : "Archive this chat?",
-    content: () =>
-      h("div", [
-        h("p", text),
-        h(NInput, {
-          value: archiveReason.value,
-          placeholder: "reason (optional)",
-          "onUpdate:value": (v: string) => (archiveReason.value = v),
-        }),
-      ]),
-    positiveText: force ? "Force archive" : "Archive",
-    negativeText: "Cancel",
-    onPositiveClick: () => chatAction(force ? "force" : "archive"),
-  });
-}
-const isFrontDoor = computed(() => name.value === frontDoorName.value);
+
+const composer = useTemplateRef<{ focus: () => void }>("composer");
+watch(name, () => void nextTick(() => composer.value?.focus()));
+const loading = computed(() => !!name.value && !session.value && !state.sessionError);
 </script>
 
 <template>
-  <div style="display: flex; flex-direction: column; height: 100%; min-height: 0">
-    <NEmpty v-if="!name" description="No chat selected." style="margin-top: 20vh" />
-    <template v-else>
-      <!-- Header -->
-      <div class="chat-head">
-        <div style="min-width: 0; flex: 1">
-          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
-            <strong style="font-size: 16px">{{ inst ? chatTitle(inst, frontDoorName) : name }}</strong>
-            <PhaseTag v-if="badge" :badge="badge" size="medium" />
-          </div>
-          <NText depth="3" style="font-size: 12px">
-            {{ name }}<template v-if="inst"> · {{ inst.definition }}</template>
-            <template v-if="cost"> · {{ usd(cost) }}</template>
-            <template v-if="session?.pending"> · {{ session.pending }} queued</template>
-            <template v-if="badge?.label === 'waiting for you'"> · {{ badge.detail }}</template>
-          </NText>
-        </div>
-        <NSpace v-if="inst" size="small">
-          <NButton v-if="inst.state === 'archived'" size="small" @click="chatAction('restore')">Restore</NButton>
-          <template v-else-if="!isFrontDoor">
-            <NButton v-if="inst.archive_requested_at" size="small" type="warning" ghost @click="confirmArchive(true)">
-              Force archive
-            </NButton>
-            <NButton v-else size="small" @click="confirmArchive(false)">Archive</NButton>
-          </template>
-        </NSpace>
-      </div>
-
-      <!-- Archive state -->
-      <NAlert v-if="inst?.archive_report" type="default" :title="inst.archive_report.confirmed_by_agent ? 'Archived' : 'Archived without the agent\'s handover'" class="banner">
-        <template v-if="inst.archive_report.report">
-          <MarkdownText :source="inst.archive_report.report.summary" />
-          <div v-if="inst.archive_report.report.outstanding.length" style="margin-top: 6px">
-            <strong>Outstanding</strong>
-            <ul style="margin: 2px 0"><li v-for="(o, i) in inst.archive_report.report.outstanding" :key="i">{{ o }}</li></ul>
-          </div>
-          <div v-if="inst.archive_report.report.state.length">
-            <strong>Where its state lives</strong>
-            <ul style="margin: 2px 0"><li v-for="(o, i) in inst.archive_report.report.state" :key="i">{{ o }}</li></ul>
-          </div>
-        </template>
-        <div v-if="inst.archive_report.reason">Reason: {{ inst.archive_report.reason }}</div>
-        <div v-if="inst.archive_report.handed_to">
-          Handed to <RouterLink :to="`/chat/${encodeURIComponent(inst.archive_report.handed_to)}`">{{ inst.archive_report.handed_to }}</RouterLink>
-        </div>
-        <NText depth="3" style="font-size: 12px">{{ ago(inst.archive_report.at) }} · messaging it restores it</NText>
-      </NAlert>
-      <NAlert v-else-if="inst?.archive_requested_at" type="warning" class="banner" :show-icon="true">
-        Waiting for the agent to hand over before archiving (asked {{ ago(inst.archive_requested_at) }}).
-      </NAlert>
-
-      <NAlert v-for="b in paused" :key="b.subject" type="error" class="banner" title="Paused by a breaker">
-        {{ b.reason }}. It does not wake until you resume it.
-        <div style="margin-top: 6px"><BreakerResume :subject="b.subject" /></div>
-      </NAlert>
-      <NAlert v-for="h in held" :key="h.breaker.subject" type="warning" class="banner" title="Messages are held">
-        Messages between this chat and <strong>{{ h.other }}</strong> are held by a breaker: {{ h.breaker.reason }}
-        <div style="margin-top: 6px"><BreakerResume :subject="h.breaker.subject" /></div>
-      </NAlert>
-
-      <WakeProgress
-        v-if="inst"
-        :instance="inst.name"
-        :status="status"
-        :starting="inst.state === 'starting'"
+  <UDashboardPanel id="chat" :ui="{ body: 'p-0 sm:p-0 gap-0' }">
+    <template #header>
+      <ChatNavbar
+        v-if="name"
+        :name="name"
+        :instance="inst"
+        :badge="badge"
+        :cost="cost"
+        :pending="session?.pending"
       />
-      <NAlert v-if="state.sessionError && !session" type="error" class="banner">{{ state.sessionError }}</NAlert>
-
-      <!-- Transcript -->
-      <div ref="log" class="log" @scroll="onScroll">
-        <div v-if="!session && !state.sessionError" style="text-align: center; padding: 40px"><NSpin /></div>
-        <NEmpty v-else-if="session && !session.items.length" description="No messages yet." style="margin-top: 40px" />
-        <div v-if="unresolvedLinks" style="font-size: 12px; opacity: 0.6; text-align: center">
-          {{ unresolvedLinks }} older request(s) are not in the recent list.
-        </div>
-        <template v-for="it in session?.items ?? []" :key="it.id">
-          <template v-if="it.kind === 'user'">
-            <div v-if="envelopeOf(it) && !isUserMessage(envelopeOf(it)!)" class="msg" :data-delivery="it.delivery ?? ''">
-              <EnvelopeCard :env="envelopeOf(it)!" :at="it.at" />
-            </div>
-            <div v-else class="msg user" :data-delivery="it.delivery ?? ''">
-              <div class="bubble"><MarkdownText :source="(it.message_text ?? envelopeOf(it)?.body ?? it.text).trim()" /></div>
-              <div class="meta" :title="it.local_time ?? it.at ?? ''">you · {{ ago(it.at) }}<template v-if="it.gap"> · {{ it.gap }}</template></div>
-            </div>
-          </template>
-
-          <div v-else-if="it.kind === 'assistant'" class="msg">
-            <NCollapse v-if="it.thinking">
-              <NCollapseItem title="thinking" :name="1">
-                <pre class="mono">{{ it.thinking }}</pre>
-              </NCollapseItem>
-            </NCollapse>
-            <MarkdownText v-if="it.text" :source="it.text" />
-            <ToolCallView v-for="(c, i) in it.tool_calls" :key="i" :call="c" :result="c.id ? results.get(c.id) : undefined" />
-            <NAlert v-if="it.error" type="error" :show-icon="false" style="margin-top: 6px">{{ it.error }}</NAlert>
-            <div class="meta" :title="it.at ?? ''">
-              agent<template v-if="it.model"> · {{ it.model }}</template>
-              <template v-if="it.cost_usd !== null"> · {{ usd(it.cost_usd, 4) }}</template> · {{ ago(it.at) }}
-            </div>
-          </div>
-
-          <div v-else-if="it.kind === 'tool_result' && !paired.has(it.id)" class="msg">
-            <ToolCallView :result="it" />
-          </div>
-
-          <div v-else-if="it.kind === 'note'" class="msg note" :data-delivery="it.delivery">
-            <span class="note-label">note from {{ it.from }}<template v-if="it.event_kind !== 'message'"> · {{ it.event_kind }}</template> · {{ it.local_time ?? ago(it.at) }}</span>
-            <MarkdownText :source="it.text.trim()" />
-          </div>
-
-          <div v-else-if="it.kind === 'compaction'" class="msg">
-            <NCollapse>
-              <NCollapseItem title="earlier conversation compacted" :name="1">
-                <MarkdownText :source="it.summary" />
-              </NCollapseItem>
-            </NCollapse>
-          </div>
-
-          <div v-for="d in dialogsOf(it)" :key="d.id" class="msg">
-            <DialogCard :dialog="d" />
-          </div>
-        </template>
-
-        <div v-for="(q, i) in name ? (state.outbox[name] ?? []) : []" :key="`q${i}`" class="msg user queued">
-          <div class="bubble"><MarkdownText :source="q.text" /></div>
-          <div class="meta">
-            you · queued<template v-if="badge && badge.type === 'error'">: the agent cannot start, see above</template
-            ><template v-else>, delivered when the agent is ready</template>
-          </div>
-        </div>
-
-        <div v-if="state.streaming" class="msg streaming">
-          <MarkdownText :source="state.streaming" />
-        </div>
-        <div v-else-if="session?.busy" class="msg"><NSpin :size="14" /> <NText depth="3">working…</NText></div>
-      </div>
-
-      <!-- Composer -->
-      <div class="composer">
-        <NInput
-          v-model:value="draft"
-          type="textarea"
-          :autosize="{ minRows: 1, maxRows: 8 }"
-          :placeholder="inst?.state === 'archived' ? 'Message to restore this chat' : 'Message (Enter sends, Shift+Enter for a new line)'"
-          @keydown="onKey"
-        />
-        <NButton type="primary" :loading="sending" :disabled="!draft.trim()" @click="send">Send</NButton>
+      <UDashboardNavbar v-else title="Chat">
+        <template #leading><UDashboardSidebarCollapse /></template>
+      </UDashboardNavbar>
+      <div v-if="inst" class="border-b border-default px-4 py-3 empty:hidden sm:px-6">
+        <ChatBanners :instance="inst" :status="status" :badge="badge" class="mx-auto max-w-3xl" @show-request="showRequest" />
       </div>
     </template>
-  </div>
-</template>
 
-<style scoped>
-.chat-head {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  padding: 8px 16px;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.2);
-}
-.banner {
-  margin: 10px 16px 0;
-}
-.log {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 14px 16px;
-}
-.msg {
-  max-width: 860px;
-  margin: 0 auto 14px;
-}
-.msg.user {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-.bubble {
-  background: rgba(47, 91, 211, 0.12);
-  padding: 8px 12px;
-  border-radius: 12px;
-  max-width: 85%;
-}
-.meta {
-  font-size: 12px;
-  opacity: 0.55;
-  margin-top: 3px;
-}
-.note {
-  font-size: 13px;
-  opacity: 0.6;
-  border-left: 2px dashed rgba(127, 127, 127, 0.45);
-  padding-left: 10px;
-}
-.note-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-.queued {
-  opacity: 0.6;
-}
-.streaming {
-  opacity: 0.8;
-  border-left: 2px solid rgba(127, 127, 127, 0.4);
-  padding-left: 10px;
-}
-.composer {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 10px 16px;
-  border-top: 1px solid rgba(127, 127, 127, 0.2);
-}
-</style>
+    <template #body>
+      <div ref="body" class="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pt-6 sm:px-6">
+        <UEmpty
+          v-if="!name"
+          icon="i-lucide-messages-square"
+          title="No chat yet"
+          description="The front door appears once the hub has started it."
+          variant="naked"
+          class="my-auto"
+        />
+        <UAlert
+          v-else-if="state.sessionError && !session"
+          color="error"
+          variant="subtle"
+          icon="i-lucide-circle-alert"
+          title="Could not load this chat"
+          :description="state.sessionError"
+          :actions="[{ label: 'Retry', color: 'error', variant: 'outline', onClick: () => void refreshSession(name!) }]"
+        />
+        <div v-else-if="loading" class="space-y-6" aria-busy="true" aria-label="Loading the chat">
+          <div v-for="n in 3" :key="n" class="space-y-2">
+            <USkeleton class="ms-auto h-10 w-2/5 rounded-lg" />
+            <USkeleton class="h-4 w-4/5" />
+            <USkeleton class="h-4 w-3/5" />
+          </div>
+        </div>
+        <template v-else-if="transcript">
+          <p v-if="transcript.unresolvedLinks" class="mb-4 text-center text-xs text-dimmed">
+            {{ transcript.unresolvedLinks }} older request(s) are not in the recent list.
+          </p>
+          <UEmpty
+            v-if="!transcript.messages.length"
+            icon="i-lucide-message-circle"
+            title="No messages yet"
+            description="Say hello: the agent wakes when your message arrives."
+            variant="naked"
+            class="my-auto"
+          />
+          <ChatTranscript
+            v-else
+            :key="name"
+            :messages="transcript.messages"
+            :status="transcript.status"
+            :queued-note="queuedNote"
+            :start-at-end="typeof route.query.delivery !== 'string'"
+          />
+        </template>
+        <div v-if="name" class="sticky bottom-0 z-10 mt-auto bg-default pb-4 pt-2 sm:pb-6">
+          <ChatComposer
+            ref="composer"
+            :instance="name"
+            :archived="inst?.state === 'archived'"
+            @sent="toBottom(true)"
+          />
+        </div>
+      </div>
+    </template>
+  </UDashboardPanel>
+</template>

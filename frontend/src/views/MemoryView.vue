@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { NAlert, NButton, NEmpty, NInput, NScrollbar, NSpace, NText } from "naive-ui";
+// Agents' durable memory (Markdown files in namespaces, with history): browse, read, edit and
+// add files; a save based on an older version shows the newer one and lets the user choose.
+import type { TreeItem } from "@nuxt/ui";
 import { computed, onMounted, ref, shallowRef } from "vue";
 import { ApiError, call } from "../api/client";
-import MarkdownText from "../components/MarkdownText.vue";
+import MarkdownText from "../components/common/MarkdownText.vue";
+import TimeAgo from "../components/common/TimeAgo.vue";
+import ViewPanel from "../components/common/ViewPanel.vue";
 import type { MemoryCommit, MemoryEntry, MemoryFile } from "../generated";
 import { byNamespace } from "../lib/memory";
-import { ago } from "../lib/time";
-import { message, notifyError } from "../notify";
+import { notifyError, notifySuccess, notifyWarning } from "../notify";
 
-const files = shallowRef<MemoryEntry[]>([]);
+const files = shallowRef<MemoryEntry[] | null>(null);
 const loading = ref(false);
-const groups = computed(() => byNamespace(files.value));
 
 const file = shallowRef<MemoryFile | null>(null);
 const history = shallowRef<MemoryCommit[] | null>(null);
@@ -33,6 +35,20 @@ async function load() {
   }
 }
 onMounted(load);
+
+type FileItem = TreeItem & { path?: string };
+const tree = computed((): FileItem[] =>
+  byNamespace(files.value ?? []).map((g) => ({
+    label: g.namespace,
+    defaultExpanded: true,
+    children: g.files.map((f) => ({
+      label: f.path.slice(g.namespace.length + 1),
+      icon: "i-lucide-file-text",
+      path: f.path,
+      onSelect: () => void open(f.path),
+    })),
+  })),
+);
 
 async function open(path: string) {
   draft.value = null;
@@ -63,6 +79,12 @@ function startNew() {
   draft.value = "";
 }
 
+function cancel() {
+  draft.value = null;
+  conflict.value = null;
+  newPath.value = null;
+}
+
 /** Save the draft over `base` (the version it was edited from; none for a new file). */
 async function save(base: string | undefined) {
   const path = newPath.value ?? file.value?.path;
@@ -70,7 +92,7 @@ async function save(base: string | undefined) {
   saving.value = true;
   try {
     const written = await call("memory_write", { body: { path, content: draft.value, expected_sha256: base } });
-    message.success(`${path} saved`);
+    notifySuccess(`${path} saved`);
     await load();
     file.value = { path, sha256: written.sha256, content: draft.value };
     draft.value = null;
@@ -82,7 +104,7 @@ async function save(base: string | undefined) {
       conflict.value = e.body.conflict.current;
       if (!conflict.value) {
         // Deleted meanwhile: the next save creates it again.
-        message.warning(`${path} was deleted meanwhile; saving creates it again.`);
+        notifyWarning(`${path} was deleted meanwhile`, "Saving creates it again.");
         file.value = null;
         newPath.value = path;
       }
@@ -94,7 +116,7 @@ async function save(base: string | undefined) {
   }
 }
 
-/** Save mine over the conflicting version, or create it again if it was deleted. */
+/** Save mine over the conflicting version. */
 const overwrite = () => save(conflict.value?.sha256);
 function takeTheirs() {
   if (!conflict.value) return;
@@ -105,125 +127,112 @@ function takeTheirs() {
 </script>
 
 <template>
-  <div class="memory">
-    <aside class="list">
-      <NSpace size="small" style="padding: 8px">
-        <NButton size="small" :loading="loading" @click="load">Refresh</NButton>
-        <NButton size="small" @click="startNew">New file</NButton>
-      </NSpace>
-      <NScrollbar style="flex: 1; min-height: 0">
-        <NEmpty v-if="!loading && !files.length" description="No memory yet." style="margin-top: 24px" />
-        <div v-for="g in groups" :key="g.namespace" class="group">
-          <NText depth="3" class="ns">{{ g.namespace }}</NText>
-          <div
-            v-for="f in g.files"
-            :key="f.path"
-            class="entry"
-            :class="{ active: file?.path === f.path }"
-            @click="open(f.path)"
-          >
-            {{ f.path.slice(g.namespace.length + 1) }}
-          </div>
-        </div>
-      </NScrollbar>
+  <ViewPanel id="memory" title="Memory" icon="i-lucide-brain" body-class="p-0 sm:p-0 lg:flex-row gap-0 sm:gap-0">
+    <template #right>
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="Refresh" :loading="loading" @click="load" />
+      <UButton icon="i-lucide-file-plus" label="New file" size="sm" @click="startNew" />
+    </template>
+
+    <aside
+      class="max-h-[40%] shrink-0 overflow-y-auto border-b border-default p-2 lg:max-h-none lg:w-72 lg:border-e lg:border-b-0"
+      aria-label="Memory files"
+    >
+      <div v-if="!files" class="space-y-2 p-2">
+        <USkeleton v-for="n in 5" :key="n" class="h-5 w-full" />
+      </div>
+      <UEmpty v-else-if="!files.length" icon="i-lucide-brain" title="No memory yet" size="sm" variant="naked" />
+      <UTree v-else :items="tree" :get-key="(i: FileItem) => i.path ?? i.label ?? ''" size="sm" />
     </aside>
-    <NScrollbar style="flex: 1; min-width: 0">
-      <div style="max-width: 860px; padding: 12px 16px">
-        <NAlert v-if="!file && draft === null" type="info" :show-icon="false">
-          Agents keep durable facts here: <code>agents/&lt;definition&gt;/</code> is shared by every instance of a
-          definition, <code>projects/&lt;home&gt;/</code> by agents sharing a home, and <code>user/</code> by everyone.
-          Every change is recorded with its author.
-        </NAlert>
-        <NSpace v-else vertical>
-          <NSpace align="center" justify="space-between">
-            <NInput v-if="newPath !== null" v-model:value="newPath" size="small" placeholder="user/notes.md" style="width: 320px" />
-            <strong v-else>{{ file?.path }}</strong>
-            <NSpace size="small">
+
+    <div class="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
+      <div class="mx-auto max-w-3xl space-y-4">
+        <UEmpty
+          v-if="!file && draft === null"
+          icon="i-lucide-notebook-text"
+          title="Pick a file"
+          variant="naked"
+          class="py-10"
+        >
+          <template #description>
+            Agents keep durable facts here: <code>agents/&lt;definition&gt;/</code> is shared by every instance of a
+            definition, <code>projects/&lt;home&gt;/</code> by agents sharing a home, and <code>user/</code> by everyone.
+            Every change is recorded with its author.
+          </template>
+        </UEmpty>
+        <template v-else>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <UInput
+              v-if="newPath !== null"
+              v-model="newPath"
+              placeholder="user/notes.md"
+              icon="i-lucide-file-plus"
+              class="w-full sm:w-80"
+              aria-label="Path of the new file"
+            />
+            <h2 v-else class="flex items-center gap-2 font-mono text-sm font-semibold text-highlighted">
+              <UIcon name="i-lucide-file-text" class="size-4 text-muted" />{{ file?.path }}
+            </h2>
+            <div class="flex gap-2">
               <template v-if="draft === null">
-                <NButton size="small" @click="draft = file?.content ?? ''">Edit</NButton>
-                <NButton size="small" @click="showHistory">History</NButton>
+                <UButton size="sm" color="neutral" variant="outline" icon="i-lucide-history" label="History" @click="showHistory" />
+                <UButton size="sm" icon="i-lucide-pencil" label="Edit" @click="draft = file?.content ?? ''" />
               </template>
               <template v-else>
-                <NButton size="small" type="primary" :loading="saving" :disabled="!!conflict" @click="save(file?.sha256)">
-                  Save
-                </NButton>
-                <NButton size="small" @click="draft = null; conflict = null; newPath = null">Cancel</NButton>
+                <UButton size="sm" color="neutral" variant="ghost" label="Cancel" @click="cancel" />
+                <UButton
+                  size="sm"
+                  icon="i-lucide-save"
+                  label="Save"
+                  :loading="saving"
+                  :disabled="!!conflict"
+                  @click="save(file?.sha256)"
+                />
               </template>
-            </NSpace>
-          </NSpace>
-          <NAlert v-if="conflict" type="warning" title="Changed meanwhile">
-            Someone saved a newer version while you edited. Their version:
-            <pre class="theirs">{{ conflict.content }}</pre>
-            <NSpace size="small">
-              <NButton size="small" @click="takeTheirs">Discard mine</NButton>
-              <NButton size="small" type="warning" :loading="saving" @click="overwrite">Save mine over it</NButton>
-            </NSpace>
-          </NAlert>
-          <NInput
-            v-if="draft !== null"
-            v-model:value="draft"
-            type="textarea"
-            :autosize="{ minRows: 12 }"
-            style="font-family: monospace"
-          />
-          <MarkdownText v-else-if="file" :source="file.content" />
-          <div v-if="history && draft === null">
-            <NText depth="3">History</NText>
-            <div v-for="c in history" :key="c.commit" style="font-size: 13px">
-              <code>{{ c.commit.slice(0, 8) }}</code> {{ c.message }} · {{ c.author }} ·
-              <span :title="c.at">{{ ago(c.at) }}</span>
             </div>
           </div>
-        </NSpace>
-      </div>
-    </NScrollbar>
-  </div>
-</template>
 
-<style scoped>
-.memory {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-}
-.list {
-  width: 260px;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--n-border-color, rgba(128, 128, 128, 0.2));
-}
-.group {
-  padding: 4px 8px 8px;
-}
-.ns {
-  font-size: 12px;
-}
-.entry {
-  padding: 2px 8px;
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 14px;
-  overflow-wrap: anywhere;
-}
-.entry:hover,
-.entry.active {
-  background: rgba(128, 128, 128, 0.15);
-}
-.theirs {
-  white-space: pre-wrap;
-  max-height: 240px;
-  overflow: auto;
-  font-size: 12px;
-}
-@media (max-width: 860px) {
-  .memory {
-    flex-direction: column;
-  }
-  .list {
-    width: auto;
-    max-height: 40%;
-    border-right: none;
-  }
-}
-</style>
+          <UAlert
+            v-if="conflict"
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-git-merge"
+            title="Changed meanwhile"
+            :actions="[
+              { label: 'Discard mine', color: 'neutral', variant: 'outline', onClick: takeTheirs },
+              { label: 'Save mine over it', color: 'warning', loading: saving, onClick: () => void overwrite() },
+            ]"
+          >
+            <template #description>
+              Someone saved a newer version while you edited. Theirs:
+              <pre class="mt-2 max-h-60 overflow-auto rounded-md bg-default/60 p-2 font-mono text-xs whitespace-pre-wrap">{{ conflict.content }}</pre>
+            </template>
+          </UAlert>
+
+          <UTextarea
+            v-if="draft !== null"
+            v-model="draft"
+            autoresize
+            :rows="14"
+            autofocus
+            class="w-full"
+            :ui="{ base: 'font-mono text-sm' }"
+            aria-label="File content"
+          />
+          <UCard v-else-if="file" variant="subtle">
+            <MarkdownText :source="file.content" />
+          </UCard>
+
+          <section v-if="history && draft === null" class="space-y-2">
+            <h3 class="text-sm font-semibold text-highlighted">History</h3>
+            <UTimeline
+              :items="history.map((c) => ({ value: c.commit, title: c.message, description: `${c.author} · ${c.commit.slice(0, 8)}`, date: c.at, icon: 'i-lucide-git-commit-horizontal' }))"
+              size="xs"
+            >
+              <template #date="{ item }"><TimeAgo :at="item.date" /></template>
+            </UTimeline>
+          </section>
+        </template>
+      </div>
+    </div>
+  </ViewPanel>
+</template>

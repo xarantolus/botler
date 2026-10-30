@@ -1,15 +1,13 @@
 <script setup lang="ts">
-import { darkTheme, NConfigProvider, NGlobalStyle, useOsTheme } from "naive-ui";
-import { computed, watch } from "vue";
-import AppShell from "./components/AppShell.vue";
-import LoginView from "./components/LoginView.vue";
+import { useToast } from "@nuxt/ui/composables/useToast";
+import { watch } from "vue";
+import AppShell from "./components/shell/AppShell.vue";
+import LoginView from "./components/shell/LoginView.vue";
 import { startLive, stopLive } from "./live";
-import { dark } from "./notify";
+import { bindToaster } from "./notify";
 import { refreshAll, state } from "./store";
 
-const os = useOsTheme();
-const theme = computed(() => (os.value === "dark" ? darkTheme : null));
-watch(os, (v) => (dark.value = v === "dark"), { immediate: true });
+bindToaster(useToast());
 
 watch(
   () => state.authed,
@@ -26,9 +24,8 @@ watch(
 </script>
 
 <template>
-  <NConfigProvider :theme="theme">
-    <NGlobalStyle />
+  <UApp :toaster="{ position: 'bottom-right', duration: 6000 }" :tooltip="{ delayDuration: 250 }">
     <AppShell v-if="state.authed" />
     <LoginView v-else />
-  </NConfigProvider>
+  </UApp>
 </template>

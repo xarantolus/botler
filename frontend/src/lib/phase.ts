@@ -20,6 +20,11 @@ export const WAKE_STEPS: { step: WakeStep; label: string }[] = [
   { step: "starting_container", label: "Starting container" },
 ];
 
+/** The kit's semantic color for a badge type. */
+export function badgeColor(t: BadgeType): "neutral" | "info" | "success" | "warning" | "error" {
+  return t === "default" ? "neutral" : t;
+}
+
 export function stepLabel(step: WakeStep): string {
   return WAKE_STEPS.find((s) => s.step === step)?.label ?? step;
 }

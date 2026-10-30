@@ -1,20 +1,51 @@
 # botler web app
 
-Vue 3 + TypeScript + [Naive UI](https://www.naiveui.com/), built with Vite. The hub serves it at
-`/`; the old single-file page stays at `/legacy`.
+Vue 3 + TypeScript + [Nuxt UI](https://ui.nuxt.com/) v4, used as a plain Vue + Vite library (no
+Nuxt), built with Vite. The hub serves it at `/`; the old single-file page stays at `/legacy`.
 
 ## Layout
 
 ```
-src/generated/   TypeScript types + typed route table, GENERATED from the Rust API types. Do not edit.
-src/api/         the typed client: call("session", { params: { instance } }) → SessionView
-src/live.ts      the /api/v1/live WebSocket (reconnects with backoff; polling while it is down)
-src/store.ts     app state (one reactive object) and refreshes
-src/lib/         pure logic with unit tests: envelopes, change summaries, phase badges, files
-src/components/  chat list, header, dialog cards, change summary, secret inputs, ...
-src/views/       one per tab: chat, events, requests, runs, incidents, proposals, secrets
-dist/            the built app, committed (see below)
+src/generated/         TypeScript types + typed route table, GENERATED from the Rust API types. Do not edit.
+src/api/               the typed client: call("session", { params: { instance } }) → SessionView
+src/live.ts            the /api/v1/live WebSocket (reconnects with backoff; polling while it is down)
+src/store.ts           app data (one reactive object) and refreshes
+src/shell.ts           UI state of the shell (sidebar, new-chat modal)
+src/notify.ts          toasts (usable outside components); src/confirm.ts: confirmation modal
+src/lib/               pure logic with unit tests: the transcript model, envelopes, change summaries,
+                       phase badges, tools, statuses, files
+src/components/shell/  dashboard shell: sidebar, chat list, hub menu, command palette, login
+src/components/chat/   the chat: title bar, banners, transcript, message parts, tool calls, composer
+src/components/common/ cards and pieces used across views (dialog, envelope, change summary, ...)
+src/views/             one per section: chat, events, requests, runs, incidents, proposals, secrets, memory
+tests/                 component tests (the real kit in happy-dom)
+dist/                  the built app, committed (see below)
 ```
+
+## The UI kit
+
+Everything visible is built from Nuxt UI components: the dashboard shell (`UDashboardGroup`,
+`UDashboardSidebar`, `UDashboardPanel`, `UDashboardNavbar`, `UDashboardSearch` as the Cmd/Ctrl+K
+palette), the chat (`UChatMessages`, `UChatMessage`, `UChatReasoning`, `UChatTool`, `UChatShimmer`,
+`UChatPrompt`, `UChatPromptSubmit`) and everything else (`UTable`, `USlideover`, `UModal` through
+`useOverlay`, toasts through `useToast`, `UFileUpload`, `UStepper`, `UTree`, `UAlert`, `UCard`, ...).
+Don't add a second kit or hand-rolled widgets where the kit has one.
+
+- **Transcripts are AI SDK `UIMessage`s.** `src/lib/transcript.ts` maps a session (plus the outbox and
+  what is streaming in) to the messages the chat components render; it is the only module that knows
+  the AI SDK's types, and `ai` is a type-only dev dependency (nothing of it is bundled).
+- **Offline.** The hub may run without internet. Icons come from the bundled Lucide set
+  (`@iconify-json/lucide`; only the icons the sources name are bundled), and `@iconify/vue` is aliased
+  to its offline build (`src/lib/iconify-offline.ts`), so nothing is ever fetched; no web fonts.
+  `scripts/check-offline.mjs` (part of `build` and `check-dist`) fails on any external URL in `dist/`,
+  and `src/lib/icons.test.ts` on an icon name that is not in the set.
+- **Markdown** from agents is rendered with `marked` and sanitized with DOMPurify (`src/lib/markdown.ts`),
+  the streaming tail included.
+- **Generated files.** Nuxt UI's Vite plugin writes `components.d.ts` (types of the auto-imported `U*`
+  components; committed, so `npm run typecheck` works before a build) and its theme templates under
+  `node_modules/.nuxt-ui/`. The app's own components and all composables are imported explicitly.
+- Theme: primary `indigo`, neutral `zinc` (`vite.config.ts`); color mode follows the system until the
+  user picks one.
 
 ## API types are generated
 
@@ -39,17 +70,18 @@ must be rebuilt with the sources:
 
 ```sh
 npm ci
-npm run build        # vue-tsc, vite build, then records the source hash in dist/.source-hash
-npm run check-dist   # fails if dist/ is older than the sources
-npm test             # vitest unit tests
+npm run build        # vue-tsc, vite build, offline check, then records the source hash in dist/.source-hash
+npm run check-dist   # fails if dist/ is older than the sources or references external URLs
+npm test             # vitest: unit tests (src/**/*.test.ts) and component tests (tests/)
 npm run typecheck
 ```
 
 `npm run build` writes a hash of the sources (`src/`, `public/`, `index.html`, the package and
 config files; tests excluded) to `dist/.source-hash`. `cargo test` recomputes it
 (`web::tests::embedded_frontend_is_current`) and fails when they differ, so a stale `dist/` cannot
-be committed unnoticed. Vite's output is deterministic, so rebuilding unchanged sources gives an
-identical `dist/`.
+be committed unnoticed. The build reads nothing else: Tailwind scans only `src/` and `index.html`
+(never the committed `dist/`, never tests), and the icon scan the same sources, so rebuilding
+unchanged sources gives an identical `dist/` (CI checks this).
 
 Dependencies are pinned to exact versions and `package-lock.json` is committed. Node 22+.
 

@@ -21,6 +21,27 @@ export function asBuiltin(ev: Pick<BotlerEvent, "type" | "payload">): BuiltinPay
   return ev.type in BUILTIN ? ({ type: ev.type, payload: ev.payload } as BuiltinPayload) : null;
 }
 
+const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
+  message: "i-lucide-mail",
+  "runnable.failed": "i-lucide-circle-x",
+  "runnable.finished": "i-lucide-circle-check",
+  "dialog.answered": "i-lucide-message-square-reply",
+  "dialog.aborted": "i-lucide-message-square-x",
+  "proposal.updated": "i-lucide-git-pull-request-arrow",
+  "action.result": "i-lucide-zap",
+  "breaker.tripped": "i-lucide-octagon-pause",
+  "archive.requested": "i-lucide-archive",
+  "agent.idle": "i-lucide-moon",
+  timer: "i-lucide-alarm-clock",
+  schedule: "i-lucide-calendar-clock",
+};
+
+/** An icon for an event type (agent-defined types get a generic one). */
+export function eventIcon(type: string | null): string {
+  if (type === null) return EVENT_ICONS.message;
+  return type in EVENT_ICONS ? EVENT_ICONS[type as BuiltinPayload["type"]] : "i-lucide-radio";
+}
+
 export function sourceLabel(s: Source): string {
   return "name" in s ? `${s.kind}:${s.name}` : s.kind;
 }
