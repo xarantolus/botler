@@ -161,8 +161,15 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
 }
 
 /// The text pi receives for one delivery. The botler extension recognises the prefix, drops
-/// duplicate ids, and renders the header.
-pub fn envelope(d: &Delivery, ev: &Event) -> Result<String> {
+/// duplicate ids, and renders the header. `previous` is when the instance's last delivery
+/// arrived: the header notes a long gap since then.
+pub fn envelope(
+    d: &Delivery,
+    ev: &Event,
+    tz: chrono_tz::Tz,
+    now: DateTime<Utc>,
+    previous: Option<DateTime<Utc>>,
+) -> Result<String> {
     let body = DeliveryEnvelope {
         id: d.id.clone(),
         event: ev.id.to_string(),
@@ -172,6 +179,8 @@ pub fn envelope(d: &Delivery, ev: &Event) -> Result<String> {
         correlation: ev.correlation.unwrap_or(ev.id).to_string(),
         body: catalog::render(ev, d.prompt.as_deref()),
         quiet: d.quiet,
+        at: botler_core::clock::format_local(now, tz),
+        gap: botler_core::clock::gap_note(now, previous),
     };
     let json = serde_json::to_string(&body).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
     Ok(format!("botler:delivery {json}"))
@@ -179,7 +188,8 @@ pub fn envelope(d: &Delivery, ev: &Event) -> Result<String> {
 
 async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery) -> Result<()> {
     let ev = hub.store.event(&d.event_id).await?;
-    let text = envelope(d, &ev)?;
+    let previous = hub.store.last_delivered(&d.instance).await?.and_then(|p| p.delivered_at);
+    let text = envelope(d, &ev, hub.applied().await.defs.timezone, Utc::now(), previous)?;
     let streaming = if agent.pi.is_busy().await? {
         // The user and urgent events interrupt at the next turn boundary; everything else waits.
         Some(if ev.urgent || ev.source == Source::User { Streaming::Steer } else { Streaming::FollowUp })
