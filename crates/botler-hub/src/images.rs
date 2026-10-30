@@ -112,6 +112,10 @@ pub async fn ensure_base(hub: &Hub) -> Result<()> {
         return Ok(());
     }
     let _guard = hub.build_lock.lock().await;
+    // Another caller may have built it while this one waited for the lock.
+    if exists(tag.clone()).await? && exists(assets::AGENT_BASE_LATEST.into()).await? {
+        return Ok(());
+    }
     let ctx = hub.paths.assets().join("agent-base");
     tracing::info!(%tag, "building agent base image");
     // Unlabelled: the base belongs to the hub version, not to the monorepo, and is never collected.
