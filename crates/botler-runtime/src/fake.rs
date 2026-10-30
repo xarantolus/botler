@@ -45,6 +45,8 @@ struct State {
     fail_turns: BTreeMap<String, VecDeque<String>>,
     /// `compact` commands each instance's pi received.
     compactions: BTreeMap<String, u32>,
+    /// Extension commands (`/botler-goto ...`) each pi received, per container.
+    commands: BTreeMap<String, Vec<String>>,
     /// The context size `get_session_stats` reports, keyed by `BOTLER_INSTANCE`.
     context_tokens: BTreeMap<String, u64>,
     /// Delivery ids each pi has seen, persisted per session file like the real extension.
@@ -115,6 +117,11 @@ impl Fake {
     /// per turn; later turns succeed.
     pub fn fail_turns(&self, instance: &str, errors: &[&str]) {
         self.lock().fail_turns.entry(instance.into()).or_default().extend(errors.iter().map(|e| e.to_string()));
+    }
+
+    /// The extension commands (`/botler-...`) the pi in container `name` ran.
+    pub fn commands(&self, name: &str) -> Vec<String> {
+        self.lock().commands.get(name).cloned().unwrap_or_default()
     }
 
     /// Make `instance`'s pi report a context of `tokens`.
@@ -457,6 +464,11 @@ impl Fake {
         match kind {
             "prompt" => {
                 let text = cmd.get("message").and_then(Value::as_str).unwrap_or("").to_string();
+                // Like the extension's commands: handled, no turn.
+                if text.starts_with("/botler-") {
+                    self.lock().commands.entry(name.into()).or_default().push(text);
+                    return vec![ok(json!({"disposition": "handled"}))];
+                }
                 let envelope =
                     text.strip_prefix("botler:delivery ").and_then(|env| serde_json::from_str::<Value>(env).ok());
                 if let Some(env) = &envelope

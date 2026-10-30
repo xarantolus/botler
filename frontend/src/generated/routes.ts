@@ -8,21 +8,27 @@ import type { BotlerEvent } from "./BotlerEvent";
 import type { BreakerCleared } from "./BreakerCleared";
 import type { Cancelled } from "./Cancelled";
 import type { ChatCreated } from "./ChatCreated";
+import type { ChatForked } from "./ChatForked";
 import type { ChatRestored } from "./ChatRestored";
 import type { ChatsStopped } from "./ChatsStopped";
 import type { ClearBreaker } from "./ClearBreaker";
 import type { Connections } from "./Connections";
 import type { DialogAnswer } from "./DialogAnswer";
 import type { Dialogs } from "./Dialogs";
+import type { EntryDone } from "./EntryDone";
 import type { EventPosted } from "./EventPosted";
 import type { EventsQuery } from "./EventsQuery";
+import type { ForkChat } from "./ForkChat";
 import type { GetProposal } from "./GetProposal";
 import type { GetRunLogs } from "./GetRunLogs";
+import type { GetSessionTree } from "./GetSessionTree";
+import type { GotoEntry } from "./GotoEntry";
 import type { Handover } from "./Handover";
 import type { HandoverRequested } from "./HandoverRequested";
 import type { HubStatus } from "./HubStatus";
 import type { Incident } from "./Incident";
 import type { Instance } from "./Instance";
+import type { LabelEntry } from "./LabelEntry";
 import type { ListConnections } from "./ListConnections";
 import type { MemoryCommit } from "./MemoryCommit";
 import type { MemoryEntry } from "./MemoryEntry";
@@ -51,6 +57,7 @@ import type { SecretGroupView } from "./SecretGroupView";
 import type { SecretValue } from "./SecretValue";
 import type { SecretsOutcome } from "./SecretsOutcome";
 import type { SessionQuery } from "./SessionQuery";
+import type { SessionTree } from "./SessionTree";
 import type { SessionView } from "./SessionView";
 import type { StopChat } from "./StopChat";
 import type { Submission } from "./Submission";
@@ -100,6 +107,10 @@ export interface Routes {
   unsubscribe: { method: "POST"; path: "/api/v1/ops/unsubscribe"; params: Record<string, never>; query: never; body: Unsubscribe; response: Unsubscribed };
   stop_chat: { method: "POST"; path: "/api/v1/ops/stop_chat"; params: Record<string, never>; query: never; body: StopChat; response: ChatsStopped };
   handover: { method: "POST"; path: "/api/v1/ops/handover"; params: Record<string, never>; query: never; body: Handover; response: HandoverRequested };
+  session_tree: { method: "POST"; path: "/api/v1/ops/session_tree"; params: Record<string, never>; query: never; body: GetSessionTree; response: SessionTree };
+  goto_entry: { method: "POST"; path: "/api/v1/ops/goto_entry"; params: Record<string, never>; query: never; body: GotoEntry; response: EntryDone };
+  label_entry: { method: "POST"; path: "/api/v1/ops/label_entry"; params: Record<string, never>; query: never; body: LabelEntry; response: EntryDone };
+  fork_chat: { method: "POST"; path: "/api/v1/ops/fork_chat"; params: Record<string, never>; query: never; body: ForkChat; response: ChatForked };
 }
 
 export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path: Routes[K]["path"] } } = {
@@ -141,4 +152,8 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   unsubscribe: { method: "POST", path: "/api/v1/ops/unsubscribe" },
   stop_chat: { method: "POST", path: "/api/v1/ops/stop_chat" },
   handover: { method: "POST", path: "/api/v1/ops/handover" },
+  session_tree: { method: "POST", path: "/api/v1/ops/session_tree" },
+  goto_entry: { method: "POST", path: "/api/v1/ops/goto_entry" },
+  label_entry: { method: "POST", path: "/api/v1/ops/label_entry" },
+  fork_chat: { method: "POST", path: "/api/v1/ops/fork_chat" },
 };
