@@ -21,7 +21,6 @@ declare module 'vue' {
     UButton: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/Button.vue')['default']
     UCard: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/Card.vue')['default']
     UChatMessage: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/ChatMessage.vue')['default']
-    UChatMessages: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/ChatMessages.vue')['default']
     UChatPrompt: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/ChatPrompt.vue')['default']
     UChatPromptSubmit: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/ChatPromptSubmit.vue')['default']
     UChatReasoning: typeof import('./node_modules/@nuxt/ui/dist/runtime/components/ChatReasoning.vue')['default']

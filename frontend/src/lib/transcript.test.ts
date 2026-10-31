@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Dialog, SessionItem } from "../generated";
-import { noLive, buildTranscript, toolRunning, type TranscriptInput } from "./transcript";
+import { noLive, buildTranscript, sessionTranscript, toolRunning, withInFlight, type TranscriptInput } from "./transcript";
 
 type Item<K extends SessionItem["kind"]> = Extract<SessionItem, { kind: K }>;
 
@@ -292,6 +292,19 @@ describe("buildTranscript", () => {
       parts: [{ type: "reasoning", text: "hmm", state: "streaming" }],
       metadata: { at: null, live: true, key: "reply:u1" },
     });
+  });
+
+  it("shares the session's messages with each streamed chunk, so only the changed one re-renders", () => {
+    const items = [user("u1", "go"), assistant("a1", { text: "step one" }), user("u2", "more"), assistant("a2", { text: "a" })];
+    const session = sessionTranscript(items, []);
+    const live = { ...noLive(), text: "b", ts: 7 };
+    const t = withInFlight(session, items, { queued: [], streaming: live, busy: true });
+    const next = withInFlight(session, items, { queued: [], streaming: { ...live, text: "bc" }, busy: true });
+    expect(next.messages.slice(0, 3)).toEqual(t.messages.slice(0, 3));
+    next.messages.slice(0, 3).forEach((m, i) => expect(m).toBe(session.messages[i]));
+    // The continued turn is a copy: the session's own stays as fetched.
+    expect(next.messages[3]).not.toBe(session.messages[3]);
+    expect(session.messages[3]?.parts).toEqual([{ type: "text", text: "a", state: "done" }]);
   });
 
   it("is submitted while the agent works without streaming", () => {

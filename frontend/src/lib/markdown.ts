@@ -15,6 +15,10 @@ const marked = new Marked({
   },
 });
 
+// One configuration for every sanitize (highlight.ts too): HTML only. Set once, as passing it to
+// each call parses it again every time, a large part of rendering a long chat.
+DOMPurify.setConfig({ USE_PROFILES: { html: true } });
+
 // Links open outside the app and never leak the referrer.
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.tagName === "A") {
@@ -26,11 +30,11 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
 /** Agent text is untrusted: render markdown, then sanitize. */
 export function renderMarkdown(src: string): string {
   const html = marked.parse(src) as string;
-  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+  return DOMPurify.sanitize(html);
 }
 
 /** Inline markdown (no paragraphs), e.g. for summary lines with `code`. */
 export function renderInline(src: string): string {
   const html = marked.parseInline(src) as string;
-  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+  return DOMPurify.sanitize(html);
 }

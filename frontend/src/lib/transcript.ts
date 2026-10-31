@@ -85,10 +85,8 @@ export type TranscriptMessage = UIMessage<MessageMeta, TranscriptData>;
 export type TranscriptPart = TranscriptMessage["parts"][number];
 export type ToolPart = Extract<TranscriptPart, { type: "dynamic-tool" }>;
 
-export interface TranscriptInput {
-  items: SessionItem[];
-  /** Dialogs to resolve the links of tool results against. */
-  dialogs: Dialog[];
+/** What is in flight besides the session. */
+export interface InFlight {
   /** The user's messages the hub holds until the agent's turn ends. */
   queued: QueuedMessage[];
   /** The assistant message streaming in. */
@@ -97,15 +95,25 @@ export interface TranscriptInput {
   busy: boolean;
 }
 
-export interface Transcript {
+export interface TranscriptInput extends InFlight {
+  items: SessionItem[];
+  /** Dialogs to resolve the links of tool results against. */
+  dialogs: Dialog[];
+}
+
+/** The messages of the session's own items. */
+export interface SessionTranscript {
   messages: TranscriptMessage[];
-  status: ChatStatus;
   /** Tool results linking a dialog that is not in `dialogs` (older than the recent list). */
   unresolvedLinks: number;
   /** The message showing each session entry (a search hit links an entry id). */
   messageOf: Record<string, string>;
   /** The tool call (`toolCallId`) a search ref leads to: `<entry>#<call>`, or a result's entry. */
   toolOf: Record<string, string>;
+}
+
+export interface Transcript extends SessionTranscript {
+  status: ChatStatus;
 }
 
 type ToolResult = Extract<SessionItem, { kind: "tool_result" }>;
@@ -128,8 +136,11 @@ export function toolPart(
 }
 
 export function buildTranscript(input: TranscriptInput): Transcript {
-  const { items, dialogs } = input;
+  return withInFlight(sessionTranscript(input.items, input.dialogs), input.items, input);
+}
 
+/** The messages of the session's items: they change only when the session is fetched again. */
+export function sessionTranscript(items: SessionItem[], dialogs: Dialog[]): SessionTranscript {
   const results = new Map<string, ToolResult>();
   for (const it of items) if (it.kind === "tool_result" && it.tool_call_id) results.set(it.tool_call_id, it);
   /** Results shown with their call (not on their own). */
@@ -273,7 +284,16 @@ export function buildTranscript(input: TranscriptInput): Transcript {
     // Every kind adds to the last message, except a result shown with its call (mapped above).
     if (!paired.has(it.id)) messageOf[it.id] = messages.at(-1)!.id;
   }
+  return { messages, unresolvedLinks, messageOf, toolOf };
+}
 
+/**
+ * The session's messages followed by what is in flight: the live tail and the queued messages.
+ * The session's message objects are shared (a continued turn is copied), so a streamed chunk
+ * re-renders only the message it changes, not the whole chat.
+ */
+export function withInFlight(session: SessionTranscript, items: SessionItem[], input: InFlight): Transcript {
+  const messages = [...session.messages];
   // The live tail, until the session has it: continue the running turn, or start one.
   const live = input.streaming;
   const streaming = (live.text !== "" || live.thinking !== "") && !persisted(items, live);
@@ -281,7 +301,8 @@ export function buildTranscript(input: TranscriptInput): Transcript {
     const last = messages.at(-1);
     let m: TranscriptMessage;
     if (last?.role === "assistant") {
-      m = last;
+      m = { ...last, parts: [...last.parts] };
+      messages[messages.length - 1] = m;
     } else {
       m = { id: "live", role: "assistant", parts: [], metadata: { at: null, key: `reply:${last?.id ?? ""}` } };
       messages.push(m);
@@ -302,7 +323,7 @@ export function buildTranscript(input: TranscriptInput): Transcript {
   }
 
   const status: ChatStatus = streaming && !live.ended ? "streaming" : input.busy ? "submitted" : "ready";
-  return { messages, status, unresolvedLinks, messageOf, toolOf };
+  return { ...session, messages, status };
 }
 
 /** Whether a tool call is still running (no result yet, while the agent works). */

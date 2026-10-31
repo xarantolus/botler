@@ -26,6 +26,8 @@ function onReasoningClick(e: MouseEvent, id: string) {
   <div class="flex min-w-0 flex-col gap-2.5">
     <!-- Keyed by position: a streamed message and its persisted copy have the same parts. -->
     <template v-for="(part, i) in message.parts" :key="i">
+      <!-- A closed thinking block is not mounted: each measures its scroll shadow, which lays out
+           the whole chat, so a long chat would open slowly. -->
       <UChatReasoning
         v-if="part.type === 'reasoning'"
         :text="part.text"
@@ -33,6 +35,7 @@ function onReasoningClick(e: MouseEvent, id: string) {
         :open="shell.open[`${key}:${i}`] ?? false"
         :auto-close-delay="shell.touched[`${key}:${i}`] ? 0 : 500"
         icon="i-lucide-brain"
+        unmount-on-hide
         :ui="{ body: 'max-h-72 text-sm' }"
         @update:open="(v: boolean) => (shell.open[`${key}:${i}`] = v)"
         @click.capture="(e: MouseEvent) => onReasoningClick(e, `${key}:${i}`)"

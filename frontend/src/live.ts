@@ -78,7 +78,8 @@ function setConnection(c: typeof state.connection) {
   startPolling();
 }
 
-function onPi(instance: string, ev: Record<string, unknown>) {
+/** One of pi's events for a chat (exported for tests). */
+export function onPi(instance: string, ev: Record<string, unknown>) {
   if (instance !== watched) return;
   const type = ev.type;
   const message = ev.message as { role?: unknown; timestamp?: unknown } | undefined;
@@ -94,8 +95,12 @@ function onPi(instance: string, ev: Record<string, unknown>) {
     else if (delta.type === "thinking_delta") state.streaming.thinking += delta.delta;
     return;
   }
-  // Kept until the refreshed session has the message (store.ts hands it over).
-  if (type === "message_end" && message?.role === "assistant") state.streaming.ended = true;
+  // Kept until the refreshed session has the message (store.ts hands it over), which it finds by
+  // the timestamp: take it from here when the chat was opened after the message started.
+  if (type === "message_end" && message?.role === "assistant") {
+    state.streaming.ended = true;
+    if (typeof message.timestamp === "number") state.streaming.ts ??= message.timestamp;
+  }
   if (
     type === "message_end" ||
     type === "agent_start" ||

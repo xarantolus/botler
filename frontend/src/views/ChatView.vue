@@ -9,7 +9,7 @@ import ChatTranscript from "../components/chat/ChatTranscript.vue";
 import { redirectChat } from "../lib/events";
 import { currentStatus, phaseBadge } from "../lib/phase";
 import { sessionOptions } from "../lib/sessions";
-import { buildTranscript, noLive } from "../lib/transcript";
+import { noLive, sessionTranscript, withInFlight } from "../lib/transcript";
 import { watch as watchLive } from "../live";
 import { shell } from "../shell";
 import {
@@ -86,11 +86,11 @@ function showSession(file: string) {
 
 const cost = computed(() => (name.value ? state.usage?.total_by_instance[name.value]?.cost_usd : undefined));
 
+// Two steps: a streamed chunk rebuilds only the second, which shares the first's messages.
+const sessionMessages = computed(() => (session.value ? sessionTranscript(session.value.items, allDialogs.value) : null));
 const transcript = computed(() =>
-  session.value
-    ? buildTranscript({
-        items: session.value.items,
-        dialogs: allDialogs.value,
+  session.value && sessionMessages.value
+    ? withInFlight(sessionMessages.value, session.value.items, {
         // An earlier session is history: nothing streams or waits in it.
         queued: earlier.value ? [] : session.value.queued,
         streaming: earlier.value ? noLive() : state.streaming,
