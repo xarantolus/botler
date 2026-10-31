@@ -8,17 +8,17 @@ from typing import Any
 from ._client import call
 
 
-def send_message(*, text: str, to: str, expect_reply_within: str | None = None, files: list[str] | None = None, reply_to: str | None = None, urgent: bool | None = None) -> dict[str, Any]:
+def send_message(*, to: str, text: str, urgent: bool | None = None, reply_to: str | None = None, expect_reply_within: str | None = None, files: list[str] | None = None) -> dict[str, Any]:
     """Send a message to an agent instance (e.g. `botler`). Replies come back to you as messages. Set `reply_to` to the event you are answering to keep the thread.
 
     Args:
         to: Recipient instance name.
+        urgent: Interrupt the recipient at its next turn instead of waiting until it is idle.
+        reply_to: Event id this answers, to keep the conversation thread.
         expect_reply_within: You need an answer within this long, e.g. `20m`: if the recipient neither replies to you nor ends its turn by then, you get a `reply.overdue` event.
         files: Files from your container to send along (any type): paths in your home, your monorepo clone or `/inbox/files`. The recipient finds them under `/inbox/files`.
-        reply_to: Event id this answers, to keep the conversation thread.
-        urgent: Interrupt the recipient at its next turn instead of waiting until it is idle.
     """
-    return call("send_message", {"text": text, "to": to, "expect_reply_within": expect_reply_within, "files": files, "reply_to": reply_to, "urgent": urgent})
+    return call("send_message", {"to": to, "text": text, "urgent": urgent, "reply_to": reply_to, "expect_reply_within": expect_reply_within, "files": files})
 
 
 def attach_files(*, files: list[str]) -> dict[str, Any]:
@@ -62,13 +62,13 @@ def list_timers() -> list[dict[str, Any]]:
     return call("list_timers", {})
 
 
-def set_chat_title(*, slug: str, title: str) -> dict[str, Any]:
+def set_chat_title(*, title: str, slug: str) -> dict[str, Any]:
     """Name your chat so the user can find it: a short title and a unique slug like `groundstation-antenna-fix` (lowercase words joined by dashes, project or topic first). Others can then message you by the slug. Do this after the first message of a new chat, and again if the topic changes.
 
     Args:
         slug: Lowercase words joined by dashes, 3 to 60 characters.
     """
-    return call("set_chat_title", {"slug": slug, "title": title})
+    return call("set_chat_title", {"title": title, "slug": slug})
 
 
 def spawn_agent(*, definition: str, task: str, env: Any = None) -> dict[str, Any]:
@@ -101,15 +101,15 @@ def preview_change(*, branch: str) -> dict[str, Any]:
     return call("preview_change", {"branch": branch})
 
 
-def trial_run(*, branch: str, job: str, minutes: int | None = None) -> dict[str, Any]:
+def trial_run(*, job: str, branch: str, minutes: int | None = None) -> dict[str, Any]:
     """Try a job or service from your pushed branch (agents/<you>/...) for a few minutes before proposing it: its definition and image from the branch, only secret groups you hold, its own empty `state`. emit_event, send_message and set_timer are recorded, not carried out (they return dry_run: true). When it exits or its minutes are up, a trial.finished event brings the outcome, logs tail and the events it would have emitted.
 
     Args:
-        branch: Your pushed branch, e.g. `agents/botler/mail-watch`.
         job: The job or service (`jobs/<job>/` on the branch).
+        branch: Your pushed branch, e.g. `agents/botler/mail-watch`.
         minutes: How long it may run, 1 to 10 (default 3). Then it is stopped: the normal end of a service.
     """
-    return call("trial_run", {"branch": branch, "job": job, "minutes": minutes})
+    return call("trial_run", {"job": job, "branch": branch, "minutes": minutes})
 
 
 def replay_event(*, event_id: str, job: str, branch: str | None = None, minutes: int | None = None) -> dict[str, Any]:
@@ -128,35 +128,35 @@ def get_proposal(*, id: str) -> dict[str, Any]:
     return call("get_proposal", {"id": id})
 
 
-def submit_review(*, notes: str, proposal_id: str, verdict: Any) -> dict[str, Any]:
+def submit_review(*, proposal_id: str, verdict: Any, notes: str) -> dict[str, Any]:
     """Your verdict on the proposal you were asked to review: approve, escalate (fine, but the user should look) or reject, with notes for a busy reader."""
-    return call("submit_review", {"notes": notes, "proposal_id": proposal_id, "verdict": verdict})
+    return call("submit_review", {"proposal_id": proposal_id, "verdict": verdict, "notes": notes})
 
 
-def request_secrets(*, group: str, reason: str, add: list[Any] | None = None, class_: Any = None, description: str | None = None, fill: list[str] | None = None, remove: list[str] | None = None) -> dict[str, Any]:
+def request_secrets(*, group: str, reason: str, description: str | None = None, class_: Any = None, add: list[Any] | None = None, fill: list[str] | None = None, remove: list[str] | None = None) -> dict[str, Any]:
     """Ask the user for secrets, asynchronously: create a group, add fields to one, re-enter values (`fill`) or remove fields. The user gets a form; you get a request id now and a `dialog.answered` event later saying what was provided (never the values). Do not continue work that needs the secrets until that event arrives. Using a group in a container still needs a grant: `request_access("secret:<group>")` for this chat, or `secrets = ["<group>"]` in a definition, proposed as a change.
 
     Args:
         group: The group (existing, or new: then `description` and `add` are required).
         reason: Why you need this, shown to the user.
-        add: Fields to add (the user enters their values).
-        class_: For a new group: `container` (default) or `hub` (never enters a container).
         description: For a new group: what it is for.
+        class_: For a new group: `container` (default) or `hub` (never enters a container).
+        add: Fields to add (the user enters their values).
         fill: Existing fields whose values the user should (re-)enter.
         remove: Fields to remove from the group (their values are deleted).
     """
-    return call("request_secrets", {"group": group, "reason": reason, "add": add, "class": class_, "description": description, "fill": fill, "remove": remove})
+    return call("request_secrets", {"group": group, "reason": reason, "description": description, "class": class_, "add": add, "fill": fill, "remove": remove})
 
 
-def request_access(*, reason: str, resource: str, mode: Any = None) -> dict[str, Any]:
+def request_access(*, resource: str, reason: str, mode: Any = None) -> dict[str, Any]:
     """Ask for a resource your definition does not give you, for this chat: `secret:<group>`, `service:<name>`, `mount:<name>` or `event:<type>`. Policy may grant it at once; otherwise the user decides (allow for this chat, always allow, or deny) and the answer wakes you as a `dialog.answered` event, with the grant applied to your container. Memory notes say which group fits which work.
 
     Args:
-        reason: Why, for the user deciding.
         resource: What you need, as `<kind>:<name>`: `secret:<group>` (a secret group's values in your container), `service:<name>` (a service's MCP server), `mount:<name>` (a network share) or `event:<type>` (subscribing to a restricted event type).
+        reason: Why, for the user deciding.
         mode: Mounts: `rw` to write (default `ro`).
     """
-    return call("request_access", {"reason": reason, "resource": resource, "mode": mode})
+    return call("request_access", {"resource": resource, "reason": reason, "mode": mode})
 
 
 def revoke_access(*, grant: str) -> dict[str, Any]:
@@ -191,26 +191,26 @@ def cancel_request(*, id: str, reason: str) -> dict[str, Any]:
     return call("cancel_request", {"id": id, "reason": reason})
 
 
-def handover_ready(*, summary: str, handoff: Any = None, outstanding: list[str] | None = None, state: list[str] | None = None) -> dict[str, Any]:
+def handover_ready(*, summary: str, outstanding: list[str] | None = None, state: list[str] | None = None, handoff: Any = None) -> dict[str, Any]:
     """Hand over, only after an archive.requested or handover.requested event: what you did, what is outstanding, where your state lives, and (when archiving) optionally who should continue. For a handover to yourself you continue on a fresh session that starts from this report.
 
     Args:
         summary: Everything you did in this chat, for someone who has not read it.
-        handoff: Who should continue the outstanding work, if anyone.
         outstanding: Work you did not finish.
         state: Where your state lives: branches, files, memory notes, external systems.
+        handoff: Who should continue the outstanding work, if anyone.
     """
-    return call("handover_ready", {"summary": summary, "handoff": handoff, "outstanding": outstanding, "state": state})
+    return call("handover_ready", {"summary": summary, "outstanding": outstanding, "state": state, "handoff": handoff})
 
 
-def handover(*, chat: str, reason: str | None = None, to: str | None = None) -> dict[str, Any]:
+def handover(*, chat: str, to: str | None = None, reason: str | None = None) -> dict[str, Any]:
     """Ask a chat to hand over now: to a fresh session of itself (`to = self`, the default) or to another chat or agent (then it is archived). The chat writes its report with `handover_ready`.
 
     Args:
         chat: The chat (name or slug).
         to: `self` (default): continue on a fresh session seeded with its report. Otherwise a chat or an agent definition that takes over; the chat is then archived.
     """
-    return call("handover", {"chat": chat, "reason": reason, "to": to})
+    return call("handover", {"chat": chat, "to": to, "reason": reason})
 
 
 def session_tree(*, chat: str) -> dict[str, Any]:
@@ -265,16 +265,16 @@ def list_event_types(*, query: str | None = None) -> dict[str, Any]:
     return call("list_event_types", {"query": query})
 
 
-def subscribe(*, type: str, filter: dict[str, Any] | None = None, note: str | None = None, wake: bool | None = None) -> dict[str, Any]:
+def subscribe(*, type: str, filter: dict[str, Any] | None = None, wake: bool | None = None, note: str | None = None) -> dict[str, Any]:
     """Get events of a type (or glob like `mail.*`) delivered to this chat, optionally only those whose payload fields equal `filter`. They wake you even while you sleep (`wake=false`: quiet notes instead). Lasts until `unsubscribe`; find types with `list_event_types` or `search(sources=["event_type"])`. Restricted types need `request_access("event:<type>")` first.
 
     Args:
         type: Event type (`mail.received`) or glob (`mail.*`); see `list_event_types`.
         filter: Payload fields that must have these values, e.g. `{"folder": "INBOX"}`.
-        note: Why you subscribed; shown with every delivery.
         wake: `false`: deliver as a quiet note that waits for whatever wakes you next (default `true`: each event wakes you).
+        note: Why you subscribed; shown with every delivery.
     """
-    return call("subscribe", {"type": type, "filter": filter, "note": note, "wake": wake})
+    return call("subscribe", {"type": type, "filter": filter, "wake": wake, "note": note})
 
 
 def unsubscribe(*, id: str) -> dict[str, Any]:
@@ -291,39 +291,39 @@ def list_subscriptions() -> dict[str, Any]:
     return call("list_subscriptions", {})
 
 
-def read_session(*, instance: str, around: str | None = None, last: int | None = None, n: int | None = None) -> dict[str, Any]:
+def read_session(*, instance: str, last: int | None = None, around: str | None = None, n: int | None = None) -> dict[str, Any]:
     """Read the recent messages of a session: your own, or another instance's (what it has been doing) if you may. `around` (an entry id from `search`) reads the messages around that entry instead.
 
     Args:
-        around: An entry id (from `search`): read the messages around it instead of the latest.
         last: How many of the most recent messages (default 20, max 200).
+        around: An entry id (from `search`): read the messages around it instead of the latest.
         n: With `around`: how many messages before and after it (default 5, max 50).
     """
-    return call("read_session", {"instance": instance, "around": around, "last": last, "n": n})
+    return call("read_session", {"instance": instance, "last": last, "around": around, "n": n})
 
 
-def search(*, query: str, limit: int | None = None, raw: bool | None = None, scope: Any = None, sources: list[Any] | None = None) -> dict[str, Any]:
+def search(*, query: str, sources: list[Any] | None = None, scope: Any = None, limit: int | None = None, raw: bool | None = None) -> dict[str, Any]:
     """Full-text search over sessions, memory notes, the event journal, the monorepo and event types (`event_type`: what can happen, who emits it), best matches first. `scope="self"` searches only your own conversation (including what was compacted away) and your memory. Session results: read the context with `read_session(instance=owner, around=ref)`.
 
     Args:
         query: Words to find; a result contains all of them (stemmed, so `deploy` finds `deployed`).
+        sources: Restrict to these sources (`session`, `memory`, `event`, `repo`, `event_type`); default all.
+        scope: `self` searches only your own conversation (also from before compaction) and your memory.
         limit: How many results (default 10, max 30).
         raw: Treat `query` as SQLite FTS5 syntax: `"exact phrase"`, `a OR b`, `a NOT b`, `prefix*`, `NEAR(a b)`.
-        scope: `self` searches only your own conversation (also from before compaction) and your memory.
-        sources: Restrict to these sources (`session`, `memory`, `event`, `repo`, `event_type`); default all.
     """
-    return call("search", {"query": query, "limit": limit, "raw": raw, "scope": scope, "sources": sources})
+    return call("search", {"query": query, "sources": sources, "scope": scope, "limit": limit, "raw": raw})
 
 
-def memory_write(*, content: str, path: str, expected_sha256: str | None = None) -> dict[str, Any]:
+def memory_write(*, path: str, content: str, expected_sha256: str | None = None) -> dict[str, Any]:
     """Write a memory file (Markdown) in one of your namespaces: `agents/<definition>/...` (mounted at /memory/self), `projects/<home>/...` (/memory/project) or `user/...` (/memory/user). Pass the sha256 of the version you read as `expected_sha256` (`sha256sum`), or omit it to create a new file. If someone changed it meanwhile you get a conflict with the current content: merge and write again.
 
     Args:
-        content: The whole new content (Markdown).
         path: e.g. `agents/dev/github.md`, `projects/groundstation/INDEX.md`, `user/preferences.md`.
+        content: The whole new content (Markdown).
         expected_sha256: sha256 of the version you are replacing (`sha256sum <file>`); omit to create a new file.
     """
-    return call("memory_write", {"content": content, "path": path, "expected_sha256": expected_sha256})
+    return call("memory_write", {"path": path, "content": content, "expected_sha256": expected_sha256})
 
 
 def memory_append(*, path: str, text: str) -> dict[str, Any]:
@@ -335,13 +335,13 @@ def memory_append(*, path: str, text: str) -> dict[str, Any]:
     return call("memory_append", {"path": path, "text": text})
 
 
-def memory_delete(*, expected_sha256: str, path: str) -> dict[str, Any]:
+def memory_delete(*, path: str, expected_sha256: str) -> dict[str, Any]:
     """Delete a memory file; `expected_sha256` is the sha256 of the version you are deleting.
 
     Args:
         expected_sha256: sha256 of the version you are deleting.
     """
-    return call("memory_delete", {"expected_sha256": expected_sha256, "path": path})
+    return call("memory_delete", {"path": path, "expected_sha256": expected_sha256})
 
 
 def memory_read(*, path: str) -> dict[str, Any]:
@@ -363,46 +363,46 @@ def memory_history(*, path: str) -> list[dict[str, Any]]:
     return call("memory_history", {"path": path})
 
 
-def get_events(*, correlation: str | None = None, limit: int | None = None, type: str | None = None) -> list[dict[str, Any]]:
+def get_events(*, type: str | None = None, correlation: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
     """Read the event journal, newest first: filter by type (`mail.*`) or conversation (`correlation`)."""
-    return call("get_events", {"correlation": correlation, "limit": limit, "type": type})
+    return call("get_events", {"type": type, "correlation": correlation, "limit": limit})
 
 
-def ask_user(*, question: str, about: list[str] | None = None, detail: str | None = None, expires_in: str | None = None, form: Any = None, options: list[str] | None = None, priority: str | None = None) -> dict[str, Any]:
+def ask_user(*, question: str, options: list[str] | None = None, detail: str | None = None, about: list[str] | None = None, priority: str | None = None, expires_in: str | None = None, form: Any = None) -> dict[str, Any]:
     """Ask the user a question and get the answer later as a `dialog.answered` event. `options` are the allowed answers; `form` (a JSON Schema object) asks for several typed fields at once (choices, multi-select, numbers, dates, files) and the answer's `values` match it; `about` lists objects (e.g. `proposal:<id>`) whose change withdraws the question.
 
     Args:
-        about: Objects whose change withdraws the question, e.g. `proposal:<id>`.
+        options: Allowed answers, e.g. ["yes", "no"]. Empty means free text.
         detail: Background the user needs to answer.
+        about: Objects whose change withdraws the question, e.g. `proposal:<id>`.
+        priority: `blocking` (you cannot continue; notifies the user), `normal`, or `info`.
         expires_in: Withdraw the question after this long, e.g. `1d`.
         form: A form instead of free text or `options`: a JSON Schema object whose `properties` are the fields (`title`, `description`, `default`, `required`). Strings (with `enum`, or `format` date / date-time / time / file, or `"x-multiline": true`), numbers, integers, booleans, and arrays of `enum` strings (multi-select) or of files. Never ask for secrets in a form; use `request_secrets`.
-        options: Allowed answers, e.g. ["yes", "no"]. Empty means free text.
-        priority: `blocking` (you cannot continue; notifies the user), `normal`, or `info`.
     """
-    return call("ask_user", {"question": question, "about": about, "detail": detail, "expires_in": expires_in, "form": form, "options": options, "priority": priority})
+    return call("ask_user", {"question": question, "options": options, "detail": detail, "about": about, "priority": priority, "expires_in": expires_in, "form": form})
 
 
-def request_visit(*, host_port: int, instructions: str, title: str, expires_in: str | None = None, path: str | None = None) -> dict[str, Any]:
+def request_visit(*, host_port: int, title: str, instructions: str, path: str | None = None, expires_in: str | None = None) -> dict[str, Any]:
     """Ask the user to open a page of a service in their browser (e.g. to log in) and tell you when done. `host_port` must be a port published by a service this chat may use. The answer (`done` or `cancel`) arrives as a `dialog.answered` event.
 
     Args:
         host_port: A host port published by a service this chat may use.
-        instructions: What the user should do there, step by step.
         title: What the visit is for, e.g. "Log in to Home Assistant".
-        expires_in: Withdraw the request after this long, e.g. `1d`.
+        instructions: What the user should do there, step by step.
         path: Path to open, e.g. `/login`. Defaults to `/`.
+        expires_in: Withdraw the request after this long, e.g. `1d`.
     """
-    return call("request_visit", {"host_port": host_port, "instructions": instructions, "title": title, "expires_in": expires_in, "path": path})
+    return call("request_visit", {"host_port": host_port, "title": title, "instructions": instructions, "path": path, "expires_in": expires_in})
 
 
-def invoke_action(*, args: Any, name: str) -> dict[str, Any]:
+def invoke_action(*, name: str, args: Any) -> dict[str, Any]:
     """Run an approval-gated action (something that reaches other people or uses hub-held secrets) with arguments. The user approves exactly these arguments; the outcome arrives as an `action.result` event.
 
     Args:
-        args: Its arguments, matching its `args` schema. The user approves exactly these.
         name: The action (`jobs/<name>/job.toml` with `lifetime = "action"`).
+        args: Its arguments, matching its `args` schema. The user approves exactly these.
     """
-    return call("invoke_action", {"args": args, "name": name})
+    return call("invoke_action", {"name": name, "args": args})
 
 
 def get_run_logs(*, run_id: str, tail: int | None = None) -> dict[str, Any]:

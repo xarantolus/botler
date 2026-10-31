@@ -98,11 +98,15 @@ pub fn with_paths(values: &Value, map: &[(String, String)]) -> Value {
 /// The answer's one line for the transcript: "Folder: INBOX · Every: 15".
 pub fn summary(schema: &Value, values: &Value) -> String {
     let props = schema.get("properties").and_then(Value::as_object);
-    let line = values
-        .as_object()
+    let empty = Map::new();
+    let given = values.as_object().unwrap_or(&empty);
+    // In the form's order, then anything the schema does not name.
+    let keys = props
         .into_iter()
-        .flatten()
-        .filter(|(_, v)| !v.is_null())
+        .flat_map(|p| p.keys())
+        .chain(given.keys().filter(|k| !props.is_some_and(|p| p.contains_key(*k))));
+    let line = keys
+        .filter_map(|k| given.get(k).filter(|v| !v.is_null()).map(|v| (k, v)))
         .map(|(k, v)| {
             let title = props
                 .and_then(|p| p.get(k))
@@ -160,6 +164,6 @@ mod tests {
         assert_eq!(files(&f, &v), ["u1/scan.pdf"]);
         let p = with_paths(&v, &[("u1/scan.pdf".into(), "/inbox/files/u1/scan.pdf".into())]);
         assert_eq!(p["scan"], "/inbox/files/u1/scan.pdf");
-        assert_eq!(summary(&f, &v), "days: mon · every: 15 · Folder: INBOX · scan: scan.pdf");
+        assert_eq!(summary(&f, &v), "Folder: INBOX · every: 15 · days: mon · scan: scan.pdf");
     }
 }

@@ -28,20 +28,37 @@ the token the job cannot start, and the failure goes to `triage`, not to you.
 
 ## GitHub (optional: private repos, pushes, PRs)
 
-Public repos clone without it. For more, the job needs the group `github` (`GITHUB_TOKEN`); git
-and the `gh` CLI in the session then use it. Look in memory first. Otherwise:
+Public repos clone without either. There are two ways in, and both can be set up. Each is a
+group the job only gets once a proposal adds it to `secrets` in `jobs/claude-session/job.toml`.
+Only add a group after its value is entered: a group without a value stops the job from starting.
+Look in memory first. Note there which way the sessions have, and for which repositories.
+
+### Over SSH (`github-ssh`)
+
+The key arrives at `/home/agent/.ssh/id_ed25519`. The job points git at it (`GIT_SSH_COMMAND`),
+so sessions clone and push private repos over SSH.
+
+> Generate a key for botler (or reuse an existing one):
+> `ssh-keygen -t ed25519 -C botler-github -f ~/.ssh/botler_github`. Add the `.pub` to GitHub →
+> Settings → SSH and GPG keys → New SSH key, then paste the private key file's contents into the
+> form I'm opening.
+
+Then call `request_secrets(group="github-ssh", fill=["GITHUB_SSH_PRIVATE_KEY"], reason="Clone and
+push GitHub repos from Claude Code sessions")`. Once it is provided, propose
+`secrets = ["claude-code", "github-ssh"]`.
+
+### Over HTTPS with a token (`github`, `GITHUB_TOKEN`)
+
+Wider than SSH: git and the `gh` CLI in the session use the token, so pushes and PRs are easy.
 
 1. Tell the user to create a fine-grained personal access token on github.com (Settings >
    Developer settings > Fine-grained tokens) for only the repositories Claude should work on, with
    **Contents** and **Pull requests** set to read and write. Then `request_secrets(group="github",
    fill=["GITHUB_TOKEN"], reason="Let Claude Code sessions push and open PRs")`.
-2. When `dialog.answered` says it was provided, propose adding the group to the job: in
-   `jobs/claude-session/job.toml`, `secrets = ["claude-code", "github"]`. Only add it after the
-   token is entered: a group without a value stops the job from starting. Note in memory that
-   sessions have GitHub access, and which repositories.
+2. When `dialog.answered` says it was provided, propose adding `"github"` to the job's `secrets`.
 
-Every session then holds the token, so keep it narrow. To remove access, propose taking the group
-out again.
+Every session then holds the key or token, so keep it narrow. To remove access, propose taking
+the group out again.
 
 ## Start a session
 
@@ -53,7 +70,10 @@ emit_event(type="claude_session.requested", payload={
 ```
 
 - **The task:** a complete brief, since Claude sees nothing else. Say what done looks like.
-- **`repo`:** only for a new session. Private repos need GitHub access (above).
+- **`repo`:** only for a new session. Private repos need GitHub access (above): with the
+  `github-ssh` key use an SSH URL (`git@github.com:me/project.git`); with `GITHUB_TOKEN` an
+  `https://` URL works too and `gh` can open PRs. With neither, an `https://` URL is cloned
+  anonymously and must be public.
 - **`notify`:** the chat that gets the messages. It defaults to you; set `"botler"` when you are a
   short-lived chat and the session will outlast you.
 

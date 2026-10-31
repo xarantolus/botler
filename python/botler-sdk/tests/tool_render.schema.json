@@ -7,17 +7,11 @@
       "description": "Link cards: the title linking to the url, with a snippet.",
       "type": "object",
       "properties": {
-        "items": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "kind": {
           "type": "string",
           "const": "links"
         },
-        "snippet": {
+        "items": {
           "type": [
             "string",
             "null"
@@ -34,6 +28,12 @@
             "string",
             "null"
           ]
+        },
+        "snippet": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
@@ -45,6 +45,16 @@
       "description": "A table of the list's objects with these columns (all keys when absent).",
       "type": "object",
       "properties": {
+        "kind": {
+          "type": "string",
+          "const": "table"
+        },
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "columns": {
           "type": [
             "array",
@@ -53,16 +63,6 @@
           "items": {
             "type": "string"
           }
-        },
-        "items": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "kind": {
-          "type": "string",
-          "const": "table"
         }
       },
       "additionalProperties": false,
@@ -74,15 +74,15 @@
       "description": "Sanitized markdown: the result string, or its `field`.",
       "type": "object",
       "properties": {
+        "kind": {
+          "type": "string",
+          "const": "markdown"
+        },
         "field": {
           "type": [
             "string",
             "null"
           ]
-        },
-        "kind": {
-          "type": "string",
-          "const": "markdown"
         }
       },
       "additionalProperties": false,
@@ -99,24 +99,24 @@
           "const": "keyvalue"
         }
       },
-      "additionalProperties": false,
       "required": [
         "kind"
-      ]
+      ],
+      "additionalProperties": false
     },
     {
       "description": "An image: the result (a URL, path or data URI), or its `field`.",
       "type": "object",
       "properties": {
+        "kind": {
+          "type": "string",
+          "const": "image"
+        },
         "field": {
           "type": [
             "string",
             "null"
           ]
-        },
-        "kind": {
-          "type": "string",
-          "const": "image"
         }
       },
       "additionalProperties": false,
@@ -133,10 +133,10 @@
           "const": "json"
         }
       },
-      "additionalProperties": false,
       "required": [
         "kind"
-      ]
+      ],
+      "additionalProperties": false
     }
   ]
 }

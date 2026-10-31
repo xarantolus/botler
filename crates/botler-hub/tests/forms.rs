@@ -71,7 +71,7 @@ async fn a_form_question_takes_typed_values_and_files() {
 
     let q = EventQuery { kind: Some(kinds::DIALOG_ANSWERED.into()), limit: 5, ..Default::default() };
     let ev = &e.hub.store.events(&q).await.unwrap()[0];
-    assert_eq!(ev.payload["answer"], "every: 15 · folder: Archive · sample: mail.eml".replace("every", "Minutes"));
+    assert_eq!(ev.payload["answer"], "folder: Archive · Minutes: 15 · sample: mail.eml", "in the form's order");
     assert_eq!(ev.payload["values"]["every"], 15);
     let inbox = format!("/inbox/files/{upload}");
     assert_eq!(ev.payload["values"]["sample"], inbox.as_str());

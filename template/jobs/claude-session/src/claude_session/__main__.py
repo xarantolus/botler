@@ -15,6 +15,10 @@ Each session works in /data/sessions/<id> (with `repo` cloned into it); Claude C
 kept in `state`, emitted as `claude_session.finished` and messaged to the chat in `notify` of the
 latest message. Claude's own failures (expired token, usage limit) are reported there and end the
 run successfully: there is nothing for `triage` to fix. A run that cannot report fails.
+
+GitHub access comes from the environment: if the `github-ssh` group delivered a key (it is in the
+job's `secrets`), git is pointed at it (`GIT_SSH_COMMAND`), so a session can clone and push private
+repos over SSH; if the `github` group's token is set, git and `gh` use it for HTTPS.
 """
 
 import fcntl
@@ -48,6 +52,15 @@ IDLE_SECONDS = 30 * 60
 POLL_SECONDS = 3
 MAX_RESULT_CHARS = 3000
 IDLE_MINUTES = IDLE_SECONDS // 60
+# The `github-ssh` group delivers its private key here (job.toml, skill `claude-code`).
+SSH_KEY = Path("/home/agent/.ssh/id_ed25519")
+# Commits made in a session still need an identity; the environment can override these.
+GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "botler",
+    "GIT_AUTHOR_EMAIL": "botler@botler.invalid",
+    "GIT_COMMITTER_NAME": "botler",
+    "GIT_COMMITTER_EMAIL": "botler@botler.invalid",
+}
 
 SYSTEM_PROMPT = """You run unattended in a container for the user, started through their assistant \
 Botler; nobody watches this session. The tool `message_user` sends the user a short message right \
@@ -120,9 +133,11 @@ def mcp_config(session_id: str, notify_file: Path, environ: Mapping[str, str]) -
 
 
 def claude_env(environ: Mapping[str, str], home: Path) -> dict[str, str]:
-    """Claude's environment. With GITHUB_TOKEN, git asks a credential helper that reads the variable
-    for github.com, so the token never lands in a repo's config, a remote URL or a log."""
-    env = {**environ, "HOME": str(home)}
+    """Claude's environment: git gets `git_env` (no prompts, a commit identity, the `github-ssh`
+    key when it was delivered) plus Claude Code's home. With GITHUB_TOKEN, git asks a credential
+    helper that reads the variable for github.com, so the token never lands in a repo's config, a
+    remote URL or a log."""
+    env = {**git_env(environ), "HOME": str(home)}
     if environ.get("GITHUB_TOKEN"):
         helper = (
             '!f() { test "$1" = get && '
@@ -189,6 +204,31 @@ class Hub:
     # (chat, prompt, after) -> timer id; cancel takes the id.
     set_timer: Callable[[str, str, str], str]
     cancel_timer: Callable[[str], object]
+
+
+def usable_ssh_key(key: Path = SSH_KEY) -> bool:
+    """True when the GitHub key was delivered; tighten its permissions so ssh will use it."""
+    if not key.is_file():
+        return False
+    for path, mode in ((key.parent, 0o700), (key, 0o600)):
+        try:
+            path.chmod(mode)
+        except OSError:
+            pass  # a read-only delivery still works if its permissions are already strict
+    return True
+
+
+def git_env(environ: Mapping[str, str], key: Path = SSH_KEY) -> dict[str, str]:
+    """Environment for git and Claude: no interactive prompts, a commit identity, and GitHub SSH
+    when the `github-ssh` group delivered a key (accepting a new host key on first use)."""
+    env = dict(environ)
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    for name, value in GIT_IDENTITY.items():
+        env.setdefault(name, value)
+    if usable_ssh_key(key):
+        # accept-new: a host's key is trusted the first time and a changed one is refused.
+        env["GIT_SSH_COMMAND"] = f"ssh -i {key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+    return env
 
 
 def report(outcome: Outcome, task: str, notify: str, hub: Hub, environ: Mapping[str, str]) -> None:

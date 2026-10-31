@@ -27,7 +27,7 @@ class = "container"
 name = "IMAP_PASS"
 
 [[group]]
-name = "github-ssh"
+name = "forge-ssh"
 class = "container"
 [[group.secret]]
 name = "GITHUB_SSH_KEY"
@@ -347,14 +347,10 @@ async fn event_types_list_producers_and_subscribers_and_are_searchable() {
 async fn a_granted_ssh_key_lands_private_in_a_private_ssh_dir() {
     use std::os::unix::fs::PermissionsExt;
     let e = setup().await;
-    let out = op(
-        &e,
-        &user(),
-        "spawn_agent",
-        json!({"definition": "dev", "task": "push", "env": {"secrets": ["github-ssh"]}}),
-    )
-    .await
-    .unwrap();
+    let out =
+        op(&e, &user(), "spawn_agent", json!({"definition": "dev", "task": "push", "env": {"secrets": ["forge-ssh"]}}))
+            .await
+            .unwrap();
     let dev = out["instance"].as_str().unwrap().to_string();
     run(&e).await;
     let spec = &e.fake.containers()[&agents::container_name(&e.hub, &dev)].spec;

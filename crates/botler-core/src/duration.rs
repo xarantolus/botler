@@ -29,9 +29,24 @@ impl FromStr for HumanDuration {
     }
 }
 
+/// Compact, as people write them in botler.toml: `30d`, `1h30m`, `90s` (sub-second rest in
+/// humantime's form).
 impl fmt::Display for HumanDuration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", humantime::format_duration(self.0))
+        if self.0.subsec_nanos() != 0 {
+            return write!(f, "{}", humantime::format_duration(self.0));
+        }
+        let mut rest = self.0.as_secs();
+        if rest == 0 {
+            return f.write_str("0s");
+        }
+        for (unit, secs) in [("d", 86_400), ("h", 3600), ("m", 60), ("s", 1)] {
+            if rest >= secs {
+                write!(f, "{}{unit}", rest / secs)?;
+                rest %= secs;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -63,6 +78,15 @@ impl JsonSchema for HumanDuration {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compact_display_round_trips() {
+        for (text, shown) in [("30d", "30d"), ("90m", "1h30m"), ("900s", "15m"), ("0s", "0s"), ("1day 2h", "1d2h")] {
+            let d: super::HumanDuration = text.parse().unwrap();
+            assert_eq!(d.to_string(), shown);
+            assert_eq!(shown.parse::<super::HumanDuration>().unwrap(), d);
+        }
+    }
+
     use super::*;
 
     #[test]

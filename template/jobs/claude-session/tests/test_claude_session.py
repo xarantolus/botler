@@ -88,6 +88,36 @@ def test_github_token_reaches_git_through_a_credential_helper_only(tmp_path: Pat
     assert "username=x-access-token\npassword=ghp_secret\n" in fill.stdout
 
 
+def test_claude_env_carries_the_git_defaults(tmp_path: Path) -> None:
+    env = job.claude_env({"PATH": os.environ["PATH"]}, tmp_path / "home")
+    assert env["HOME"] == str(tmp_path / "home")
+    assert env["GIT_TERMINAL_PROMPT"] == "0" and env["GIT_AUTHOR_EMAIL"] == "botler@botler.invalid"
+
+
+def test_git_env_uses_the_delivered_github_key(tmp_path: Path) -> None:
+    key = tmp_path / "id_ed25519"
+    key.write_text("PRIVATE KEY")
+    env = job.git_env({"KEEP": "yes"}, key)
+    assert env["KEEP"] == "yes" and env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GIT_SSH_COMMAND"] == (
+        f"ssh -i {key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+    )
+    assert env["GIT_AUTHOR_NAME"] == "botler"
+    assert env["GIT_COMMITTER_EMAIL"] == "botler@botler.invalid"
+    assert key.stat().st_mode & 0o777 == 0o600 and key.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_git_env_without_a_key_still_sets_defaults() -> None:
+    env = job.git_env({}, Path("/nonexistent/id_ed25519"))
+    assert "GIT_SSH_COMMAND" not in env
+    assert env["GIT_TERMINAL_PROMPT"] == "0" and env["GIT_AUTHOR_EMAIL"] == "botler@botler.invalid"
+
+
+def test_git_env_keeps_the_environment_it_was_given() -> None:
+    env = job.git_env({"GIT_AUTHOR_NAME": "Ada", "GIT_TERMINAL_PROMPT": "1"}, Path("/nonexistent/k"))
+    assert env["GIT_AUTHOR_NAME"] == "Ada" and env["GIT_TERMINAL_PROMPT"] == "1"
+
+
 def test_outcome_reads_a_result_message() -> None:
     msg = {
         "type": "result",
