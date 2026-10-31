@@ -15,8 +15,6 @@ const props = defineProps<{
   status: ChatStatus;
   /** Why queued messages wait (shown under them). */
   queuedNote: string;
-  /** Start at the end (not when a link points at a message further up). */
-  startAtEnd: boolean;
   /** The chat (to refresh after taking a message back). */
   instance: string;
 }>();
@@ -45,30 +43,16 @@ function sideProps(m: TranscriptMessage) {
   <UChatMessages
     :messages="props.messages"
     :status="props.status"
-    should-auto-scroll
-    :should-scroll-to-bottom="props.startAtEnd"
+    :should-scroll-to-bottom="false"
+    :auto-scroll="false"
     :ui="{ root: 'gap-5 px-0', viewport: 'hidden' }"
   >
-    <!-- The kit places the scroll-down button at 86% of the panel's height, which drifts with the
-         zoom level and the composer's height; it sits just above the composer instead (ChatView). -->
-    <template #viewport="{ onClick }">
-      <Teleport defer to="#chat-composer">
-        <UButton
-          icon="i-lucide-arrow-down"
-          color="neutral"
-          variant="outline"
-          size="sm"
-          aria-label="Scroll to the latest message"
-          class="absolute -top-10 left-1/2 -translate-x-1/2 rounded-full bg-default shadow-sm"
-          @click="onClick"
-        />
-      </Teleport>
-    </template>
-    <template #default="{ registerMessageRef }">
+    <!-- ChatView does all the scrolling, and its scroll-down button. Messages are not registered
+         with the kit: it would scroll to the last user message whenever the agent gets busy. -->
+    <template #default>
       <UChatMessage
         v-for="m in props.messages"
         :key="m.metadata?.key ?? m.id"
-        :ref="(el) => registerMessageRef(m.id, el as never)"
         v-bind="{ ...m, ...sideProps(m) }"
         :data-delivery="m.metadata?.delivery ?? undefined"
         :data-message="m.id"

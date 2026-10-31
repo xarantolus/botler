@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // One chat: its title bar and banners, the transcript, and the composer.
-import { computed, nextTick, onBeforeUnmount, useTemplateRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ChatBanners from "../components/chat/ChatBanners.vue";
 import ChatComposer from "../components/chat/ChatComposer.vue";
@@ -103,42 +103,56 @@ const queuedNote = computed(() =>
 );
 
 // ---- scrolling ----
+// Only this follows new content, and only while the view is at the end: when the transcript
+// grows, an end stays the end; anywhere else the position stays put (the browser's scroll
+// anchoring holds it when content above changes). The kit's own scrolling is off (ChatTranscript).
 const body = useTemplateRef<HTMLElement>("body");
 /** The panel body, which scrolls the transcript. */
 const scroller = () => body.value?.closest<HTMLElement>("[data-slot=body]") ?? null;
-let atBottom = true;
+/** Within this of the end counts as at the end. */
+const NEAR_END = 48;
+const atBottom = ref(true);
+/** The transcript grew while the user read further up. */
+const unseen = ref(false);
 function onScroll() {
   const el = scroller();
-  if (el) atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  if (!el) return;
+  atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_END;
+  if (atBottom.value) unseen.value = false;
 }
 watch(body, (el, _, onCleanup) => {
   const s = el?.closest<HTMLElement>("[data-slot=body]");
-  if (!s) return;
+  if (!el || !s) return;
+  let height = 0;
+  const grown = new ResizeObserver(() => {
+    if (atBottom.value) s.scrollTop = s.scrollHeight;
+    else if (s.scrollHeight > height) unseen.value = true;
+    height = s.scrollHeight;
+  });
+  grown.observe(el);
   s.addEventListener("scroll", onScroll, { passive: true });
-  onCleanup(() => s.removeEventListener("scroll", onScroll));
+  onCleanup(() => {
+    grown.disconnect();
+    s.removeEventListener("scroll", onScroll);
+  });
 });
-async function toBottom(force = false) {
-  if (!force && !atBottom) return;
+async function toBottom(smooth = false) {
   await nextTick();
-  const el = scroller();
-  if (el) el.scrollTop = el.scrollHeight;
-  atBottom = true;
+  scroller()?.scrollTo({ top: scroller()!.scrollHeight, behavior: smooth ? "smooth" : "instant" });
+  atBottom.value = true;
+  unseen.value = false;
 }
 /** A link points at a message further up: `?delivery=` (an event trace) or `?entry=` (a search hit). */
 const linked = computed(() => typeof route.query.delivery === "string" || typeof route.query.entry === "string");
-// New messages keep the view at the end when it was there.
-watch(
-  () => transcript.value?.messages.length,
-  () => !linked.value && void toBottom(),
-);
-watch(name, () => (atBottom = true));
+// A chat opens at its end, unless a link points further up.
+watch(name, () => (atBottom.value = !linked.value), { immediate: true });
 
 /** Bring a message (or request) into view and flash it. */
 async function reveal(selector: string): Promise<boolean> {
   await nextTick();
   const el = body.value?.querySelector<HTMLElement>(selector);
   if (!el) return false;
-  atBottom = false;
+  atBottom.value = false;
   el.scrollIntoView({ block: "center", behavior: "smooth" });
   const target = el.querySelector<HTMLElement>("[data-slot=container]") ?? el;
   target.classList.remove("flash");
@@ -264,17 +278,33 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
             :status="transcript.status"
             :queued-note="queuedNote"
             :instance="name"
-            :start-at-end="!linked"
           />
         </template>
         <div v-if="name" id="chat-composer" class="sticky bottom-0 z-10 mt-auto bg-default pb-4 pt-2 sm:pb-6">
+          <!-- Just above the composer; the dot: more arrived below. -->
+          <UChip
+            v-if="!atBottom && transcript?.messages.length"
+            :show="unseen"
+            inset
+            class="absolute -top-10 left-1/2 -translate-x-1/2"
+          >
+            <UButton
+              icon="i-lucide-arrow-down"
+              color="neutral"
+              variant="outline"
+              size="sm"
+              aria-label="Scroll to the latest message"
+              class="rounded-full bg-default shadow-sm"
+              @click="toBottom(true)"
+            />
+          </UChip>
           <ChatComposer
             ref="composer"
             :instance="name"
             :archived="inst?.state === 'archived'"
             :hint="earlier ? 'You are reading an earlier session; messages go to the current one.' : undefined"
             :busy="!!session?.busy || badge?.busy === true"
-            @sent="toBottom(true)"
+            @sent="toBottom()"
           />
         </div>
       </div>
