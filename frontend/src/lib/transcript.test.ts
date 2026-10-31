@@ -45,6 +45,7 @@ const result = (id: string, callId: string | null, text: string, extra: Partial<
   is_error: false,
   dialog_id: null,
   proposal_id: null,
+  images: [],
   ...extra,
 });
 
@@ -362,9 +363,43 @@ describe("streamed to persisted", () => {
 });
 
 describe("attachments", () => {
+  const photo = { file: "abc/photo.png", size: 3, mime: "image/png" };
+  const photoRef = { name: "photo.png", mime: "image/png", size: 3, path: "/api/v1/uploads/abc/photo.png" };
+
   it("carries the files sent with a message, and none otherwise", () => {
-    const t = buildTranscript(input([user("u1", "look", { files: ["abc/photo.png"] }), user("u2", "plain")]));
-    expect(t.messages.map((m) => m.metadata?.files)).toEqual([["abc/photo.png"], undefined]);
+    const t = buildTranscript(input([user("u1", "look", { files: [photo] }), user("u2", "plain")]));
+    expect(t.messages.map((m) => m.metadata?.files)).toEqual([[photoRef], undefined]);
+  });
+
+  it("shows a tool's images and the files an agent sent after the call", () => {
+    const shot = { index: 1, mime: "image/png" };
+    const sent = { file: "f1/demo mp4.mp4", size: 9, mime: "video/mp4" };
+    const t = sessionTranscript(
+      [
+        user("u1", "go"),
+        assistant("a1", {
+          tool_calls: [
+            { id: "c1", name: "screenshot", arguments: {} },
+            { id: "c2", name: "botler_attach_files", arguments: {} },
+            { id: "c3", name: "bash", arguments: {} },
+          ],
+        }),
+        result("r1", "c1", "the page", { tool: "screenshot", images: [shot] }),
+        result("r2", "c2", JSON.stringify({ files: [sent] }), { tool: "botler_attach_files" }),
+        result("r3", "c3", JSON.stringify({ files: [sent] })),
+      ],
+      [],
+      { instance: "chat-1", file: "s 1.jsonl" },
+    );
+    const parts = t.messages[1]!.parts.map((p) => (p.type === "data-files" ? p.data.files : p.type));
+    expect(parts).toEqual([
+      "dynamic-tool",
+      [{ name: "image-r1-1.png", mime: "image/png", size: null, path: "/api/v1/sessions/chat-1/images/r1/1?file=s%201.jsonl" }],
+      "dynamic-tool",
+      [{ name: "demo mp4.mp4", mime: "video/mp4", size: 9, path: "/api/v1/uploads/f1/demo%20mp4.mp4" }],
+      // Only the hub's own tools send files.
+      "dynamic-tool",
+    ]);
   });
 });
 

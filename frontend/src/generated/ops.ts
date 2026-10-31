@@ -6,6 +6,7 @@ import type { ActionRequested } from "./ActionRequested";
 import type { AgentSpawned } from "./AgentSpawned";
 import type { AskUser } from "./AskUser";
 import type { Asked } from "./Asked";
+import type { AttachFiles } from "./AttachFiles";
 import type { BotlerEvent } from "./BotlerEvent";
 import type { CancelRequest } from "./CancelRequest";
 import type { CancelTimer } from "./CancelTimer";
@@ -22,6 +23,7 @@ import type { EmitEvent } from "./EmitEvent";
 import type { EntryDone } from "./EntryDone";
 import type { EventEmitted } from "./EventEmitted";
 import type { EventTypes } from "./EventTypes";
+import type { FilesAttached } from "./FilesAttached";
 import type { ForkChat } from "./ForkChat";
 import type { Freed } from "./Freed";
 import type { GetEvents } from "./GetEvents";
@@ -109,6 +111,7 @@ import type { Unsubscribed } from "./Unsubscribed";
 /** Every hub op, called as `POST /api/v1/ops/{name}` with its input. */
 export interface Ops {
   send_message: { input: SendMessage; output: MessageSent };
+  attach_files: { input: AttachFiles; output: FilesAttached };
   emit_event: { input: EmitEvent; output: EventEmitted };
   set_timer: { input: SetTimer; output: TimerSet };
   cancel_timer: { input: CancelTimer; output: TimerCancelled };

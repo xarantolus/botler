@@ -8,16 +8,26 @@ from typing import Any
 from ._client import call
 
 
-def send_message(*, text: str, to: str, expect_reply_within: str | None = None, reply_to: str | None = None, urgent: bool | None = None) -> dict[str, Any]:
+def send_message(*, text: str, to: str, expect_reply_within: str | None = None, files: list[str] | None = None, reply_to: str | None = None, urgent: bool | None = None) -> dict[str, Any]:
     """Send a message to an agent instance (e.g. `botler`). Replies come back to you as messages. Set `reply_to` to the event you are answering to keep the thread.
 
     Args:
         to: Recipient instance name.
         expect_reply_within: You need an answer within this long, e.g. `20m`: if the recipient neither replies to you nor ends its turn by then, you get a `reply.overdue` event.
+        files: Files from your container to send along (any type): paths in your home, your monorepo clone or `/inbox/files`. The recipient finds them under `/inbox/files`.
         reply_to: Event id this answers, to keep the conversation thread.
         urgent: Interrupt the recipient at its next turn instead of waiting until it is idle.
     """
-    return call("send_message", {"text": text, "to": to, "expect_reply_within": expect_reply_within, "reply_to": reply_to, "urgent": urgent})
+    return call("send_message", {"text": text, "to": to, "expect_reply_within": expect_reply_within, "files": files, "reply_to": reply_to, "urgent": urgent})
+
+
+def attach_files(*, files: list[str]) -> dict[str, Any]:
+    """Show files from your container to the user in your chat, where your reply is: a screenshot, a picture, a video, audio, a PDF, any file (at most 100 MiB each). The paths must be in your home, your monorepo clone or /inbox/files (copy a file from /tmp into your home first). To give files to another chat, use send_message's `files`.
+
+    Args:
+        files: Paths in your container: your home (`/home/agent`, `~/...` or relative), your monorepo clone or `/inbox/files`. Any type (images, videos, audio, PDFs, archives, ...).
+    """
+    return call("attach_files", {"files": files})
 
 
 def emit_event(*, type: str, payload: Any = None, provenance: Any = None) -> dict[str, Any]:

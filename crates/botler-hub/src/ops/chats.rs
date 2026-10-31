@@ -433,6 +433,7 @@ impl Op for HandoverReady {
                         urgent: false,
                         reply_to: None,
                         expect_reply_within: None,
+                        files: vec![],
                     };
                     message.call(hub, caller).await?;
                     to.clone()

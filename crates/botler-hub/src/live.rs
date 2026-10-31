@@ -78,6 +78,26 @@ enum LiveError {
     Encode(#[from] serde_json::Error),
 }
 
+/// A pi event without the bytes of its image blocks (a screenshot in a tool result can be
+/// megabytes of base64, in `tool_execution_end`, `message_end`, `turn_end`, `agent_end`, ...).
+/// The web app only refreshes the session on those events, which references the images.
+pub fn without_image_data(mut event: serde_json::Value) -> serde_json::Value {
+    fn strip(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            serde_json::Value::Object(o) => {
+                if o.get("type").and_then(serde_json::Value::as_str) == Some("image") {
+                    o.remove("data");
+                }
+                o.values_mut().for_each(strip);
+            }
+            _ => {}
+        }
+    }
+    strip(&mut event);
+    event
+}
+
 pub async fn socket(State(hub): State<Arc<Hub>>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| async move {
         if let Err(e) = serve(hub, socket).await {
@@ -161,5 +181,25 @@ async fn serve(hub: Arc<Hub>, mut socket: WebSocket) -> Result<(), LiveError> {
             }
             _ = ping.tick() => socket.send(Message::Ping(Vec::new().into())).await?,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn image_bytes_stay_out_of_the_stream() {
+        let ev = json!({"type": "tool_execution_end", "result": {"content": [
+            {"type": "text", "text": "Read image file [image/png]"},
+            {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"},
+        ]}});
+        assert_eq!(
+            super::without_image_data(ev),
+            json!({"type": "tool_execution_end", "result": {"content": [
+                {"type": "text", "text": "Read image file [image/png]"},
+                {"type": "image", "mimeType": "image/png"},
+            ]}})
+        );
     }
 }

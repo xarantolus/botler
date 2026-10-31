@@ -87,7 +87,11 @@ function showSession(file: string) {
 const cost = computed(() => (name.value ? state.usage?.total_by_instance[name.value]?.cost_usd : undefined));
 
 // Two steps: a streamed chunk rebuilds only the second, which shares the first's messages.
-const sessionMessages = computed(() => (session.value ? sessionTranscript(session.value.items, allDialogs.value) : null));
+const sessionMessages = computed(() =>
+  session.value
+    ? sessionTranscript(session.value.items, allDialogs.value, { instance: session.value.instance.name, file: session.value.file })
+    : null,
+);
 const transcript = computed(() =>
   session.value && sessionMessages.value
     ? withInFlight(sessionMessages.value, session.value.items, {

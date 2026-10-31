@@ -291,6 +291,7 @@ describe("MessageParts", () => {
           is_error: false,
           dialog_id: "q1",
           proposal_id: null,
+          images: [],
         },
       ],
       dialogs: [d],

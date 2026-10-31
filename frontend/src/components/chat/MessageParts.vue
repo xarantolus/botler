@@ -42,6 +42,7 @@ function onReasoningClick(e: MouseEvent, id: string) {
       />
       <MarkdownText v-else-if="part.type === 'text'" :source="part.text" :class="part.state === 'streaming' && 'streaming'" />
       <ToolCall v-else-if="part.type === 'dynamic-tool'" :part="part" :running="toolRunning(part, busy)" />
+      <MessageFiles v-else-if="part.type === 'data-files'" :files="part.data.files" align="start" />
       <DialogCard v-else-if="part.type === 'data-dialog'" :dialog="part.data" compact class="my-1" />
       <EnvelopeCard v-else-if="part.type === 'data-envelope'" :env="part.data.envelope" :at="part.data.at" />
       <NotePart v-else-if="part.type === 'data-note'" :note="part.data" />
@@ -100,6 +101,10 @@ function onReasoningClick(e: MouseEvent, id: string) {
         :description="part.data.text"
       />
     </template>
-    <MessageFiles v-if="message.metadata?.files?.length" :files="message.metadata.files" />
+    <MessageFiles
+      v-if="message.metadata?.files?.length"
+      :files="message.metadata.files"
+      :align="message.role === 'user' ? 'end' : 'start'"
+    />
   </div>
 </template>

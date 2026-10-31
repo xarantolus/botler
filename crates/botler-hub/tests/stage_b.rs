@@ -69,6 +69,7 @@ async fn message_wakes_botler_and_is_delivered_once() {
     for op in botler_hub::ops::turn_ending() {
         assert_eq!(hidden[op], "hidden", "{hidden}");
     }
+    assert_eq!(hidden["attach_files"], "direct", "files it shows are in the transcript at its call");
     assert!(e.hub.paths.workspace("botler").join(".git").exists());
 
     let prompts = e.fake.prompts(&name);

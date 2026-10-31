@@ -95,3 +95,7 @@ To reach the browser, an agent needs the service: `services = ["<service>"]` in 
 finds the service in `/botler/agent-dir/services.json` and CDP at `http://<ip>:9222`. Use the
 IP, not the name: Chrome refuses DevTools requests whose `Host` is a name. Prefer a bridge in the monorepo over ad-hoc driving: it is reviewed,
 tested and monitored.
+
+To show the user what a page looks like, save a screenshot (CDP `Page.captureScreenshot`, base64
+PNG) into your home, e.g. `~/shots/inbox.png`, and call `attach_files(["~/shots/inbox.png"])`: it
+appears in your reply. Recordings, PDFs (`Page.printToPDF`) and downloads work the same way.

@@ -9,7 +9,8 @@
 // - one agent turn            → one `assistant` message: per LLM step a `reasoning` part
 //   (thinking), a `text` part and its tool calls as `dynamic-tool` parts, each paired with its
 //   result; a call that opened a dialog becomes a `data-dialog` part (the card replaces the
-//   call); a provider error a `data-error` part;
+//   call); images a tool returned and files an agent sent a `data-files` part after the call (seen
+//   with the call folded); a provider error a `data-error` part;
 // - notes and compactions     → `system` messages with `data-note` / `data-compaction`;
 // - queued messages           → `user` messages with `metadata.queued` (and their delivery id);
 // - streaming text / thinking → appended to the running turn (or a new trailing message), until
@@ -20,6 +21,7 @@
 
 import type { ChatStatus, UIMessage } from "ai";
 import type { Dialog, QueuedMessage, SessionItem } from "../generated";
+import { resultFiles, uploadRef, type FileRef, type SessionSource } from "./attachments";
 import { envelopeOf, isUserMessage, type Envelope } from "./envelope";
 import { linkedDialog } from "./events";
 
@@ -43,8 +45,8 @@ export interface MessageMeta {
   queued?: Pick<QueuedMessage, "mode" | "handed_over">;
   /** Still being written (the live tail). */
   live?: boolean;
-  /** Uploads sent with a user's message (`<id>/<name>`). */
-  files?: string[];
+  /** Files sent with a message (by the user or an agent). */
+  files?: FileRef[];
   /** Stable render key: an agent turn is keyed by the message before it. */
   key?: string;
 }
@@ -82,6 +84,7 @@ export type TranscriptData = {
   compaction: { summary: string };
   session: { previous: string; summary: string; outstanding: string[]; state: string[] };
   error: { text: string };
+  files: { files: FileRef[] };
 };
 
 export type TranscriptMessage = UIMessage<MessageMeta, TranscriptData>;
@@ -142,8 +145,11 @@ export function buildTranscript(input: TranscriptInput): Transcript {
   return withInFlight(sessionTranscript(input.items, input.dialogs), input.items, input);
 }
 
-/** The messages of the session's items: they change only when the session is fetched again. */
-export function sessionTranscript(items: SessionItem[], dialogs: Dialog[]): SessionTranscript {
+/**
+ * The messages of the session's items: they change only when the session is fetched again.
+ * `source` (the chat and session file) locates the images tool results returned.
+ */
+export function sessionTranscript(items: SessionItem[], dialogs: Dialog[], source: SessionSource | null = null): SessionTranscript {
   const results = new Map<string, ToolResult>();
   for (const it of items) if (it.kind === "tool_result" && it.tool_call_id) results.set(it.tool_call_id, it);
   /** Results shown with their call (not on their own). */
@@ -181,7 +187,8 @@ export function sessionTranscript(items: SessionItem[], dialogs: Dialog[]): Sess
       if (d) return [{ type: "data-dialog", id: d.id, data: d }];
       unresolvedLinks++;
     }
-    return [toolPart(call, r, id)];
+    const files = r ? resultFiles(r, source) : [];
+    return [toolPart(call, r, id), ...(files.length ? [{ type: "data-files" as const, data: { files } }] : [])];
   };
 
   for (const it of items) {
@@ -189,12 +196,13 @@ export function sessionTranscript(items: SessionItem[], dialogs: Dialog[]): Sess
       case "user": {
         endTurn();
         const env = envelopeOf(it);
+        const files = it.files.length ? { files: it.files.map(uploadRef) } : {};
         if (env && !isUserMessage(env)) {
           messages.push({
             id: it.id,
             role: "system",
             parts: [{ type: "data-envelope", data: { envelope: env, at: it.at } }],
-            metadata: { at: it.at, delivery: it.delivery ?? env.delivery, localTime: env.localTime, gap: env.gap },
+            metadata: { at: it.at, delivery: it.delivery ?? env.delivery, localTime: env.localTime, gap: env.gap, ...files },
           });
         } else {
           messages.push({
@@ -206,7 +214,7 @@ export function sessionTranscript(items: SessionItem[], dialogs: Dialog[]): Sess
               delivery: it.delivery ?? env?.delivery ?? null,
               localTime: it.local_time ?? env?.localTime ?? null,
               gap: it.gap ?? env?.gap ?? null,
-              ...(it.files.length ? { files: it.files } : {}),
+              ...files,
             },
           });
         }

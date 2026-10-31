@@ -138,9 +138,8 @@ export function upload(file: File, onProgress: (done: number) => void): Promise<
   });
 }
 
-/** An upload's bytes (`GET /api/v1/uploads/<id>/<name>`), for a thumbnail or a download. */
-export async function fetchUpload(file: string): Promise<Blob> {
-  const path = `/api/v1/uploads/${file.split("/").map(encodeURIComponent).join("/")}`;
+/** A file the hub serves only with the token (an upload, a session's image), as a blob. */
+export async function fetchFile(path: string): Promise<Blob> {
   const res = await fetch(path, { headers: { authorization: `Bearer ${token ?? ""}` } });
   if (!res.ok) throw new ApiError(res.status, (await res.text()).slice(0, 300) || res.statusText);
   return res.blob();

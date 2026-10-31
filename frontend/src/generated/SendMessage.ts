@@ -17,4 +17,9 @@ reply_to?: string,
  * You need an answer within this long, e.g. `20m`: if the recipient neither replies to you
  * nor ends its turn by then, you get a `reply.overdue` event.
  */
-expect_reply_within?: string, };
+expect_reply_within?: string, 
+/**
+ * Files from your container to send along (any type): paths in your home, your monorepo
+ * clone or `/inbox/files`. The recipient finds them under `/inbox/files`.
+ */
+files?: Array<string>, };

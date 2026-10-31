@@ -54,6 +54,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/messages", post(user_message))
         .route("/api/v1/uploads", put(upload))
         .route("/api/v1/uploads/{id}/{name}", get(get_upload))
+        .route("/api/v1/sessions/{instance}/images/{entry}/{index}", get(session_image))
         .route("/api/v1/messages/{id}", delete(cancel_message))
         .route("/api/v1/dialogs", get(dialogs))
         .route("/api/v1/dialogs/{id}/answer", post(answer_dialog))
@@ -174,6 +175,7 @@ impl From<&HubError> for ApiError {
                     M::Git { .. } | M::Malformed(_) | M::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
                 }
             }
+            HubError::Upload(u) => upload_status(u),
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if code == StatusCode::INTERNAL_SERVER_ERROR {
@@ -292,20 +294,23 @@ pub struct UploadQuery {
     name: String,
 }
 
-impl From<crate::uploads::UploadError> for ApiError {
-    fn from(e: crate::uploads::UploadError) -> Self {
-        use crate::uploads::UploadError as U;
-        let code = match &e {
-            U::BadName(_) => StatusCode::BAD_REQUEST,
-            U::Missing(_) => StatusCode::NOT_FOUND,
-            U::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        ApiError(code, e.to_string())
+fn upload_status(e: &crate::uploads::UploadError) -> StatusCode {
+    use crate::uploads::UploadError as U;
+    match e {
+        U::BadName(_) | U::Outside(_) | U::NotAFile(_) | U::TooLarge { .. } => StatusCode::BAD_REQUEST,
+        U::Missing(_) | U::NotFound(_) => StatusCode::NOT_FOUND,
+        U::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
-/// An upload, back to the user (thumbnails, downloads): images inline, anything else as an
-/// attachment, never sniffed.
+impl From<crate::uploads::UploadError> for ApiError {
+    fn from(e: crate::uploads::UploadError) -> Self {
+        HubError::from(e).into()
+    }
+}
+
+/// An upload, back to the user (thumbnails, players, downloads): images, video, audio, PDFs and
+/// plain text inline, anything else as an opaque attachment (`uploads::media_type`).
 async fn get_upload(
     State(hub): State<AppState>,
     Extension(p): Extension<Principal>,
@@ -313,17 +318,46 @@ async fn get_upload(
 ) -> ApiResult<Response> {
     user_only(&p)?;
     let (bytes, content_type, inline) = crate::uploads::read(&hub, &format!("{id}/{name}")).await?;
+    let name: String = name.chars().filter(|c| c.is_ascii() && *c != '"' && *c != '\\').collect();
+    let disposition = format!("{}; filename=\"{name}\"", if inline { "inline" } else { "attachment" });
+    file_response(bytes, content_type, &disposition, "private, max-age=86400")
+}
+
+/// Stored bytes for the user: never sniffed, and sandboxed should a browser render one directly.
+fn file_response(
+    bytes: Vec<u8>,
+    content_type: &'static str,
+    disposition: &str,
+    cache: &'static str,
+) -> ApiResult<Response> {
     let disposition =
-        if inline { "inline".to_string() } else { format!("attachment; filename=\"{}\"", name.replace('"', "")) };
-    let disposition =
-        HeaderValue::from_str(&disposition).map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+        HeaderValue::from_str(disposition).map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
     let headers = [
         (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
         (header::CONTENT_DISPOSITION, disposition),
         (header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
-        (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400")),
+        (header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox")),
+        (header::CACHE_CONTROL, HeaderValue::from_static(cache)),
     ];
     Ok((headers, bytes).into_response())
+}
+
+/// An image block of a session entry (a screenshot a tool returned), by its place in the entry.
+async fn session_image(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path((instance, entry, index)): Path<(String, String, usize)>,
+    Query(q): Query<SessionQuery>,
+) -> ApiResult<Response> {
+    user_only(&p)?;
+    let inst = hub
+        .store
+        .resolve_instance(&instance)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no chat {instance}")))?;
+    let (bytes, mime) = crate::sessions::image(&hub, &inst.name, q.file.as_deref(), &entry, index).await?;
+    // Session entries never change once written.
+    file_response(bytes, mime, "inline", "private, max-age=31536000, immutable")
 }
 
 /// Store the raw request body as a new upload.

@@ -29,9 +29,8 @@ pub enum Item {
         /// For a message the user typed: exactly their text (`text` is what the agent received,
         /// with the catalog's guidance around it).
         message_text: Option<String>,
-        /// For a message the user typed: the uploads attached to it (`<id>/<name>`, served at
-        /// `GET /api/v1/uploads/<id>/<name>`).
-        files: Vec<String>,
+        /// For a message (from the user or an agent): the files attached to it.
+        files: Vec<crate::uploads::Uploaded>,
     },
     Assistant {
         id: String,
@@ -58,6 +57,8 @@ pub enum Item {
         dialog_id: Option<String>,
         /// The proposal a `propose_change` call started (its approval is shown in place).
         proposal_id: Option<String>,
+        /// Images the tool returned (a screenshot, a picture it read), without their bytes.
+        images: Vec<ImageRef>,
     },
     /// A note that was added without starting a turn (e.g. an acknowledgement from another
     /// agent); the agent reads it with whatever wakes it next.
@@ -88,6 +89,30 @@ pub enum Item {
         outstanding: Vec<String>,
         state: Vec<String>,
     },
+}
+
+/// An image block of a session entry, served by
+/// `GET /api/v1/sessions/<instance>/images/<entry>/<index>?file=<session file>`: the view never
+/// carries the bytes, so a refresh stays small.
+#[derive(Debug, PartialEq, Serialize, ts_rs::TS)]
+pub struct ImageRef {
+    /// Its place in the entry's content.
+    pub index: usize,
+    pub mime: String,
+}
+
+/// The image blocks of `content` that the web app shows (raster types only).
+fn image_refs(content: &Value) -> Vec<ImageRef> {
+    let blocks = content.as_array().map(Vec::as_slice).unwrap_or_default();
+    blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.get("type").and_then(Value::as_str) == Some("image"))
+        .filter_map(|(index, p)| {
+            let mime = crate::uploads::raster_image(p.get("mimeType").and_then(Value::as_str)?)?;
+            Some(ImageRef { index, mime: mime.into() })
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize, ts_rs::TS)]
@@ -178,23 +203,31 @@ fn result_links(tool: &str, text: &str) -> (Option<String>, Option<String>) {
     (field("dialog_id").or_else(|| field("request_id")), field("proposal_id"))
 }
 
-/// The text of the user's chat message `event_id`, or `None` for any other event. Events are
-/// never deleted, but a session can outlive a database it was copied from: a missing event is
-/// shown as the delivered text.
-/// The text and attached uploads of a message the user typed (None for anything else).
-async fn user_text(hub: &Hub, event_id: &str) -> Result<Option<(Option<String>, Vec<String>)>> {
+/// For message `event_id`: the text the user typed (`None` for a message from anyone else) and
+/// the files attached to it; `None` for any other event. Events are never deleted, but a session
+/// can outlive a database it was copied from: a missing event is shown as the delivered text.
+async fn message_of(hub: &Hub, event_id: &str) -> Result<Option<(Option<String>, Vec<crate::uploads::Uploaded>)>> {
     let ev = match hub.store.event(event_id).await {
         Ok(ev) => ev,
         Err(botler_store::Error::NotFound { .. }) => return Ok(None),
         Err(e) => return Err(e.into()),
     };
-    if ev.kind != botler_core::event::kinds::MESSAGE || ev.source != botler_core::Source::User {
+    if ev.kind != botler_core::event::kinds::MESSAGE {
         return Ok(None);
     }
-    let text = ev.payload.get("text").and_then(Value::as_str).map(String::from);
-    let files = ev.payload.get("files").and_then(Value::as_array).into_iter().flatten();
+    let text = match ev.source {
+        botler_core::Source::User => ev.payload.get("text").and_then(Value::as_str).map(String::from),
+        _ => None,
+    };
+    let paths = ev.payload.get("files").and_then(Value::as_array).into_iter().flatten();
     let prefix = format!("{}/", crate::uploads::INBOX);
-    let files = files.filter_map(|f| f.as_str()?.strip_prefix(&prefix).map(String::from)).collect();
+    let mut files = Vec::new();
+    for file in paths.filter_map(|f| f.as_str()?.strip_prefix(&prefix)) {
+        match crate::uploads::info(hub, file).await? {
+            Some(f) => files.push(f),
+            None => tracing::warn!(event = event_id, file, "a message's attachment is gone from the uploads"),
+        }
+    }
     Ok(Some((text, files)))
 }
 
@@ -315,6 +348,7 @@ pub fn parse_entry(e: &Value) -> Option<Item> {
                     let tool: String = m.get("toolName").and_then(Value::as_str).unwrap_or("").into();
                     let text = texts(&content, "text", "text");
                     let (dialog_id, proposal_id) = result_links(&tool, &text);
+                    let images = image_refs(&content);
                     Some(Item::ToolResult {
                         id,
                         at,
@@ -324,6 +358,7 @@ pub fn parse_entry(e: &Value) -> Option<Item> {
                         is_error: m.get("isError").and_then(Value::as_bool).unwrap_or(false),
                         dialog_id,
                         proposal_id,
+                        images,
                     })
                 }
                 _ => None,
@@ -382,15 +417,60 @@ pub async fn files(hub: &Hub, instance: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// The active branch of one of an instance's sessions (default: the current one), oldest first.
-pub async fn read(hub: &Hub, instance: &str, file: Option<&str>) -> Result<Vec<Item>> {
+/// The path of one of an instance's session files (default: the current one).
+async fn session_path(hub: &Hub, instance: &str, file: Option<&str>) -> Result<std::path::PathBuf> {
     let inst = hub.store.instance(instance).await?;
     let file = match file {
         None => inst.session_file.clone(),
         Some(f) if files(hub, instance).await?.iter().any(|x| x == f) => f.to_string(),
         Some(f) => return Err(HubError::Undefined { kind: "session file", name: f.into() }),
     };
-    let path = hub.paths.sessions(&inst.name).join(&file);
+    Ok(hub.paths.sessions(&inst.name).join(&file))
+}
+
+/// The bytes and type of image block `index` of session entry `entry` ([`ImageRef`]).
+pub async fn image(
+    hub: &Hub,
+    instance: &str,
+    file: Option<&str>,
+    entry: &str,
+    index: usize,
+) -> Result<(Vec<u8>, &'static str)> {
+    use base64::Engine;
+    use tokio::io::AsyncBufReadExt;
+    let undefined = || HubError::Undefined { kind: "session image", name: format!("{entry}/{index}") };
+    let path = session_path(hub, instance, file).await?;
+    let mut lines = match tokio::fs::File::open(&path).await {
+        Ok(f) => tokio::io::BufReader::new(f).lines(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(undefined()),
+        Err(e) => return Err(HubError::Io(e)),
+    };
+    while let Some(line) = lines.next_line().await? {
+        // Only the entry's own line is parsed.
+        if !line.contains(entry) {
+            continue;
+        }
+        let Ok(e) = serde_json::from_str::<Value>(&line) else { continue };
+        if e.get("id").and_then(Value::as_str) != Some(entry) {
+            continue;
+        }
+        let block = e.pointer(&format!("/message/content/{index}")).ok_or_else(undefined)?;
+        let mime = block.get("mimeType").and_then(Value::as_str).and_then(crate::uploads::raster_image);
+        let data = block.get("data").and_then(Value::as_str);
+        let (Some(mime), Some(data), Some("image")) = (mime, data, block.get("type").and_then(Value::as_str)) else {
+            return Err(undefined());
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|e| HubError::Io(std::io::Error::other(format!("image {entry}/{index} is not base64: {e}"))))?;
+        return Ok((bytes, mime));
+    }
+    Err(undefined())
+}
+
+/// The active branch of one of an instance's sessions (default: the current one), oldest first.
+pub async fn read(hub: &Hub, instance: &str, file: Option<&str>) -> Result<Vec<Item>> {
+    let path = session_path(hub, instance, file).await?;
     let raw = match tokio::fs::read_to_string(&path).await {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -411,7 +491,7 @@ pub async fn read(hub: &Hub, instance: &str, file: Option<&str>) -> Result<Vec<I
     for e in branch {
         let Some(mut item) = parse_entry(e) else { continue };
         if let Item::User { event: Some(ev), message_text, files, .. } = &mut item
-            && let Some((text, attached)) = user_text(hub, ev).await?
+            && let Some((text, attached)) = message_of(hub, ev).await?
         {
             *message_text = text;
             *files = attached;

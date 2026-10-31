@@ -79,8 +79,14 @@ async fn uploads_are_served_back_safely() {
     let (_, up) = api(&e, "PUT", "/api/v1/uploads?name=photo.png", Body::from(png)).await;
     let r = get(format!("/api/v1/uploads/{}", up["file"].as_str().unwrap()), Principal::User).await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);
-    assert_eq!((header(&r, "content-type"), header(&r, "content-disposition")), ("image/png".into(), "inline".into()));
-    assert_eq!(header(&r, "x-content-type-options"), "nosniff");
+    assert_eq!(
+        (header(&r, "content-type"), header(&r, "content-disposition")),
+        ("image/png".into(), "inline; filename=\"photo.png\"".into())
+    );
+    assert_eq!(
+        (header(&r, "x-content-type-options"), header(&r, "content-security-policy")),
+        ("nosniff".into(), "sandbox".into())
+    );
     assert_eq!(axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap(), png);
 
     let (_, svg) = api(&e, "PUT", "/api/v1/uploads?name=x.svg", Body::from("<svg onload=alert(1)/>")).await;
@@ -95,6 +101,126 @@ async fn uploads_are_served_back_safely() {
         get("/api/v1/uploads/0123/nope.png".into(), Principal::User).await.unwrap().status(),
         StatusCode::NOT_FOUND
     );
+}
+
+/// A GET as `who`, with the response's status, headers and body.
+async fn fetch(e: &common::Env, path: &str, who: Principal) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let token = e.hub.tokens.issue(&who, chrono::Duration::hours(1), Utc::now());
+    let req = Request::get(path).header("authorization", format!("Bearer {token}")).body(Body::empty()).unwrap();
+    let r = botler_hub::api::router(e.hub.clone()).oneshot(req).await.unwrap();
+    let (status, headers) = (r.status(), r.headers().clone());
+    (status, headers, axum::body::to_bytes(r.into_body(), 1 << 24).await.unwrap().to_vec())
+}
+
+/// A screenshot in a tool result is a reference in the session view (never its bytes) and
+/// served from the session file by its entry and place.
+#[tokio::test]
+async fn tool_result_images_are_served_from_the_session() {
+    use base64::Engine;
+    let e = common::env().await;
+    let png: &[u8] = b"\x89PNG\r\n\x1a\nscreenshot";
+    let data = base64::engine::general_purpose::STANDARD.encode(png);
+    let chat = botler_hub::router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let file = e.hub.store.instance(&chat).await.unwrap().session_file;
+    let lines = [
+        json!({"type": "session", "version": 3, "cwd": "/home/agent"}),
+        json!({"type": "message", "id": "a1", "message": {"role": "assistant", "content": [
+            {"type": "toolCall", "id": "c1", "name": "screenshot", "arguments": {}}]}}),
+        json!({"type": "message", "id": "r1", "parentId": "a1", "message": {"role": "toolResult", "toolCallId": "c1",
+            "toolName": "screenshot", "content": [
+                {"type": "text", "text": "the page"},
+                {"type": "image", "data": data, "mimeType": "image/png"},
+                {"type": "image", "data": "PHN2Zy8+", "mimeType": "image/svg+xml"}]}}),
+    ];
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::create_dir_all(e.hub.paths.sessions(&chat)).unwrap();
+    std::fs::write(e.hub.paths.sessions(&chat).join(&file), body).unwrap();
+
+    let (status, _, view) = fetch(&e, &format!("/api/v1/sessions/{chat}"), Principal::User).await;
+    assert_eq!(status, StatusCode::OK);
+    let view = String::from_utf8(view).unwrap();
+    assert!(!view.contains(&data), "no image bytes in the view");
+    let view: Value = serde_json::from_str(&view).unwrap();
+    assert_eq!(view["items"][1]["images"], json!([{"index": 1, "mime": "image/png"}]), "SVG is not shown");
+
+    let (status, headers, bytes) = fetch(&e, &format!("/api/v1/sessions/{chat}/images/r1/1"), Principal::User).await;
+    assert_eq!((status, bytes.as_slice()), (StatusCode::OK, png));
+    assert_eq!(headers["content-type"], "image/png");
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert!(headers["cache-control"].to_str().unwrap().contains("immutable"));
+    let at_file = format!("/api/v1/sessions/{chat}/images/r1/1?file={file}");
+    assert_eq!(fetch(&e, &at_file, Principal::User).await.0, StatusCode::OK);
+    for missing in ["r1/0", "r1/2", "r1/9", "a1/0", "nope/1"] {
+        let path = format!("/api/v1/sessions/{chat}/images/{missing}");
+        assert_eq!(fetch(&e, &path, Principal::User).await.0, StatusCode::NOT_FOUND, "{missing}");
+    }
+    let other = format!("/api/v1/sessions/{chat}/images/r1/1?file=../../hub.db");
+    assert_eq!(fetch(&e, &other, Principal::User).await.0, StatusCode::NOT_FOUND);
+    let agent = Principal::Agent { instance: chat.clone(), wake: "w".into() };
+    assert_eq!(fetch(&e, &format!("/api/v1/sessions/{chat}/images/r1/1"), agent).await.0, StatusCode::FORBIDDEN);
+}
+
+/// Agents send files of any type from their home: shown in their own chat (`attach_files`) or
+/// sent with a message to another chat, which shows them with the message.
+#[tokio::test]
+async fn agents_send_files_from_their_home() {
+    let e = common::env().await;
+    let chat = botler_hub::router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let me = Caller {
+        principal: Principal::Agent { instance: chat.clone(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    let home = e.hub.paths.home(&chat);
+    std::fs::create_dir_all(home.join("out")).unwrap();
+    std::fs::write(home.join("out/demo.mp4"), b"mp4 bytes").unwrap();
+    std::fs::write(home.join("out/report.pdf"), b"%PDF-1.7").unwrap();
+    std::fs::write(e.hub.paths.root.join("hub-secret.txt"), b"secret").unwrap();
+    std::os::unix::fs::symlink(e.hub.paths.root.join("hub-secret.txt"), home.join("out/escape.txt")).unwrap();
+
+    let out =
+        ops::call(&e.hub, &me, "attach_files", json!({"files": ["/home/agent/out/demo.mp4", "~/out/report.pdf"]}))
+            .await
+            .unwrap();
+    let files = out["files"].as_array().unwrap();
+    assert_eq!((files[0]["mime"].as_str(), files[0]["size"].as_u64()), (Some("video/mp4"), Some(9)));
+    assert_eq!(files[1]["mime"], "application/pdf");
+    let stored = e.hub.paths.uploads().join(files[0]["file"].as_str().unwrap());
+    assert_eq!(std::fs::read(stored).unwrap(), b"mp4 bytes");
+
+    for (path, why) in [
+        ("/tmp/shot.png", "not in your home"),
+        ("/home/agent/../../etc/passwd", "not in your home"),
+        ("out/escape.txt", "not in your home"),
+        ("out/missing.png", "no file"),
+        ("out", "not a file"),
+    ] {
+        let err = ops::call(&e.hub, &me, "attach_files", json!({"files": [path]})).await.unwrap_err();
+        assert!(err.to_string().contains(why), "{path}: {err}");
+    }
+    let user = Caller { principal: Principal::User, capabilities: vec![], runnable: None };
+    assert!(ops::call(&e.hub, &user, "attach_files", json!({"files": ["x"]})).await.is_err());
+
+    // To another chat: the files land in its inbox and show with the message there.
+    let other = botler_hub::router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let sent =
+        ops::call(&e.hub, &me, "send_message", json!({"to": other, "text": "the report", "files": ["out/report.pdf"]}))
+            .await
+            .unwrap();
+    let file = sent["files"][0]["file"].as_str().unwrap().to_string();
+    assert!(file.ends_with("/report.pdf"), "{sent}");
+    assert!(e.hub.paths.inbox(&other).join(&file).is_file());
+    let ev = e.hub.store.event(sent["event_id"].as_str().unwrap()).await.unwrap();
+    assert_eq!(ev.payload["files"], json!([format!("/inbox/files/{file}")]));
+    let session = e.hub.store.instance(&other).await.unwrap().session_file;
+    let entry = json!({"type": "message", "id": "u1", "message": {"role": "user", "content": format!(
+        "[from {chat} | provenance: trusted | message | delivery d | event {}]\nthe report", ev.id)}});
+    std::fs::create_dir_all(e.hub.paths.sessions(&other)).unwrap();
+    std::fs::write(e.hub.paths.sessions(&other).join(session), format!("{entry}\n")).unwrap();
+    let items = botler_hub::sessions::read(&e.hub, &other, None).await.unwrap();
+    let botler_hub::sessions::Item::User { files, message_text, .. } = &items[0] else { panic!("{items:?}") };
+    assert_eq!((files.len(), files[0].file.as_str(), files[0].mime), (1, file.as_str(), "application/pdf"));
+    assert_eq!(*message_text, None, "only the user's own text replaces the delivered text");
 }
 
 #[tokio::test]

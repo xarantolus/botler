@@ -247,6 +247,7 @@ fn run<'a, T: Op>(hub: &'a Arc<Hub>, caller: &'a Caller, input: Value) -> BoxFut
 /// Every op, in the order agents see them.
 pub static OPS: &[OpSpec] = &[
     op::<SendMessage>(),
+    op::<AttachFiles>(),
     op::<EmitEvent>(),
     op::<SetTimer>(),
     op::<CancelTimer>(),

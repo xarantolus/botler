@@ -700,8 +700,12 @@ async fn container_spec(
             "url": format!("{}/mcp", hub.config.container_url),
             "headers": { "Authorization": "Bearer ${BOTLER_TOKEN}" },
             "description": "The botler hub: messaging, timers, spawning agents, asking the user, proposing changes, incidents.",
-            // The extension's turn-ending tools replace these.
-            "toolExposure": ops::turn_ending().map(|n| (n, "hidden")).collect::<BTreeMap<_, _>>(),
+            // The extension's turn-ending tools replace these. `attach_files` is a direct tool (not
+            // called from a codemode script), so the files it shows are in the transcript at its call.
+            "toolExposure": ops::turn_ending()
+                .map(|n| (n, "hidden"))
+                .chain([(<ops::AttachFiles as ops::Op>::NAME, "direct")])
+                .collect::<BTreeMap<_, _>>(),
         }),
     );
     servers.extend(mcp_servers(applied, env));
@@ -814,7 +818,8 @@ fn list_files(dir: &Path, ext: &str) -> Vec<String> {
 /// Consume pi's events: live view, busy tracking, usage and budgets.
 async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<PiEvent>) {
     while let Some(ev) = events.recv().await {
-        if hub.live.send(Live::Pi { instance: agent.instance.clone(), event: ev.raw.clone() }).is_err() {
+        let event = crate::live::without_image_data(ev.raw.clone());
+        if hub.live.send(Live::Pi { instance: agent.instance.clone(), event }).is_err() {
             tracing::trace!("no live viewers");
         }
         match &ev.kind {

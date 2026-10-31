@@ -49,6 +49,8 @@ pub enum HubError {
     Memory(#[from] crate::memory::MemoryError),
     #[error(transparent)]
     Storage(#[from] crate::storage::StorageError),
+    #[error(transparent)]
+    Upload(#[from] crate::uploads::UploadError),
     #[error("{instance}'s agent definition `{definition}` no longer exists; restore it as a generic chat or delete it")]
     DefinitionGone { instance: String, definition: String },
     #[error("{instance} keeps crashing; next start allowed at {until}")]

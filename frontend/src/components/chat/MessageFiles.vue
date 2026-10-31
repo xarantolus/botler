@@ -1,23 +1,39 @@
 <script setup lang="ts">
-// The files sent with a message: images as thumbnails (opening full size), anything else as a
-// chip that downloads it. The hub serves uploads only with the token, so they load as blobs.
+// Files with a message or a tool call (lib/attachments.ts), each shown as what it is: images as
+// thumbnails (opening full size), videos and audio with a player, PDFs and text opening in a new
+// tab, anything else a chip that downloads it. The hub serves them only with the token, so they
+// load as blobs; large media waits for a click.
 import { onBeforeUnmount, reactive, watch } from "vue";
-import { fetchUpload } from "../../api/client";
+import { fetchFile } from "../../api/client";
+import { formatSize, presentation, safeType, type FileRef } from "../../lib/attachments";
 import { notifyError } from "../../notify";
 
-const props = defineProps<{ files: string[] }>();
-const IMAGE = /\.(png|jpe?g|gif|webp|avif)$/i;
-const name = (f: string) => f.slice(f.indexOf("/") + 1);
+const props = withDefaults(defineProps<{ files: FileRef[]; align?: "start" | "end" }>(), { align: "end" });
+/** Video and audio up to this size load with the message; larger ones on a click. */
+const AUTO_MEDIA = 25 * 1024 * 1024;
+const ICONS = { video: "i-lucide-play", audio: "i-lucide-play", open: "i-lucide-external-link", download: "i-lucide-download" };
+/** Blob URLs of the files loaded so far, by path. */
 const urls = reactive<Record<string, string>>({});
+
+const shows = (f: FileRef) => presentation(f.mime);
+const label = (f: FileRef) => (f.size === null ? f.name : `${f.name} · ${formatSize(f.size)}`);
+
+async function load(f: FileRef): Promise<string> {
+  urls[f.path] ??= URL.createObjectURL(new Blob([await fetchFile(f.path)], { type: safeType(f.mime) }));
+  return urls[f.path]!;
+}
 
 watch(
   () => props.files,
   async (files) => {
-    for (const f of files.filter((f) => IMAGE.test(f) && !urls[f])) {
+    for (const f of files) {
+      const p = shows(f);
+      const auto = p === "image" || ((p === "video" || p === "audio") && f.size !== null && f.size <= AUTO_MEDIA);
+      if (!auto || urls[f.path]) continue;
       try {
-        urls[f] = URL.createObjectURL(await fetchUpload(f));
+        await load(f);
       } catch (e) {
-        console.warn(`no thumbnail for ${f}`, e);
+        console.warn(`could not load ${f.name}`, e);
       }
     }
   },
@@ -25,34 +41,46 @@ watch(
 );
 onBeforeUnmount(() => Object.values(urls).forEach((u) => URL.revokeObjectURL(u)));
 
-async function download(f: string) {
+async function activate(f: FileRef) {
+  const p = shows(f);
+  // Opened before the fetch, while the click still allows a new tab.
+  const tab = p === "open" ? window.open("about:blank", "_blank") : null;
   try {
-    const url = urls[f] ?? URL.createObjectURL(await fetchUpload(f));
-    const a = Object.assign(document.createElement("a"), { href: url, download: name(f) });
-    a.click();
-    if (!urls[f]) setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    const url = await load(f);
+    if (tab) tab.location.href = url;
+    else if (p === "download") Object.assign(document.createElement("a"), { href: url, download: f.name }).click();
   } catch (e) {
-    notifyError("Could not download", e);
+    tab?.close();
+    notifyError(`Could not load ${f.name}`, e);
   }
 }
 </script>
 
 <template>
-  <ul class="flex flex-wrap justify-end gap-1.5" aria-label="Attached files">
-    <li v-for="f in files" :key="f">
-      <a v-if="urls[f]" :href="urls[f]" target="_blank" rel="noopener noreferrer" :title="name(f)" class="block">
-        <img :src="urls[f]" :alt="name(f)" class="max-h-40 max-w-56 rounded-md border border-default object-cover" />
+  <ul class="flex flex-wrap gap-1.5" :class="align === 'end' ? 'justify-end' : 'justify-start'" aria-label="Attached files">
+    <li v-for="f in files" :key="f.path" :data-file="shows(f)">
+      <a v-if="shows(f) === 'image' && urls[f.path]" :href="urls[f.path]" target="_blank" rel="noopener noreferrer" :title="f.name" class="block">
+        <img :src="urls[f.path]" :alt="f.name" class="max-h-40 max-w-56 rounded-md border border-default object-cover" />
       </a>
+      <video
+        v-else-if="shows(f) === 'video' && urls[f.path]"
+        :src="urls[f.path]"
+        :title="f.name"
+        controls
+        preload="metadata"
+        class="max-h-80 max-w-full rounded-md border border-default"
+      />
+      <audio v-else-if="shows(f) === 'audio' && urls[f.path]" :src="urls[f.path]" :title="f.name" controls preload="metadata" />
       <UButton
         v-else
-        icon="i-lucide-paperclip"
-        :label="name(f)"
+        :icon="shows(f) === 'image' ? 'i-lucide-image' : ICONS[shows(f) as keyof typeof ICONS]"
+        :label="label(f)"
         size="xs"
         color="neutral"
         variant="outline"
-        class="max-w-60"
+        class="max-w-72"
         :ui="{ label: 'truncate' }"
-        @click="download(f)"
+        @click="activate(f)"
       />
     </li>
   </ul>

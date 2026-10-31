@@ -5,6 +5,10 @@
  */
 export type Uploaded = { 
 /**
- * What a message's `files` names: `<id>/<name>`.
+ * What a message's `files` names: `<id>/<name>`, served at `GET /api/v1/uploads/<file>`.
  */
-file: string, size: number, };
+file: string, size: number, 
+/**
+ * What it is served as ([`media_type`]); `application/octet-stream` is only downloaded.
+ */
+mime: string, };

@@ -44,7 +44,10 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
            final message that needs no reply.\n\
          - `ask_user(question, options, about)` asks the user and waits for an answer as an event. Use it \
            for decisions that are theirs; never guess at them.\n\
-         - Your plain reply text is shown to the user when they are the one talking to you.\n\
+         - Your plain reply text is shown to the user when they are the one talking to you. To show them a \
+           file (a screenshot, a picture, a video, a PDF, any type), save it in your home and call \
+           `attach_files([path])`: it appears with your reply. `send_message(to, text, files=[...])` gives files \
+           to another agent.\n\
          - Missing access the work needs (a key, token, secret group, service or share)? First check \
            memory and what you hold (`list_connections`); then ask with `request_secrets` or \
            `request_access` and end your turn. Never silently switch to an approach the user did not \

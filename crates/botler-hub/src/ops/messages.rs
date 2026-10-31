@@ -14,6 +14,16 @@ use uuid::Uuid;
 use super::{Caller, Op, OpError, Who, resolve_chat};
 use crate::auth::Principal;
 use crate::hub::Hub;
+use crate::uploads::Uploaded;
+
+/// Store the files an agent names as uploads (only agents have a container the hub reads).
+async fn agent_files(hub: &Hub, caller: &Caller, paths: &[String]) -> Result<Vec<Uploaded>, OpError> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let me = caller.agent("files are paths in an agent's container; the user attaches uploads in the web app")?;
+    Ok(crate::uploads::from_agent(hub, me, paths).await?)
+}
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]
 #[ts(optional_fields)]
@@ -32,6 +42,11 @@ pub struct SendMessage {
     /// nor ends its turn by then, you get a `reply.overdue` event.
     #[serde(default)]
     pub expect_reply_within: Option<String>,
+    /// Files from your container to send along (any type): paths in your home, your monorepo
+    /// clone or `/inbox/files`. The recipient finds them under `/inbox/files`.
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -39,6 +54,10 @@ pub struct MessageSent {
     pub event_id: Uuid,
     /// The recipient's instance name.
     pub to: String,
+    /// The files sent along.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<Uploaded>>")]
+    pub files: Vec<Uploaded>,
     /// A trial run: recorded, not carried out.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     #[ts(optional, as = "Option<bool>")]
@@ -70,12 +89,15 @@ impl Op for SendMessage {
                     .into(),
             ));
         }
+        let files = agent_files(hub, caller, &self.files).await?;
+        let names: Vec<String> = files.iter().map(|f| f.file.clone()).collect();
+        let inbox = crate::uploads::attach(hub, &to, &names).await.map_err(crate::hub::HubError::from)?;
         // Messages between agents are trusted as messages; content an agent relays from outside is
         // marked by the event it came from (replies inherit the lower provenance of their parent).
         let mut ev = crate::hub::builtin(
             botler_core::payloads::BuiltinPayload::Message(botler_core::payloads::MessagePayload {
                 text: self.text,
-                files: vec![],
+                files: inbox,
                 mode: None,
             }),
             caller.source(),
@@ -88,7 +110,7 @@ impl Op for SendMessage {
         }
         if let Some(trial) = crate::trials::of_caller(hub, caller).await? {
             crate::trials::record(hub, &trial, Self::NAME, &ev).await?;
-            return Ok(MessageSent { event_id: ev.id, to, dry_run: true });
+            return Ok(MessageSent { event_id: ev.id, to, files, dry_run: true });
         }
         let ev = hub.emit(ev).await?;
         if let (Some(me), Some(w)) = (caller.instance(), within) {
@@ -99,7 +121,38 @@ impl Op for SendMessage {
         {
             live.record_message(&to);
         }
-        Ok(MessageSent { event_id: ev.id, to, dry_run: false })
+        Ok(MessageSent { event_id: ev.id, to, files, dry_run: false })
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct AttachFiles {
+    /// Paths in your container: your home (`/home/agent`, `~/...` or relative), your monorepo
+    /// clone or `/inbox/files`. Any type (images, videos, audio, PDFs, archives, ...).
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct FilesAttached {
+    /// The files, as the user's chat shows them.
+    pub files: Vec<Uploaded>,
+}
+
+impl Op for AttachFiles {
+    const NAME: &'static str = "attach_files";
+    const DESCRIPTION: &'static str = "Show files from your container to the user in your chat, where your reply is: a \
+         screenshot, a picture, a video, audio, a PDF, any file (at most 100 MiB each). The paths must be in your \
+         home, your monorepo clone or /inbox/files (copy a file from /tmp into your home first). To give files to \
+         another chat, use send_message's `files`.";
+    const WHO: Who = Who::UserAndAgents;
+    type Output = FilesAttached;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<FilesAttached, OpError> {
+        caller.agent("only agents attach files from their container; the user attaches uploads in the web app")?;
+        if self.files.is_empty() {
+            return Err(OpError::BadRequest("name at least one file".into()));
+        }
+        Ok(FilesAttached { files: agent_files(hub, caller, &self.files).await? })
     }
 }
 

@@ -6,7 +6,8 @@
 // It creates a scratch data directory, points the models at a stub OpenAI-compatible server
 // (this file), starts `botler serve` on 127.0.0.1:BOTLER_E2E_PORT (default 7437, never 7420; its
 // agents reach it over its Unix socket), and drives the
-// app in headless Chromium: sign in, send a message, attach a file, answer the agent's question inline, ask for a
+// app in headless Chromium: sign in, send a message, attach a file, see the files the agent shows (a
+// picture it read, a video and a PDF it attached), answer the agent's question inline, ask for a
 // change and reject the proposal, and run a job from the System view when there is one. At the
 // end it stops the hub, which removes its agent containers, then removes the images labelled with
 // the scratch data directory and the directory itself. Set BOTLER_E2E_KEEP=1 to keep them.
@@ -18,6 +19,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { crc32, deflateSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +40,29 @@ const step = (what) => console.log(`\n== ${what}`);
 // "ask" calls ask_user, an answer to it is acknowledged, "propose" commits and proposes a change,
 // anything else gets a short reply.
 
+/** A real PNG (a 64x40 gradient), base64: pi's `read` decodes it. */
+function png() {
+  const chunk = (type, data) => {
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, "latin1");
+    data.copy(out, 8);
+    out.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type, "latin1"), data])), 8 + data.length);
+    return out;
+  };
+  const [w, h] = [64, 40];
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  const rows = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) rows.set([x * 4, y * 6, 160], y * (w * 3 + 1) + 1 + x * 3);
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  return Buffer.concat([sig, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]).toString("base64");
+}
+const SHOT = png();
+const PDF = Buffer.from("%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n").toString("base64");
+
 /** The text of a chat message's content (a string or parts). */
 const textOf = (m) => (typeof m?.content === "string" ? m.content : (m?.content ?? []).map((p) => p.text ?? "").join(""));
 
@@ -48,10 +73,17 @@ function decide(messages) {
     if (call?.function?.name === "bash" && textOf(last).includes("e2e-commit")) {
       return { tool: "propose_change", args: { branch: "agents/botler/work", title: "Add an e2e note" } };
     }
+    if (call?.function?.name === "bash" && textOf(last).includes("e2e-files")) return { tool: "read", args: { path: "/home/agent/out/shot.png" } };
+    if (call?.function?.name === "read") return { tool: "attach_files", args: { files: ["out/demo.mp4", "~/out/report.pdf"] } };
+    if (call?.function?.name.endsWith("attach_files")) return { text: "Here are the files." };
     return { text: "Done." };
   }
   const said = textOf(last).toLowerCase();
   if (/\bblue\b/.test(said)) return { text: "You chose blue." };
+  if (said.includes("please show me files")) {
+    const command = `mkdir -p ~/out && cd ~/out && echo ${SHOT} | base64 -d > shot.png && echo ${PDF} | base64 -d > report.pdf && head -c 4096 /dev/urandom > demo.mp4 && echo e2e-files`;
+    return { tool: "bash", args: { command } };
+  }
   if (said.includes("please ask me something")) return { tool: "ask_user", args: { question: "Which colour?", options: ["red", "blue"] } };
   if (said.includes("please propose a change")) {
     const command =
@@ -83,8 +115,12 @@ const stub = createServer((req, res) => {
     const r = JSON.parse(body);
     const tools = new Set((r.tools ?? []).map((t) => t.function?.name));
     let reply = decide(r.messages ?? []);
-    // Tool names as pi registered them (the reviewer, for one, has no ask_user).
-    if (reply.tool && !tools.has(reply.tool)) reply = { text: "Done." };
+    // Tool names as pi registered them: a direct MCP tool is `mcp__botler__<op>` (the reviewer, for
+    // one, has no ask_user).
+    if (reply.tool && !tools.has(reply.tool)) {
+      const direct = [...tools].find((t) => t?.endsWith(`__${reply.tool}`));
+      reply = direct ? { ...reply, tool: direct } : { text: "Done." };
+    }
     console.log(`   model: ${reply.tool ? `${reply.tool}(${JSON.stringify(reply.args).slice(0, 60)})` : JSON.stringify(reply.text)}`);
     if (!r.stream) {
       const c = chunks(reply, r.model)[0].choices[0].delta;
@@ -167,6 +203,29 @@ try {
   await composer.press("Enter");
   await page.locator("[data-role=user]").getByRole("button", { name: "notes.txt" }).waitFor({ timeout: 120_000 });
   await snap("attached");
+
+  step("see what the agent shows: a picture it read, a video and a PDF it attached");
+  await composer.fill("Please show me files");
+  await composer.press("Enter");
+  await page.getByText("Here are the files.").waitFor({ timeout: 120_000 });
+  // Shown next to the folded tool calls, without opening them.
+  const shown = page.locator("[data-role=assistant]").last();
+  await shown.locator("[data-file=image] img").waitFor({ timeout: 30_000 });
+  await shown.locator("[data-file=video] video[controls]").waitFor({ timeout: 30_000 });
+  const pdf = shown.locator("[data-file=open]").getByRole("button", { name: /report\.pdf/ });
+  await pdf.waitFor();
+  const size = await shown.locator("[data-file=image] img").evaluate((img) => [img.naturalWidth, img.naturalHeight]);
+  if (size[0] !== 64 || size[1] !== 40) throw new Error(`the picture did not load: ${size}`);
+  const [tab] = await Promise.all([page.waitForEvent("popup"), pdf.click()]);
+  await tab.waitForURL(/^blob:/, { timeout: 10_000 });
+  await tab.close();
+  // The session view references the picture; its bytes stay in the session file.
+  const view = await (await fetch(`${url}/api/v1/sessions/botler`, { headers: { authorization: `Bearer ${token}` } })).json();
+  const read = view.items.findLast((it) => it.kind === "tool_result" && it.tool === "read");
+  if (JSON.stringify(read?.images) !== JSON.stringify([{ index: 1, mime: "image/png" }]) || read.text.length > 1000) {
+    throw new Error(`the picture is not a reference: ${JSON.stringify(read).slice(0, 300)}`);
+  }
+  await snap("files-shown");
 
   step("answer the agent's question inline");
   await composer.fill("Please ask me something");
