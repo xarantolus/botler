@@ -115,7 +115,7 @@ pub async fn container_spec(
     if let Some((who, ttl, secret_dir)) = token {
         // The hub's socket works without any network; agents also get a forwarder to it at
         // `BOTLER_URL`, the SDK talks to the socket directly.
-        mounts.push(Mount::Bind { src: hub.paths.run_dir(), dst: CONTAINER_RUN_DIR.into(), read_only: true });
+        mounts.push(Mount::Bind { src: hub.paths.run_dir()?, dst: CONTAINER_RUN_DIR.into(), read_only: true });
         vars.insert("BOTLER_SOCKET".into(), format!("{CONTAINER_RUN_DIR}/{SOCKET_NAME}"));
         vars.insert("BOTLER_URL".into(), hub.config.container_url.clone());
         vars.insert("BOTLER_TOKEN".into(), hub.tokens.issue(&who, ttl, Utc::now()));

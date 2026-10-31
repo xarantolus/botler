@@ -23,7 +23,7 @@ fn mount<'a>(c: &'a FakeContainer, dst: &str) -> Option<&'a Mount> {
 #[tokio::test]
 async fn the_api_is_served_on_the_socket() {
     let e = common::env().await;
-    let path = e.hub.paths.socket();
+    let path = e.hub.paths.socket().unwrap();
     drop(botler_hub::serve::bind_socket(&path).unwrap());
     let listener = botler_hub::serve::bind_socket(&path).unwrap();
     tokio::spawn(axum::serve(listener, botler_hub::api::router(e.hub.clone())).into_future());
@@ -32,6 +32,45 @@ async fn the_api_is_served_on_the_socket() {
     let mut out = String::new();
     s.read_to_string(&mut out).await.unwrap();
     assert!(out.starts_with("HTTP/1.0 200") && out.ends_with("ok"), "{out}");
+}
+
+/// The socket lives in a short runtime directory, so a hub with a long data directory path
+/// (sockets allow about 108 bytes) still starts and serves on it.
+#[tokio::test]
+async fn a_long_data_directory_still_serves_on_the_socket() {
+    let fake = botler_runtime::fake::Fake::new();
+    let config = botler_hub::config::HubConfig::new(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
+    let e = common::env_at(std::sync::Arc::new(fake.clone()), fake, config, &"d".repeat(150)).await;
+    assert!(e.hub.paths.root.as_os_str().len() > 150);
+    let path = e.hub.paths.socket().unwrap();
+    assert!(path.as_os_str().len() < 108, "{}", path.display());
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let served = botler_hub::serve::serve(e.hub.clone(), async move {
+        if stopped.await.is_err() {
+            eprintln!("test ended without stopping the hub");
+        }
+    });
+    let client = async {
+        let mut out = String::new();
+        for _ in 0..200 {
+            if let Ok(mut s) = tokio::net::UnixStream::connect(&path).await {
+                s.write_all(b"GET /healthz HTTP/1.0\r\nHost: hub\r\n\r\n").await.unwrap();
+                s.read_to_string(&mut out).await.unwrap();
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        stop.send(()).unwrap();
+        out
+    };
+    let (served, out) = tokio::join!(served, client);
+    served.unwrap();
+    assert!(out.starts_with("HTTP/1.0 200") && out.ends_with("ok"), "{out}");
+
+    // A path too long anyway says so.
+    let long = std::path::PathBuf::from(format!("/tmp/{}/hub.sock", "x".repeat(120)));
+    let err = botler_hub::serve::bind_socket(&long).unwrap_err().to_string();
+    assert!(err.contains("more than the 107") && err.contains("XDG_RUNTIME_DIR"), "{err}");
 }
 
 /// Agents run pi behind the forwarder and talk to it; jobs get the socket for the SDK.
@@ -51,7 +90,7 @@ async fn containers_get_the_socket_and_agents_the_forwarder() {
     assert_eq!(c.spec.env["BOTLER_SOCKET"], socket);
     assert_eq!(c.spec.env["BOTLER_URL"], FORWARD_URL);
     assert!(
-        matches!(mount(c, CONTAINER_RUN_DIR), Some(Mount::Bind { src, read_only: true, .. }) if *src == e.hub.paths.run_dir())
+        matches!(mount(c, CONTAINER_RUN_DIR), Some(Mount::Bind { src, read_only: true, .. }) if *src == e.hub.paths.run_dir().unwrap())
     );
     assert!(mount(c, "/botler/forward").is_some());
     let forwarder = e.hub.paths.assets().join("forward/forward.mjs");
@@ -89,7 +128,7 @@ async fn podman_agent_without_network_reaches_mcp_and_git() {
         return;
     }
     let e = common::env_on(rt.clone(), botler_runtime::fake::Fake::new()).await;
-    let listener = botler_hub::serve::bind_socket(&e.hub.paths.socket()).unwrap();
+    let listener = botler_hub::serve::bind_socket(&e.hub.paths.socket().unwrap()).unwrap();
     tokio::spawn(axum::serve(listener, botler_hub::api::router(e.hub.clone())).into_future());
 
     let instance = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
@@ -117,7 +156,7 @@ curl -s -o /dev/null --max-time 3 http://1.1.1.1/ && echo 'outside reachable' ||
         ..Default::default()
     };
     spec.mounts = vec![
-        Mount::Bind { src: e.hub.paths.run_dir(), dst: CONTAINER_RUN_DIR.into(), read_only: true },
+        Mount::Bind { src: e.hub.paths.run_dir().unwrap(), dst: CONTAINER_RUN_DIR.into(), read_only: true },
         Mount::Bind { src: e.hub.paths.assets().join("forward"), dst: "/botler/forward".into(), read_only: true },
     ];
     spec.env.insert("BOTLER_SOCKET".into(), format!("{CONTAINER_RUN_DIR}/hub.sock"));

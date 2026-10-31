@@ -62,14 +62,27 @@ impl Paths {
     pub fn shared_home(&self, name: &str) -> PathBuf {
         self.root.join("shared-homes").join(name)
     }
-    /// The hub's Unix socket lives here. The directory (not the socket) is mounted into every
-    /// container that talks to the hub, at [`CONTAINER_RUN_DIR`], so a restarted hub's new
-    /// socket is visible to containers that outlive it.
-    pub fn run_dir(&self) -> PathBuf {
-        self.root.join("run")
+    /// Short id of this hub: a hash of its data directory. It is part of every container and
+    /// network name the hub creates, and of its runtime directory.
+    pub fn hub_id(&self) -> String {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(path_str(&self.root)))[..8].to_string()
     }
-    pub fn socket(&self) -> PathBuf {
-        self.run_dir().join(SOCKET_NAME)
+    /// The hub's Unix socket lives here: `$XDG_RUNTIME_DIR/botler-<hub id>`, else
+    /// `/tmp/botler-<uid>-<hub id>`. Not in the data directory, whose path may be too long for a
+    /// socket (about 108 bytes). The directory (not the socket) is mounted into every container
+    /// that talks to the hub, at [`CONTAINER_RUN_DIR`], so a restarted hub's new socket is
+    /// visible to containers that outlive it.
+    pub fn run_dir(&self) -> std::io::Result<PathBuf> {
+        use std::os::unix::fs::MetadataExt;
+        let id = self.hub_id();
+        match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|d| d.is_absolute() && d.is_dir()) {
+            Some(dir) => Ok(dir.join(format!("botler-{id}"))),
+            None => Ok(PathBuf::from(format!("/tmp/botler-{}-{id}", std::fs::metadata("/proc/self")?.uid()))),
+        }
+    }
+    pub fn socket(&self) -> std::io::Result<PathBuf> {
+        Ok(self.run_dir()?.join(SOCKET_NAME))
     }
     pub fn uploads(&self) -> PathBuf {
         self.root.join("uploads")
@@ -98,12 +111,11 @@ impl Paths {
             "logs",
             "exports",
             "worktrees",
-            "run",
             "inbox",
         ] {
             std::fs::create_dir_all(self.root.join(d))?;
         }
-        Ok(())
+        private_dir(&self.run_dir()?)
     }
 }
 
@@ -136,6 +148,25 @@ pub const CONTAINER_RUN_DIR: &str = "/run/botler";
 pub const SOCKET_NAME: &str = "hub.sock";
 /// The forwarder in agent containers listens here and relays to the socket.
 pub const FORWARD_URL: &str = "http://127.0.0.1:7420";
+
+/// Create `dir` (0700) or check an existing one is ours: in a shared place like `/tmp` someone
+/// else could have made it first.
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let meta = std::fs::symlink_metadata(dir)?;
+    if !meta.is_dir() || meta.uid() != std::fs::metadata("/proc/self")?.uid() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{} is not a directory of this user; remove it or set XDG_RUNTIME_DIR", dir.display()),
+        ));
+    }
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
 
 pub fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
