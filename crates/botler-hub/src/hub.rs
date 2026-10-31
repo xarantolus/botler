@@ -55,6 +55,8 @@ pub enum HubError {
     Backoff { instance: String, until: chrono::DateTime<chrono::Utc> },
     #[error("host port {ports} is already in use by another program or container; publish a free port: {source}")]
     PortInUse { ports: String, source: botler_runtime::ContainerError },
+    #[error("images build FROM each other in a cycle: {0}")]
+    ImageCycle(String),
     #[error("proposal {id} cannot move to stage {to}: {detail}")]
     StageRefused { id: String, to: &'static str, detail: String },
 }

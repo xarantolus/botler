@@ -69,8 +69,24 @@ struct Resolved {
 
 /// The tag of `recipe` at `commit`. Every other botler image the Dockerfile builds `FROM` must
 /// exist.
-fn resolve<'a>(hub: &'a Hub, recipe: &'a Recipe, commit: &'a str) -> BoxFuture<'a, Result<Resolved>> {
+async fn resolve(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<Resolved> {
+    resolve_from(hub, recipe, commit, &[]).await
+}
+
+/// [`resolve`], below the monorepo images in `chain` that build on it (a cycle is an error).
+fn resolve_from<'a>(
+    hub: &'a Hub,
+    recipe: &'a Recipe,
+    commit: &'a str,
+    chain: &'a [String],
+) -> BoxFuture<'a, Result<Resolved>> {
     Box::pin(async move {
+        if chain.contains(&recipe.repository) {
+            let mut cycle = chain.to_vec();
+            cycle.push(recipe.repository.clone());
+            return Err(HubError::ImageCycle(cycle.join(" → ")));
+        }
+        let chain = [chain, std::slice::from_ref(&recipe.repository)].concat();
         let paths: Vec<&str> = recipe.inputs.iter().map(String::as_str).collect();
         let ids = hub.repo.path_ids(commit, &paths).await?;
         let dockerfile = hub.repo.read_file(commit, &recipe.dockerfile).await?.unwrap_or_default();
@@ -84,7 +100,7 @@ fn resolve<'a>(hub: &'a Hub, recipe: &'a Recipe, commit: &'a str) -> BoxFuture<'
             };
             if let (Some(image), true) = (image, defined) {
                 // Its tag is a content hash already: it stands in for the image id.
-                let tag = resolve(hub, &Recipe::agent(&image), commit).await?.tag;
+                let tag = resolve_from(hub, &Recipe::agent(&image), commit, &chain).await?.tag;
                 bases.push((base.clone(), tag.clone()));
                 monorepo.push(MonorepoBase { reference: base, image, tag });
                 continue;

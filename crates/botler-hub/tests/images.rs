@@ -185,3 +185,23 @@ async fn latest_follows_the_current_base() {
     assert_eq!(id(AGENT_BASE_LATEST.into()).await.as_ref(), Some(&base), "tagged again");
     assert_eq!(e.fake.builds().len(), 2, "no rebuild of the base: {:?}", e.fake.builds());
 }
+
+#[tokio::test]
+async fn images_build_on_each_other_and_a_cycle_is_an_error() {
+    let e = common::env().await;
+    images::ensure_base(&e.hub).await.unwrap();
+    e.commit(&[
+        ("images/x/Dockerfile", "FROM botler/agent-base:latest\n"),
+        ("images/y/Dockerfile", "FROM botler/image-x\n"),
+    ])
+    .await;
+    let [x, y] = tags(&e, &[Recipe::agent("x"), Recipe::agent("y")]).await.try_into().unwrap();
+    e.commit(&[("images/x/Dockerfile", "FROM botler/agent-base:latest\nRUN true\n")]).await;
+    let [x2, y2] = tags(&e, &[Recipe::agent("x"), Recipe::agent("y")]).await.try_into().unwrap();
+    assert!(x != x2 && y != y2, "changing a base changes every image built on it");
+
+    e.commit(&[("images/x/Dockerfile", "FROM botler/image-y\n")]).await;
+    let commit = e.hub.applied().await.commit.clone();
+    let err = images::tag(&e.hub, &Recipe::agent("y"), &commit).await.unwrap_err();
+    assert!(err.to_string().contains("image-y → image-x → image-y"), "{err}");
+}
