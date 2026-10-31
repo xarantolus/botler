@@ -1,15 +1,15 @@
 <script setup lang="ts">
-// Disk use of the data directory, by chat and by kind, largest first, and ways to free it:
-// archive, clear a chat's caches, delete an archived chat, collect garbage.
+// The System view's Storage tab: disk use of the data directory, by chat and by kind, largest
+// first, and ways to free it: archive, clear a chat's caches, delete an archived chat, collect
+// garbage.
 import { computed, onMounted, ref, shallowRef } from "vue";
-import { call } from "../api/client";
-import TimeAgo from "../components/common/TimeAgo.vue";
-import ViewPanel from "../components/common/ViewPanel.vue";
-import { confirm } from "../confirm";
-import type { ChatStorage, StorageKind, StorageOverview } from "../generated";
-import { bytes } from "../lib/time";
-import { notifyError, notifySuccess } from "../notify";
-import { refreshInstances } from "../store";
+import { call } from "../../api/client";
+import TimeAgo from "../common/TimeAgo.vue";
+import { confirm } from "../../confirm";
+import type { ChatStorage, StorageKind, StorageOverview } from "../../generated";
+import { bytes } from "../../lib/time";
+import { notifyError, notifySuccess } from "../../notify";
+import { refreshInstances } from "../../store";
 
 const data = shallowRef<StorageOverview | null>(null);
 const loading = ref(false);
@@ -111,12 +111,12 @@ const collect = () =>
 </script>
 
 <template>
-  <ViewPanel id="storage" title="Storage" icon="i-lucide-hard-drive">
-    <template #right>
+  <div class="mx-auto w-full max-w-4xl space-y-4 p-4 sm:p-6">
+    <div class="flex justify-end gap-1">
       <UButton icon="i-lucide-trash" color="neutral" variant="ghost" label="Collect garbage" :loading="busy === 'gc'" @click="collect" />
-      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="Measure again" :loading="loading" @click="load(true)" />
-    </template>
-    <div class="mx-auto w-full max-w-4xl space-y-4">
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" label="Measure again" :loading="loading" @click="load(true)" />
+    </div>
+    <div class="space-y-4">
       <div v-if="!data" class="space-y-3">
         <USkeleton v-for="n in 4" :key="n" class="h-12 w-full" />
       </div>
@@ -186,5 +186,5 @@ const collect = () =>
         </UCard>
       </template>
     </div>
-  </ViewPanel>
+  </div>
 </template>

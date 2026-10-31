@@ -172,6 +172,7 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
         :badge="badge"
         :cost="cost"
         :pending="session?.pending"
+        :stoppable="!!session && (session.busy || session.queued.length > 0)"
       />
       <UDashboardNavbar v-else title="Chat">
         <template #leading><UDashboardSidebarCollapse /></template>

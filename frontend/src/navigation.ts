@@ -50,5 +50,4 @@ export const sections = computed((): Section[] => [
   },
   { name: "secrets", label: "Secrets", icon: "i-lucide-key-round" },
   { name: "memory", label: "Memory", icon: "i-lucide-brain" },
-  { name: "storage", label: "Storage", icon: "i-lucide-hard-drive" },
 ]);

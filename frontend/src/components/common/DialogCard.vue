@@ -80,6 +80,12 @@ async function onCta(c: string) {
   if (ok) await answer(c, ok.reason || undefined);
 }
 
+/** A visit request's page, on the published port of this host (as the browser reaches it). */
+const visitUrl = computed(() => {
+  const v = view.value.visit;
+  return v ? `${window.location.protocol}//${window.location.hostname}:${v.host_port}${v.path}` : null;
+});
+
 const formComplete = computed(() => (view.value.form ?? []).every((f) => values[f.name]));
 
 function ctaButton(c: string) {
@@ -186,6 +192,26 @@ function onFreeKey(e: KeyboardEvent) {
           />
         </div>
       </form>
+
+      <!-- A page to open (e.g. a login), then done or cancel. -->
+      <template v-else-if="d.kind === 'visit' && view.visit">
+        <MarkdownText v-if="view.visit.instructions" :source="view.visit.instructions" class="text-sm" />
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <UButton
+            :to="visitUrl ?? undefined"
+            target="_blank"
+            rel="noopener noreferrer"
+            icon="i-lucide-external-link"
+            :label="`Open ${view.visit.title}`"
+            class="me-auto"
+          />
+          <UButton color="neutral" variant="ghost" label="Cancel" :loading="busy === 'cancel'" :disabled="!!busy" @click="answer('cancel')" />
+          <UButton icon="i-lucide-check" label="Done" :loading="busy === 'done'" :disabled="!!busy" @click="answer('done')" />
+        </div>
+        <p class="text-xs text-dimmed">
+          <code class="font-mono">{{ visitUrl }}</code> · service {{ view.visit.service }}
+        </p>
+      </template>
 
       <!-- Approvals and questions with choices. -->
       <div v-else-if="d.ctas.length" class="flex flex-wrap justify-end gap-2">

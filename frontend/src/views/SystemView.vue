@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Everything the applied definitions define and what happens next: schedules, services, jobs
-// and agents, each job with its recent runs; and the full run history (the History tab).
+// and agents, each job with its recent runs; the full run history (the History tab); and disk use
+// (the Storage tab).
 import type { TabsItem } from "@nuxt/ui";
 import { computed, onMounted, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -10,6 +11,7 @@ import ViewPanel from "../components/common/ViewPanel.vue";
 import JobSlideover from "../components/system/JobSlideover.vue";
 import RunnableAction from "../components/system/RunnableAction.vue";
 import RunsTable from "../components/system/RunsTable.vue";
+import StoragePanel from "../components/system/StoragePanel.vue";
 import type { JobView, SystemView } from "../generated";
 import { portUrl, runDuration, runStatusColor } from "../lib/runs";
 import { fireLabel, lastFailed, nextFire, plain, schedules, serviceStateColor } from "../lib/system";
@@ -65,10 +67,12 @@ function query(set: Record<string, string>, ...drop: string[]) {
 const tabs: TabsItem[] = [
   { label: "Overview", value: "overview", icon: "i-lucide-layout-list" },
   { label: "History", value: "history", icon: "i-lucide-history" },
+  { label: "Storage", value: "storage", icon: "i-lucide-hard-drive" },
 ];
 const tab = computed({
-  get: () => (route.query.tab === "history" ? "history" : "overview"),
-  set: (t: string) => void router.replace({ query: t === "history" ? query({ tab: t }) : query({}, "tab", "runnable", "run") }),
+  get: () => (route.query.tab === "history" || route.query.tab === "storage" ? route.query.tab : "overview"),
+  set: (t: string) =>
+    void router.replace({ query: t === "overview" ? query({}, "tab", "runnable", "run") : query({ tab: t }, ...(t === "storage" ? ["runnable", "run"] : [])) }),
 });
 
 const runnable = computed(() => (typeof route.query.runnable === "string" ? route.query.runnable : undefined));
@@ -110,7 +114,9 @@ const tz = computed(() => view.value?.timezone ?? "UTC");
       </div>
     </template>
 
-    <div v-if="tab === 'history'" class="flex flex-1 flex-col">
+    <StoragePanel v-if="tab === 'storage'" />
+
+    <div v-else-if="tab === 'history'" class="flex flex-1 flex-col">
       <div v-if="runnable" class="flex items-center gap-2 border-b border-default px-4 py-2 text-sm">
         <span class="text-muted">Runs of</span>
         <UBadge color="neutral" variant="subtle" :label="runnable" />
