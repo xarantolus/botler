@@ -620,7 +620,13 @@ async fn waiting_on_the_user_sleeps_after_a_grace_and_the_answer_wakes_it() {
     settle().await;
     assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Running, "grace not over yet");
     agents::reap_idle(&e.hub, Utc::now() + Duration::minutes(3)).await.unwrap();
-    settle().await;
+    // The exit is recorded by the agent's watcher task in its own time.
+    for _ in 0..100 {
+        settle().await;
+        if e.hub.store.instance(&chat).await.unwrap().state == InstanceState::Dormant {
+            break;
+        }
+    }
     assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, InstanceState::Dormant);
 
     // The answer wakes it and is delivered.

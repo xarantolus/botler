@@ -20,6 +20,16 @@ pub use tree::{FsTree, MemTree, Tree, TreeEntry};
 
 use crate::trigger::ScheduleSpec;
 
+/// The uv workspace's shared code and lock: what tools, connectors and packages are built from.
+pub const SHARED_INPUTS: [&str; 5] = ["pyproject.toml", "uv.lock", "packages", "tools", "connectors"];
+
+/// Repo paths a job's image is built from (its build context): its directory and the shared code.
+pub fn job_inputs(job: &str) -> Vec<String> {
+    let mut inputs = vec![format!("jobs/{job}")];
+    inputs.extend(SHARED_INPUTS.map(String::from));
+    inputs
+}
+
 /// A trigger with its owner and target resolved.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ResolvedTrigger {

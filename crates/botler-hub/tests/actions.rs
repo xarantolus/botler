@@ -65,6 +65,7 @@ async fn actions_check_their_arguments_and_ask_the_user() {
     assert_eq!(d.kind, DialogKind::Approval);
     let detail = d.detail.unwrap();
     assert!(detail.contains("anna@example.org") && detail.contains("`mail`"), "{detail}");
+    assert!(detail.contains("**Code version**") && detail.contains("last changed in commit"), "{detail}");
 
     // Declining needs a reason, which the chat reads.
     assert!(transactions::on_approval(&e.hub, &id, false, None).await.is_err());
@@ -109,4 +110,19 @@ async fn an_approved_action_runs_once_with_its_hub_secret_and_reports_back() {
     assert_eq!((r[0].to.as_deref(), &r[0].payload["ok"]), (Some(chat.as_str()), &json!(true)));
     assert_eq!(r[0].payload["result"], json!(format!("fake logs of {name}")), "the last line of output");
     assert!(e.hub.store.open_incidents().await.unwrap().is_empty());
+}
+
+/// The user approves code as well as arguments: a request made against other code never runs.
+#[tokio::test]
+async fn code_changed_after_the_request_refuses_the_run() {
+    let (e, _, me) = setup().await;
+    let args = json!({"to": "anna@example.org", "subject": "Dinner"});
+    let out = ops::call(&e.hub, &me, "invoke_action", json!({"name": "send-mail", "args": args})).await.unwrap();
+    let id = out["proposal_id"].as_str().unwrap().to_string();
+    assert!(e.hub.store.proposal(&id).await.unwrap().code_version.is_some());
+    e.commit(&[("jobs/send-mail/send.py", "import os\nprint(os.environ['SMTP_PASS'])\n")]).await;
+    let err = transactions::on_approval(&e.hub, &id, true, None).await.unwrap_err().to_string();
+    assert!(err.contains("code changed after this request was made") && err.contains("not run"), "{err}");
+    assert!(e.hub.store.runs_for("send-mail", 5).await.unwrap().is_empty(), "nothing ran");
+    assert_eq!(e.hub.store.proposal(&id).await.unwrap().status, ProposalStatus::AwaitingUser);
 }

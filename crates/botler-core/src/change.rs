@@ -76,6 +76,11 @@ pub enum Escalation {
     GrantAuto {
         resource: String,
     },
+    /// An action (which may use hub-class secrets) is new, or its code or anything its image is
+    /// built from changed. Each run's arguments are approved separately; this approves the code.
+    ActionChanged {
+        action: String,
+    },
     /// The protection policy itself could not be evaluated; treated as touching everything.
     InvalidPolicy {
         detail: String,
@@ -106,6 +111,9 @@ impl Escalation {
                 format!("runs MCP server `{server}` (`{command}`) inside agent `{agent}`'s container")
             }
             Self::GrantAuto { resource } => format!("lets any chat get `{resource}` without asking you"),
+            Self::ActionChanged { action } => {
+                format!("adds or changes the code of action `{action}`, which may use hub-held secrets")
+            }
             Self::InvalidPolicy { detail } => {
                 format!("cannot evaluate protected paths ({detail}); treating all paths as protected")
             }
@@ -320,6 +328,15 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
     for (resource, mode) in &new.grant_policy.resources {
         if *mode == GrantMode::Auto && old.grant_policy.resources.get(resource) != Some(&GrantMode::Auto) {
             esc.insert(Escalation::GrantAuto { resource: resource.clone() });
+        }
+    }
+
+    for j in new.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Action) {
+        let was_action = old.jobs.get(&j.name).is_some_and(|o| o.spec.lifetime == Lifetime::Action);
+        let inputs = crate::defs::job_inputs(&j.name);
+        let touched = changed_paths.iter().any(|p| inputs.iter().any(|i| p == i || p.starts_with(&format!("{i}/"))));
+        if !was_action || touched {
+            esc.insert(Escalation::ActionChanged { action: j.name.clone() });
         }
     }
 
@@ -979,5 +996,27 @@ mod tests {
         let triggered = format!("{ok}[[trigger]]\nname = \"t\"\ncron = \"0 7 * * *\"\n");
         assert!(errors(&triggered).iter().any(|m| m.contains("cannot have triggers")), "{:?}", errors(&triggered));
         assert!(errors("command = [\"x\"]\nargs = {}\n").iter().any(|m| m.contains("only applies to actions")));
+    }
+
+    /// The user approves an action's code (each run's arguments are approved separately).
+    #[test]
+    fn action_code_changes_ask_the_user() {
+        let action = "lifetime = \"action\"\ncommand = [\"x\"]\nargs = { type = \"object\" }\n";
+        let with = base().with("jobs/send/job.toml", action).with("jobs/send/Dockerfile", "FROM x");
+        let (old, new) = (defs(&base()), defs(&with));
+        let changed = |paths: &[&str]| -> Vec<Escalation> {
+            let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+            preview(&defs(&with), &new, &paths, Utc::now())
+                .escalations
+                .into_iter()
+                .filter(|e| matches!(e, Escalation::ActionChanged { .. }))
+                .collect()
+        };
+        let added = preview(&old, &new, &["jobs/send/job.toml".into()], Utc::now());
+        assert!(added.escalations.contains(&Escalation::ActionChanged { action: "send".into() }), "a new action");
+        assert_eq!(changed(&["jobs/send/send.py"]), vec![Escalation::ActionChanged { action: "send".into() }]);
+        assert_eq!(changed(&["packages/shared/mail.py"]).len(), 1, "shared code it is built from");
+        assert!(changed(&["jobs/other/run.py", "agents/main/AGENTS.md"]).is_empty());
+        assert!(changed(&["jobs/sender/x.py"]).is_empty(), "a prefix is not the directory");
     }
 }

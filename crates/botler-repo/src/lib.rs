@@ -296,6 +296,14 @@ impl Repo {
         Ok(out.split('\0').filter(|s| !s.is_empty()).map(String::from).collect())
     }
 
+    /// The newest commit reachable from `commit` that touched any of `paths`.
+    pub async fn last_commit_touching(&self, commit: &str, paths: &[&str]) -> Result<Option<String>> {
+        let mut args = vec!["log", "-1", "--format=%H", commit, "--"];
+        args.extend_from_slice(paths);
+        let out = self.git(&args).await?;
+        Ok(Some(out.trim().to_string()).filter(|c| !c.is_empty()))
+    }
+
     /// Unified diff between two commits, for the reviewer.
     pub async fn diff(&self, base: &str, head: &str) -> Result<String> {
         self.git(&["diff", "--no-color", "--stat", "--patch", base, head]).await

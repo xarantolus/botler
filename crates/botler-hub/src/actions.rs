@@ -53,6 +53,8 @@ pub async fn invoke(hub: &Hub, instance: &str, name: &str, args: Value) -> std::
         )));
     }
     let pretty = serde_json::to_string_pretty(&args).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+    let version = code_version(hub, name, &applied.commit).await?;
+    let changed = last_change(hub, name, &applied.commit).await?;
     let p = hub
         .store
         .create_proposal(
@@ -64,6 +66,7 @@ pub async fn invoke(hub: &Hub, instance: &str, name: &str, args: Value) -> std::
                 action: Some(name.into()),
                 args: Some(args.clone()),
                 args_hash: Some(args_hash(&args)),
+                code_version: Some(version.clone()),
                 ..Default::default()
             },
         )
@@ -81,8 +84,9 @@ pub async fn invoke(hub: &Hub, instance: &str, name: &str, args: Value) -> std::
             kind: DialogKind::Approval,
             question: format!("Run action `{name}` for {who}?"),
             detail: Some(format!(
-                "{}\n\n**Arguments** (it runs with exactly these)\n```json\n{pretty}\n```\n\n**Secret groups it uses:** {secrets}",
+                "{}\n\n**Arguments** (it runs with exactly these)\n```json\n{pretty}\n```\n\n**Secret groups it uses:** {secrets}\n\n**Code version** `{}` (it runs with exactly this code), {changed}",
                 if def.spec.description.is_empty() { "(no description)" } else { &def.spec.description },
+                short(&version),
             )),
             ctas: vec!["approve".into(), "reject".into()],
             about: vec![],
@@ -116,6 +120,15 @@ pub async fn on_approval(hub: &Arc<Hub>, p: &Proposal, approved: bool, reason: O
     if p.args_hash.as_deref() != Some(args_hash(&args).as_str()) {
         return Err(HubError::Forbidden(format!("the arguments of action request {} changed after it was made", p.id)));
     }
+    let now = code_version(hub, &action, &hub.applied().await.commit).await?;
+    if p.code_version.as_deref() != Some(now.as_str()) {
+        return Err(HubError::Forbidden(format!(
+            "action `{action}`'s code changed after this request was made (it was version {}, now {}); \
+             it was not run. Reject this request; the agent can invoke the action again to ask about the new code.",
+            p.code_version.as_deref().map_or("unknown", short),
+            short(&now)
+        )));
+    }
     let d = ProposalDecision { by: user, why: "approved by you", reason };
     if !hub.store.decide_proposal(&p.id, Some(ProposalStatus::Approved), &d).await? {
         return Err(HubError::Forbidden(format!("action request {} is already decided", p.id)));
@@ -137,6 +150,33 @@ pub async fn on_approval(hub: &Arc<Hub>, p: &Proposal, approved: bool, reason: O
         return result(hub, p, &action, false, serde_json::json!({ "error": format!("could not start: {e}") })).await;
     }
     Ok(())
+}
+
+/// The code version of action `name` at `commit`: its image tag, a hash of everything it is
+/// built from.
+async fn code_version(hub: &Hub, name: &str, commit: &str) -> Result<String> {
+    // The base image is part of the tag (built at startup; this only waits on a fresh host).
+    crate::images::ensure_base(hub).await?;
+    crate::images::tag(hub, &crate::images::Recipe::job(name), commit).await
+}
+
+fn short(version: &str) -> &str {
+    let hash = version.rsplit(':').next().unwrap_or(version);
+    &hash[..hash.len().min(12)]
+}
+
+/// Where action `name`'s code last changed on main, for the user judging a request.
+async fn last_change(hub: &Hub, name: &str, commit: &str) -> Result<String> {
+    let inputs = botler_core::defs::job_inputs(name);
+    let paths: Vec<&str> = inputs.iter().map(String::as_str).collect();
+    let Some(c) = hub.repo.last_commit_touching(commit, &paths).await? else {
+        return Ok("never changed since the monorepo was created".into());
+    };
+    let proposal = hub.store.recent_proposals(200).await?.into_iter().find(|p| p.merged_commit.as_deref() == Some(&c));
+    Ok(match proposal {
+        Some(p) => format!("last changed by proposal \"{}\" ({}, commit {})", p.title, p.id, &c[..c.len().min(12)]),
+        None => format!("last changed in commit {}", &c[..c.len().min(12)]),
+    })
 }
 
 /// The proposal an action run carries out.

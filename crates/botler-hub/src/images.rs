@@ -38,20 +38,16 @@ impl Recipe {
     /// Python tools run from (baked into `/opt/botler/tools-venv`, so a call installs nothing).
     pub fn agent(image: &str) -> Self {
         let mut inputs = vec![format!("images/{image}")];
-        inputs.extend(TOOL_INPUTS.map(String::from));
+        inputs.extend(botler_core::defs::SHARED_INPUTS.map(String::from));
         Self { repository: format!("image-{image}"), dockerfile: format!("images/{image}/Dockerfile"), inputs }
     }
 
     /// A job image: its own directory plus the uv workspace's shared code and lock.
     pub fn job(job: &str) -> Self {
-        let mut inputs = vec![format!("jobs/{job}")];
-        inputs.extend(TOOL_INPUTS.map(String::from));
+        let inputs = botler_core::defs::job_inputs(job);
         Self { repository: format!("job-{job}"), dockerfile: format!("jobs/{job}/Dockerfile"), inputs }
     }
 }
-
-/// The uv workspace's shared code and lock: what tools, connectors and packages are built from.
-const TOOL_INPUTS: [&str; 5] = ["pyproject.toml", "uv.lock", "packages", "tools", "connectors"];
 
 /// The tag of `recipe` at `commit`, and the inputs present there. Every botler image the
 /// Dockerfile builds `FROM` must exist.
