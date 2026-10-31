@@ -5,6 +5,20 @@ from __future__ import annotations
 import httpx
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+# A browser sends a real `Accept`; httpx defaults to `*/*`, which DuckDuckGo's bot check flags.
+ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+# The headers a Firefox navigation sends. A sparse set (User-Agent only, or `Accept: */*`)
+# is an easy bot signal; care is still needed, DuckDuckGo also rate-limits per IP.
+BROWSER_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": ACCEPT,
+    "Accept-Language": "en-US,en;q=0.5",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
 TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 
 
@@ -26,9 +40,5 @@ def fix_hint(module: str) -> str:
 
 
 def client() -> httpx.Client:
-    """A client with a browser User-Agent and timeouts. Tests replace this to serve saved pages."""
-    return httpx.Client(
-        headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.8"},
-        timeout=TIMEOUT,
-        follow_redirects=True,
-    )
+    """A client with a browser's headers and timeouts. Tests replace this to serve saved pages."""
+    return httpx.Client(headers=BROWSER_HEADERS, timeout=TIMEOUT, follow_redirects=True)

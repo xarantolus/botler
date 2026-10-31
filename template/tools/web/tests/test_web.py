@@ -128,7 +128,7 @@ def test_openrouter_backend(monkeypatch: pytest.MonkeyPatch) -> None:
         return httpx.Response(200, json=OPENROUTER)
 
     serve(monkeypatch, handler)
-    r = search("python programming language", max_results=5)
+    r = search("python programming language", max_results=5, backend="openrouter")
     assert r.backend == "openrouter" and r.note is None and len(r.results) == 5
     assert r.cost_usd == pytest.approx(0.001018768)
     assert sent[0].headers["authorization"] == "Bearer test-key"
@@ -144,26 +144,35 @@ def test_openrouter_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
     assert e.value.code == "no_key"
 
 
-def test_auto_falls_back_to_duckduckgo(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auto_prefers_duckduckgo(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    serve(
-        monkeypatch,
-        lambda req: (
-            httpx.Response(402, json={"error": {"message": "Insufficient credits"}})
-            if req.url.host == "openrouter.ai"
-            else httpx.Response(200, text=DDG)
-        ),
-    )
+    hosts: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        hosts.append(req.url.host or "")
+        return httpx.Response(200, text=DDG)
+
+    serve(monkeypatch, handler)
     r = search("python httpx", max_results=3)
     assert r.backend == "duckduckgo" and len(r.results) == 3
-    assert r.note is not None and "HTTP 402" in r.note and "out of credits" in r.note
+    assert r.note is None
+    # OpenRouter is not consulted when DuckDuckGo works.
+    assert all(host == "html.duckduckgo.com" for host in hosts)
+
+
+def test_auto_falls_back_to_openrouter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    serve(monkeypatch, ddg_blocked_or_openrouter(httpx.Response(200, json=OPENROUTER)))
+    r = search("python programming language", max_results=5)
+    assert r.backend == "openrouter" and len(r.results) == 5
+    assert r.note is not None and "bot check" in r.note
 
 
 def test_auto_reports_both_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     serve(monkeypatch, ddg_blocked_or_openrouter(httpx.Response(401, text="no auth")))
     with pytest.raises(
-        WebToolError, match=r"Both search backends failed\. openrouter: .*HTTP 401.*bot check"
+        WebToolError, match=r"Both search backends failed\. duckduckgo: .*bot check.*openrouter: .*HTTP 401"
     ):
         search("x")
     # OpenRouter is not consulted when another backend is asked for.

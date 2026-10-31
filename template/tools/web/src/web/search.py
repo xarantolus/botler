@@ -1,6 +1,7 @@
-"""`web.search`: OpenRouter's web search (`openrouter.py`) or a scraper of DuckDuckGo's no-JavaScript
-HTML endpoint (here). `auto` tries OpenRouter first: DuckDuckGo blocks a host with its bot check after a
-few searches, while OpenRouter costs about $0.001 per search, little next to a model call.
+"""`web.search`: a scraper of DuckDuckGo's no-JavaScript HTML endpoint (here), with OpenRouter's web
+search (`openrouter.py`) as fallback. `auto` tries DuckDuckGo first: it is free, but blocks a host with
+its bot check after a few searches, so it falls back to OpenRouter, which costs about $0.001 per search,
+little next to a model call.
 
 DuckDuckGo changes its markup now and then. When parsing fails, `parse_page` raises with a pointer
 here; the fixture `tests/fixtures/ddg_results.html` is a saved results page to test against.
@@ -187,20 +188,20 @@ def search(
 ) -> SearchResponse:
     """Search the web. Returns {backend, cost_usd, note, results: [{title, url, snippet}]}; use web.fetch
     to read a result. `backend`: "openrouter" (OpenRouter's web search, about $0.001 per search),
-    "duckduckgo" (free scraping, often blocked by its bot check), or "auto" (default): OpenRouter, and
-    DuckDuckGo if that fails; `note` says why a backend was skipped. `region` is a DuckDuckGo region
+    "duckduckgo" (free scraping, often blocked by its bot check), or "auto" (default): DuckDuckGo, and
+    OpenRouter if that fails; `note` says why a backend was skipped. `region` is a DuckDuckGo region
     code such as "us-en" or "de-de"; OpenRouter ignores it. Maintained in the monorepo (tools/web/);
     if it breaks, fix it."""
     if backend != "auto":
         return _run(backend, query, max_results, region)
     try:
-        return _run("openrouter", query, max_results, region)
+        return _run("duckduckgo", query, max_results, region)
     except WebToolError as first:
         try:
-            response = _run("duckduckgo", query, max_results, region)
+            response = _run("openrouter", query, max_results, region)
         except WebToolError as second:
             raise WebToolError(
-                second.code, f"Both search backends failed. openrouter: {first} duckduckgo: {second}"
+                second.code, f"Both search backends failed. duckduckgo: {first} openrouter: {second}"
             ) from second
-        response.note = f"openrouter failed, used duckduckgo: {first}"
+        response.note = f"duckduckgo failed, used openrouter: {first}"
         return response
