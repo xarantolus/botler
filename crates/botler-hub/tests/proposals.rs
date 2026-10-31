@@ -200,3 +200,104 @@ async fn explain_says_where_it_stands_and_who_acts() {
     let p = wait_for(&e, &p.id, &[ProposalStatus::Merged]).await;
     assert!(transactions::explain(&p, true).starts_with("Merged as"));
 }
+
+/// Wait until the pipeline is at `stage` (held there by the test).
+async fn wait_stage(e: &common::Env, id: &str, stage: ProposalStage) -> Proposal {
+    for _ in 0..400 {
+        let p = e.hub.store.proposal(id).await.unwrap();
+        if p.stage == Some(stage) {
+            return p;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("never reached {stage:?}");
+}
+
+async fn reviewers(e: &common::Env) -> usize {
+    let all = e.hub.store.all_instances(500).await.unwrap();
+    all.iter().filter(|i| i.name.starts_with("reviewer-")).count()
+}
+
+#[tokio::test]
+async fn approved_while_checks_run_it_merges_once_the_gate_passes_without_a_review() {
+    let e = env().await;
+    // Holding the build lock keeps the pipeline at the image stage.
+    let held = e.hub.build_lock.lock().await;
+    let p = propose(&e, "botler", "grant", &[("agents/botler/agent.toml", GRANT)]).await;
+    let p = wait_stage(&e, &p.id, ProposalStage::Image).await;
+    transactions::on_approval(&e.hub, &p.id, true, Some("go")).await.unwrap();
+    let q = e.hub.store.proposal(&p.id).await.unwrap();
+    assert_eq!(q.decision.as_deref(), Some(transactions::EARLY));
+    assert!(transactions::explain(&q, true).contains("merges as soon as the gate passes"));
+    drop(held);
+    let p = wait_for(&e, &p.id, &[ProposalStatus::Merged, ProposalStatus::Failed]).await;
+    assert_eq!(p.status, ProposalStatus::Merged, "{:?}", p.review_notes);
+    assert_eq!(reviewers(&e).await, 0, "no reviewer");
+    assert!(e.hub.store.recent_dialogs(50).await.unwrap().iter().all(|d| d.proposal_id.as_deref() != Some(&p.id)));
+    assert_eq!(p.carried_over, 0);
+}
+
+#[tokio::test]
+async fn approved_during_the_review_it_merges_and_the_verdict_is_ignored() {
+    let e = env().await;
+    let p = propose(&e, "botler", "grant", &[("agents/botler/agent.toml", GRANT)]).await;
+    let p = wait_for(&e, &p.id, &[ProposalStatus::Reviewing]).await;
+    transactions::on_approval(&e.hub, &p.id, true, None).await.unwrap();
+    let p = wait_for(&e, &p.id, &[ProposalStatus::Merged]).await;
+    transactions::submit_review(&e.hub, p.reviewer.as_deref().unwrap(), &p.id, Verdict::Reject, "no").await.unwrap();
+    let p = e.hub.store.proposal(&p.id).await.unwrap();
+    assert_eq!(p.status, ProposalStatus::Merged);
+    assert_eq!(p.verdict.as_deref(), Some("reject"), "kept for the record");
+    assert_eq!(approval_dialogs(&e, &p.id).await, 0);
+}
+
+#[tokio::test]
+async fn an_early_approval_of_another_patch_is_dropped_and_it_is_reviewed() {
+    let e = env().await;
+    let held = e.hub.build_lock.lock().await;
+    let p = start(&e, "alpha").await;
+    let p = wait_stage(&e, &p.id, ProposalStage::Image).await;
+    transactions::on_approval(&e.hub, &p.id, true, None).await.unwrap();
+    // As if the change was not the same patch any more once rebased.
+    e.hub.store.set_proposal_approval(&p.id, Some(("another patch", &[]))).await.unwrap();
+    drop(held);
+    let p = wait_for(&e, &p.id, &[ProposalStatus::Reviewing, ProposalStatus::Merged]).await;
+    assert_eq!(p.status, ProposalStatus::Reviewing);
+    assert_eq!(p.approved_patch, None);
+    e.route().await;
+    let updates = e
+        .hub
+        .store
+        .events(&botler_store::EventQuery { kind: Some("proposal.updated".into()), limit: 20, ..Default::default() })
+        .await
+        .unwrap();
+    assert!(updates.iter().any(|u| u.payload["detail"].as_str().unwrap().contains("does not carry over")));
+    // The reviewer decides again.
+    approve(&e, &p).await;
+    assert_eq!(wait_for(&e, &p.id, &[ProposalStatus::Merged]).await.status, ProposalStatus::Merged);
+}
+
+#[tokio::test]
+async fn an_early_approval_never_bypasses_the_gate() {
+    let e = env().await;
+    e.fake.set_script_result("gate: FAILED\n", 1);
+    let held = e.hub.build_lock.lock().await;
+    let p = start(&e, "alpha").await;
+    let p = wait_stage(&e, &p.id, ProposalStage::Image).await;
+    transactions::on_approval(&e.hub, &p.id, true, None).await.unwrap();
+    drop(held);
+    let p = wait_for(&e, &p.id, &[ProposalStatus::Failed, ProposalStatus::Merged]).await;
+    assert_eq!(p.status, ProposalStatus::Failed);
+    assert!(p.gate_report.unwrap().contains("FAILED"));
+}
+
+#[tokio::test]
+async fn approving_a_finished_proposal_is_refused() {
+    let e = env().await;
+    let p = start(&e, "alpha").await;
+    let p = wait_for(&e, &p.id, &[ProposalStatus::Reviewing]).await;
+    approve(&e, &p).await;
+    wait_for(&e, &p.id, &[ProposalStatus::Merged]).await;
+    let err = transactions::on_approval(&e.hub, &p.id, true, None).await.unwrap_err();
+    assert!(err.to_string().contains("already decided"), "{err}");
+}

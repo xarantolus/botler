@@ -43,7 +43,9 @@ pub const PROCESS: &str = "A proposal goes: rebase onto main → validate (deplo
 (first builds the image it runs in, which can take minutes) → reviewer agent → the user, only if the \
 reviewer escalates or the change needs their approval → merge and apply. If main moves before the \
 merge, the proposal is rebased and checked again; an approved change that is unchanged merges \
-without asking again. Never promise the user more than this.";
+without asking again. The user may approve early, before the checks finish: it then merges as \
+soon as the gate passes, without a review (a failing gate still fails it). Never promise the user \
+more than this.";
 
 /// Start a proposal for `branch` (pushed by `instance`). The pipeline runs in the background.
 pub async fn propose(hub: &Arc<Hub>, instance: &str, branch: &str, title: &str) -> Result<Proposal> {
@@ -126,6 +128,8 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     }
     broadcast(hub, id).await?;
     let p = hub.store.proposal(id).await?;
+    // An approval from before this run carries over; one given during it is an early approval.
+    let approved_at_start = p.approved_patch.is_some();
     let original = p.head_commit.clone().unwrap_or_default();
     let head = match hub.repo.rebase_onto_main(&original, &p.title).await {
         Ok(h) => h,
@@ -167,6 +171,11 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
 
     let again = match carry(hub, &hub.store.proposal(id).await?, &base, &head, &summary).await? {
         Carry::NoApproval => String::new(),
+        Carry::Carries if !approved_at_start => {
+            update(hub, id, "gating", "The gate passed and the user approved it already: merging, without a review.")
+                .await?;
+            return merge(hub, id).await;
+        }
         Carry::Carries => {
             hub.store.carry_proposal_approval(id).await?;
             let by = hub.store.proposal(id).await?.decided_by.unwrap_or_else(|| "the reviewer".into());
@@ -193,7 +202,9 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     let reviewer = start_review(hub, id, &base, &head, &md, &report).await?;
     match reviewer {
         Some(name) => {
-            hub.store.set_proposal_reviewing(id, &name).await?;
+            if !hub.store.set_proposal_reviewing(id, &name).await? {
+                return Ok(()); // the user approved (it is merging) or rejected it meanwhile
+            }
             hub.store.set_proposal_progress(id, &format!("reviewer `{name}` is reading the diff"), None).await?;
             // A reviewer that fails or goes quiet hands the decision to the user.
             crate::turns::expect_reply(hub, crate::turns::HUB, &name, None, None).await?;
@@ -340,8 +351,11 @@ pub async fn submit_review(hub: &Arc<Hub>, reviewer: &str, id: &str, verdict: Ve
         Verdict::Escalate => "escalate",
         Verdict::Reject => "reject",
     };
-    // The user decided while the review ran: the verdict is kept for the record, nothing more.
-    if p.status == ProposalStatus::Rejected && p.decided_by.as_deref() == Some(USER) {
+    // The user decided while the review ran (rejected it, or approved it, which outranks the
+    // reviewer): the verdict is kept for the record, nothing more.
+    let by_user = p.decided_by.as_deref() == Some(USER);
+    if by_user && (p.status == ProposalStatus::Rejected || p.approved_patch.is_some()) {
+        hub.store.clear_expectations(Some(crate::turns::HUB), reviewer).await?;
         return Ok(hub.store.set_proposal_review(id, v, notes).await?);
     }
     if p.status != ProposalStatus::Reviewing {
@@ -433,6 +447,8 @@ async fn ask_user(hub: &Hub, p: &Proposal, summary: &ChangeSummary, notes: &str)
 
 /// `decided_by` of the user's decisions.
 pub const USER: &str = "user";
+/// `decision` of an approval given before the proposal asked for it.
+pub const EARLY: &str = "approved by you before the checks finished";
 
 /// The user decides: approve (only once it awaits them; `reason` is an optional comment) or
 /// reject at any stage before the merge (`reason` required), which stops the pipeline where it
@@ -444,18 +460,42 @@ pub async fn on_approval(hub: &Arc<Hub>, id: &str, approved: bool, reason: Optio
         return crate::actions::on_approval(hub, &p, approved, reason).await;
     }
     if approved {
-        if p.status != ProposalStatus::AwaitingUser {
-            return Err(HubError::Forbidden(format!(
-                "proposal {id} is not waiting for your approval; approve it once its checks finish"
-            )));
+        // Early: before it asks. The approval covers this patch and its escalations; it still
+        // has to pass the gate, and it carries over clean rebases like any approval.
+        let early = p.status != ProposalStatus::AwaitingUser;
+        if early {
+            if p.status.is_terminal() {
+                return Err(HubError::Forbidden(format!("proposal {id} is already decided")));
+            }
+            if p.stage == Some(ProposalStage::Merge) {
+                return Err(HubError::Forbidden(format!("proposal {id} is already merging")));
+            }
+            if p.summary.is_none() || matches!(p.stage, None | Some(ProposalStage::Rebase)) {
+                return Err(HubError::Forbidden(format!(
+                    "proposal {id} is not validated yet; approve it in a few seconds, once its summary shows"
+                )));
+            }
         }
-        let d = ProposalDecision { by: USER, why: "approved by you", reason };
-        if !hub.store.decide_proposal(id, None, &d).await? {
+        let why = if early { EARLY } else { "approved by you" };
+        if !hub.store.decide_proposal(id, None, &ProposalDecision { by: USER, why, reason }).await? {
             return Err(HubError::Forbidden(format!("proposal {id} is already decided")));
+        }
+        if early {
+            record_approval(hub, &p).await?;
         }
         close_approval(hub, id, "approve").await?;
         let said = reason.map(|r| format!(" (\"{r}\")")).unwrap_or_default();
+        // Not gated yet: the pipeline merges it once the gate passes.
+        if early && (p.gated_commit.is_none() || p.gated_commit != p.head_commit) {
+            let detail = format!(
+                "The user approved it{said} before the checks finished; it merges as soon as the gate passes, without a review."
+            );
+            return update(hub, id, "approved", &detail).await;
+        }
         update(hub, id, "approved", &format!("The user approved it{said}; merging.")).await?;
+        if let Some(reviewer) = p.reviewer.as_deref().filter(|_| p.status == ProposalStatus::Reviewing) {
+            hub.store.clear_expectations(Some(crate::turns::HUB), reviewer).await?;
+        }
         return merge(hub, id).await;
     }
     let Some(reason) = reason else {
@@ -742,7 +782,11 @@ pub fn explain(p: &Proposal, for_agent: bool) -> String {
                 Some(ProposalStage::Gate) => "running the gate",
                 _ => "being checked",
             };
-            let now = if p.approved_patch.is_some() {
+            let now = if p.approved_patch.is_some() && p.decision.as_deref() == Some(EARLY) {
+                format!(
+                    "Approved by the user before the checks finished; it is {doing} and merges as soon as the gate passes."
+                )
+            } else if p.approved_patch.is_some() {
                 format!(
                     "Approved by {}, but main moved before the merge, so it is {doing} again. If the change is unchanged it merges without asking again; otherwise it is reviewed again.",
                     by(p.decided_by.as_deref())

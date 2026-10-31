@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Proposal } from "../generated";
-import { gateVerdict, pipeline, rejectable, splitRows, stageSummary, stepTimes, unifiedRows } from "./proposals";
+import { approvable, approvedEarly, gateVerdict, pipeline, rejectable, splitRows, stageSummary, stepTimes, unifiedRows } from "./proposals";
 
 const hunks = [
   { header: "@@ -3,4 +3,5 @@ fn main", old_start: 3, new_start: 3, lines: [" a", "-b", "-c", "+B", "+C", "+D", " e", "\\ No newline at end of file"] },
@@ -125,6 +125,19 @@ describe("pipeline", () => {
     expect(rejectable(r)).toBe(false);
     expect(gateVerdict(r)).toBeNull();
     expect(pipeline(r, now).steps[3]!.description).toBe("rejected by you");
+  });
+
+  it("takes an approval once validated, until the merge", () => {
+    const summary = { items: [], activities: [], checks: [], triggers: [], escalations: [] };
+    expect(approvable(proposal({ stage: "rebase" }))).toBe(false);
+    expect(approvable(proposal({ stage: "image" }))).toBe(false);
+    expect(approvable(proposal({ stage: "image", summary }))).toBe(true);
+    expect(approvable(proposal({ status: "reviewing", stage: "review", summary }))).toBe(true);
+    expect(approvable(proposal({ status: "awaiting_user", stage: "approval", summary }))).toBe(true);
+    expect(approvable(proposal({ stage: "merge", summary }))).toBe(false);
+    expect(approvable(proposal({ status: "merged", stage: "merge", summary }))).toBe(false);
+    expect(approvedEarly(proposal({ stage: "gate", decided_by: "user", approved_patch: "x" }))).toBe(true);
+    expect(approvedEarly(proposal({ stage: "gate", decided_by: "user", approved_patch: null }))).toBe(false);
   });
 
   it("reports a failed gate", () => {

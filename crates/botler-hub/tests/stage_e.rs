@@ -132,8 +132,7 @@ async fn the_user_rejects_in_flight_with_a_reason_the_agent_reads() {
     push_branch(&e, "agents/botler/digest", &[("triggers/digest.toml", TRIGGER)]);
     let p = transactions::propose(&e.hub, "botler", "agents/botler/digest", "Morning digest").await.unwrap();
     let p = wait_for(&e, &p.id, &[ProposalStatus::Reviewing]).await;
-    // Approving needs the checks to finish; rejecting needs a reason.
-    assert!(transactions::on_approval(&e.hub, &p.id, true, None).await.is_err());
+    // Rejecting needs a reason (approving early is in tests/proposals.rs).
     assert!(transactions::on_approval(&e.hub, &p.id, false, Some("  ")).await.is_err());
     transactions::on_approval(&e.hub, &p.id, false, Some("Not on weekdays, I sleep in.")).await.unwrap();
     let p = e.hub.store.proposal(&p.id).await.unwrap();

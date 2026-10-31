@@ -289,15 +289,17 @@ impl Store {
 
     /// Hand the proposal to `reviewer`: status and reviewer change together, so nobody sees a
     /// proposal under review without its reviewer.
-    pub async fn set_proposal_reviewing(&self, id: &str, reviewer: &str) -> Result<()> {
-        sqlx::query("UPDATE proposals SET status = ?, reviewer = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')")
+    /// False if it finished or is merging meanwhile.
+    pub async fn set_proposal_reviewing(&self, id: &str, reviewer: &str) -> Result<bool> {
+        let n = sqlx::query("UPDATE proposals SET status = ?, reviewer = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user') AND COALESCE(stage, '') != 'merge'")
             .bind(ProposalStatus::Reviewing.as_str())
             .bind(reviewer)
             .bind(ts(Utc::now()))
             .bind(id)
             .execute(&self.pool)
-            .await?;
-        Ok(())
+            .await?
+            .rows_affected();
+        Ok(n == 1)
     }
 
     /// Count a pipeline (re-)run; returns the new count.

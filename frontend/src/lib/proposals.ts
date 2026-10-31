@@ -80,6 +80,17 @@ export function inFlight(p: Pick<Proposal, "status">): boolean {
   return p.status === "gating" || p.status === "reviewing" || p.status === "awaiting_user";
 }
 
+/** Whether the hub accepts the user's approval now: once validated (it has a summary), until
+ * the merge starts. Before it asks, that is an early approval: it merges when the gate passes. */
+export function approvable(p: Pick<Proposal, "status" | "stage" | "summary">): boolean {
+  return inFlight(p) && p.summary !== null && p.stage !== null && p.stage !== "rebase" && p.stage !== "merge";
+}
+
+/** Approved by the user before it asked; it merges once the gate passes. */
+export function approvedEarly(p: Pick<Proposal, "status" | "stage" | "decided_by" | "approved_patch">): boolean {
+  return inFlight(p) && p.status !== "awaiting_user" && p.stage !== "merge" && p.decided_by === "user" && p.approved_patch !== null;
+}
+
 /** Whether the user can still reject it (until the merge starts). */
 export function rejectable(p: Pick<Proposal, "status" | "stage">): boolean {
   return inFlight(p) && p.stage !== "merge";

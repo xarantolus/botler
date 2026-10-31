@@ -12,7 +12,7 @@ import TimeAgo from "../components/common/TimeAgo.vue";
 import ViewPanel from "../components/common/ViewPanel.vue";
 import { confirm, confirmDecision } from "../confirm";
 import type { ProposalDiff, ProposalView } from "../generated";
-import { FILE_STATUS, gateVerdict, inFlight, pipeline, rejectable } from "../lib/proposals";
+import { FILE_STATUS, approvable, approvedEarly, gateVerdict, inFlight, pipeline, rejectable } from "../lib/proposals";
 import { proposalStatusColor, proposalStatusLabel } from "../lib/runs";
 import { notifyError, notifySuccess } from "../notify";
 import { useNow } from "../now";
@@ -166,6 +166,14 @@ const fileId = (path: string) => `file-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
             :label="`reviewer: ${p.verdict}`"
           />
           <UBadge
+            v-if="approvedEarly(p)"
+            color="success"
+            variant="subtle"
+            size="sm"
+            icon="i-lucide-check"
+            label="approved by you — merges when the gate passes"
+          />
+          <UBadge
             v-if="p.carried_over > 0"
             color="success"
             variant="outline"
@@ -309,7 +317,11 @@ const fileId = (path: string) => `file-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
     >
       <span class="me-auto text-sm text-muted">
         <span class="hidden sm:inline">{{
-          p.status === "awaiting_user" ? "Waiting for your decision." : "Checks are running. You can approve once they pass if it needs you; you can reject it now."
+          p.status === "awaiting_user"
+            ? "Waiting for your decision."
+            : approvedEarly(p)
+              ? "You approved it; it merges when the gate passes."
+              : "Checks are running. Approve now to merge it as soon as the gate passes, or reject it."
         }}</span>
       </span>
       <UButton
@@ -322,9 +334,9 @@ const fileId = (path: string) => `file-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
         @click="decide(false)"
       />
       <UButton
-        v-if="p.status === 'awaiting_user'"
+        v-if="approvable(p) && !approvedEarly(p)"
         icon="i-lucide-check"
-        label="Approve"
+        :label="p.status === 'awaiting_user' ? 'Approve' : 'Approve now (merges when checks pass)'"
         :loading="busy === 'approve'"
         :disabled="!!busy"
         @click="decide(true)"
