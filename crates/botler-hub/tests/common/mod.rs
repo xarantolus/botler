@@ -42,8 +42,13 @@ pub async fn env_on(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake) ->
 
 /// Like [`env_on`], with `config`.
 pub async fn env_with(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake, config: HubConfig) -> Env {
+    env_at(runtime, fake, config, "data").await
+}
+
+/// Like [`env_with`], with the data directory at `data` inside the test's temporary directory.
+pub async fn env_at(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake, config: HubConfig, data: &str) -> Env {
     let dir = tempfile::tempdir().unwrap();
-    let paths = Paths::new(dir.path().join("data"));
+    let paths = Paths::new(dir.path().join(data));
     paths.ensure().unwrap();
     let tpl = dir.path().join("template");
     copy_dir(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template")), &tpl);
@@ -51,6 +56,18 @@ pub async fn env_with(runtime: Arc<dyn botler_runtime::Containers>, fake: Fake, 
     assets::unpack(&paths).unwrap();
     let hub = Hub::open(paths, config, runtime).await.unwrap();
     Env { _dir: dir, hub, fake }
+}
+
+impl Drop for Env {
+    /// The runtime directory (the hub's socket) lives outside the temporary directory.
+    fn drop(&mut self) {
+        if let Ok(dir) = self.hub.paths.run_dir()
+            && let Err(e) = std::fs::remove_dir_all(&dir)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!("could not remove {}: {e}", dir.display());
+        }
+    }
 }
 
 fn git(dir: &Path, args: &[&str]) {

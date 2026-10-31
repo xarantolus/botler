@@ -101,6 +101,7 @@ async fn old_front_door_is_renamed_in_repo_store_and_directories() {
     let hub = open(&paths).await;
     assert_eq!(hub.repo.main().await.unwrap(), head);
     assert!(hub.store.find_instance(FRONT_DOOR).await.unwrap().is_some());
+    std::fs::remove_dir_all(paths.run_dir().unwrap()).unwrap();
 }
 
 #[tokio::test]

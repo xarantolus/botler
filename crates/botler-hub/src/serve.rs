@@ -22,6 +22,19 @@ async fn route_loop(hub: Arc<Hub>) {
 /// may connect (containers run as that user under rootless Podman).
 pub fn bind_socket(path: &std::path::Path) -> std::io::Result<tokio::net::UnixListener> {
     use std::os::unix::fs::PermissionsExt;
+    // `sun_path` holds 108 bytes including the terminating NUL.
+    const MAX_SOCKET_PATH: usize = 107;
+    let len = path.as_os_str().len();
+    if len > MAX_SOCKET_PATH {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "the hub's socket path {} is {len} bytes, more than the {MAX_SOCKET_PATH} Unix sockets allow; \
+                 set XDG_RUNTIME_DIR to a shorter directory",
+                path.display()
+            ),
+        ));
+    }
     match std::fs::remove_file(path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -68,8 +81,9 @@ pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()
     let listener = tokio::net::TcpListener::bind(hub.config.listen).await?;
     tracing::info!(addr = %hub.config.listen, commit = %hub.applied().await.commit, "botler hub listening");
     let app = api::router(hub.clone());
-    let unix = bind_socket(&hub.paths.socket())?;
-    tracing::info!(socket = %hub.paths.socket().display(), "containers reach the hub on its socket");
+    let socket = hub.paths.socket()?;
+    let unix = bind_socket(&socket)?;
+    tracing::info!(socket = %socket.display(), "containers reach the hub on its socket");
     let socket_app = app.clone();
     tokio::spawn(async move {
         if let Err(e) = axum::serve(unix, socket_app).await {

@@ -134,10 +134,7 @@ impl Hub {
         let memory = crate::memory::Memory::open(paths.memory()).await?;
         let (live, _) = broadcast::channel(1024);
         let search = crate::search::Index::open(&paths.search_db()).await?;
-        let id = {
-            use sha2::Digest;
-            hex::encode(sha2::Sha256::digest(crate::config::path_str(&paths.root)))[..8].to_string()
-        };
+        let id = paths.hub_id();
         Ok(Arc::new(Self {
             id,
             paths,

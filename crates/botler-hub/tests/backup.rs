@@ -4,7 +4,16 @@ use std::path::Path;
 use std::process::Command;
 
 fn botler(data: &Path, args: &[&str]) -> std::process::Output {
-    let out = Command::new(env!("CARGO_BIN_EXE_botler")).arg("--data").arg(data).args(args).output().unwrap();
+    // The hub's runtime directory (its socket) goes next to the data directory, not into the
+    // user's real one.
+    let runtime = data.parent().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_botler"))
+        .arg("--data")
+        .arg(data)
+        .args(args)
+        .env("XDG_RUNTIME_DIR", runtime)
+        .output()
+        .unwrap();
     assert!(out.status.success(), "botler {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     out
 }

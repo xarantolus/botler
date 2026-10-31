@@ -52,7 +52,8 @@ directory. On `systemctl --user stop botler`, the hub stops its agent containers
 ## Exposing it privately
 
 The hub listens on `127.0.0.1:7420` (plain HTTP, this machine only). Containers don't use that
-port: they reach the hub over its Unix socket (`<data>/run/hub.sock`, mounted at `/run/botler`),
+port: they reach the hub over its Unix socket (`$XDG_RUNTIME_DIR/botler-<hub id>/hub.sock`, else
+`/tmp/botler-<uid>-<hub id>/`, mounted at `/run/botler`),
 which works on any network setup, even for containers without network. To use the web app from
 your other devices with HTTPS, which the PWA and the share target need, put
 [Tailscale](https://tailscale.com) in front of it (enable MagicDNS and HTTPS certificates in the
