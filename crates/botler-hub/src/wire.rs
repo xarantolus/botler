@@ -150,6 +150,8 @@ pub struct Dialogs {
 pub struct ProposalView {
     pub proposal: Proposal,
     pub summary: Option<String>,
+    /// Where it stands and what happens next, in plain words (what its agent reads in `process`).
+    pub explained: String,
 }
 
 #[derive(Debug, Serialize, TS)]

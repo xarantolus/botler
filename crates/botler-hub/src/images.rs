@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use sha2::{Digest, Sha256};
+use tokio::sync::mpsc;
 
 use crate::assets;
 use crate::hub::{Hub, HubError, Result};
@@ -228,16 +229,39 @@ async fn remove_dir(dir: &Path) {
 
 /// The tag of `recipe` at `commit`, built if missing.
 pub async fn ensure(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<String> {
+    ensure_with(hub, recipe, commit, None).await
+}
+
+/// Like [`ensure`], reporting what it does and the build output to `progress` line by line.
+pub async fn ensure_with(
+    hub: &Hub,
+    recipe: &Recipe,
+    commit: &str,
+    progress: Option<&mpsc::UnboundedSender<String>>,
+) -> Result<String> {
     ensure_base(hub).await?;
     let Resolved { tag, inputs, monorepo } = resolve(hub, recipe, commit).await?;
     // Before taking the build lock, which building them takes too.
     for base in &monorepo {
-        Box::pin(ensure(hub, &Recipe::agent(&base.image), commit)).await?;
+        Box::pin(ensure_with(hub, &Recipe::agent(&base.image), commit, progress)).await?;
     }
     if hub.containers.image_id(&tag).await?.is_some() {
         return Ok(tag);
     }
-    let _guard = hub.build_lock.lock().await;
+    let say = |line: String| {
+        if let Some(p) = progress
+            && p.send(line).is_err()
+        {
+            tracing::trace!("nobody follows the build any more");
+        }
+    };
+    let _guard = match hub.build_lock.try_lock() {
+        Ok(g) => g,
+        Err(_) => {
+            say("waiting for another image build to finish".into());
+            hub.build_lock.lock().await
+        }
+    };
     if hub.containers.image_id(&tag).await?.is_some() {
         return Ok(tag);
     }
@@ -253,7 +277,14 @@ pub async fn ensure(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<String> 
         }
         tracing::info!(%tag, dockerfile = recipe.dockerfile, "building image");
         let labels = BTreeMap::from([(OWNER_LABEL.to_string(), owner(hub))]);
-        Ok::<_, HubError>(hub.containers.build(&ctx, &recipe.dockerfile, &tag, &labels).await?)
+        match progress {
+            Some(p) => {
+                say(format!("building {}", recipe.dockerfile));
+                hub.containers.build_with_progress(&ctx, &recipe.dockerfile, &tag, &labels, p).await?
+            }
+            None => hub.containers.build(&ctx, &recipe.dockerfile, &tag, &labels).await?,
+        }
+        Ok::<_, HubError>(())
     }
     .await;
     remove_dir(&ctx).await;

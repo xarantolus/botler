@@ -387,6 +387,7 @@ async fn declare(hub: &Hub, req: &SecretRequest, instance: &str) -> Result<(), R
             Ok(()) => {
                 hub.apply(applied).await?;
                 tracing::info!(group = %req.group, commit = %head, "secret declarations updated");
+                crate::transactions::after_main_moved(hub).await;
                 return Ok(());
             }
             Err(botler_repo::Error::MainMoved { .. }) if attempt == 0 => continue,

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use botler_core::change::Verdict;
 use botler_core::defs::Capability;
-use botler_store::ProposalStatus;
+use botler_store::{ProposalStage, ProposalStatus};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -83,11 +83,17 @@ pub struct ProposalDetail {
     pub verdict: Option<String>,
     pub notes: Option<String>,
     pub merged_commit: Option<String>,
+    /// Where the pipeline is, or stopped.
+    pub stage: Option<ProposalStage>,
+    /// `user`, the reviewer's name, or `hub`.
+    pub decided_by: Option<String>,
+    /// How proposals move, and where this one stands: what happens now and whether you act.
+    pub process: String,
 }
 
 impl Op for GetProposal {
     const NAME: &'static str = "get_proposal";
-    const DESCRIPTION: &'static str = "A proposal's status, deployment summary, gate report and review notes.";
+    const DESCRIPTION: &'static str = "A proposal's status and stage, deployment summary, gate report, review notes, and `process`: how proposals move and what happens next with this one (tell the user no more than that).";
     const WHO: Who = Who::UserAndAgents;
     type Output = ProposalDetail;
 
@@ -100,7 +106,11 @@ impl Op for GetProposal {
             return Err(OpError::Forbidden("that proposal is not yours".into()));
         }
         let tz = hub.applied().await.defs.timezone;
+        let process = format!("{}\n\nNow: {}", transactions::PROCESS, transactions::explain(&p, true));
         Ok(ProposalDetail {
+            process,
+            stage: p.stage,
+            decided_by: p.decided_by,
             summary: p.summary.as_ref().map(|s| s.to_markdown(tz)),
             id: p.id,
             title: p.title,

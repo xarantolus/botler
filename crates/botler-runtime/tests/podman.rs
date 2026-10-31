@@ -116,3 +116,29 @@ async fn build_labels_list_and_remove_images() {
     assert_eq!(rt.image_id(&tag).await.unwrap(), None);
     assert!(rt.images(&labels).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn build_streams_its_steps() {
+    if !enabled() {
+        return;
+    }
+    let rt = Cli::detect(None).await.unwrap();
+    let ctx = tempfile::tempdir().unwrap();
+    std::fs::write(ctx.path().join("Dockerfile"), "FROM scratch\nCOPY Dockerfile /d\nLABEL x=y\n").unwrap();
+    let tag = format!("localhost/{}:1", name("streamed"));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    rt.build_with_progress(ctx.path(), "Dockerfile", &tag, &BTreeMap::new(), &tx).await.unwrap();
+    drop(tx);
+    let mut lines = Vec::new();
+    while let Some(l) = rx.recv().await {
+        lines.push(l);
+    }
+    assert!(lines.iter().any(|l| l.starts_with("STEP 2/3: COPY")), "{lines:?}");
+    rt.remove_image(&tag).await.unwrap();
+
+    std::fs::write(ctx.path().join("Dockerfile"), format!("FROM {IMAGE}\nRUN echo broken-step-output; exit 1\n"))
+        .unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let err = rt.build_with_progress(ctx.path(), "Dockerfile", &tag, &BTreeMap::new(), &tx).await.unwrap_err();
+    assert!(err.to_string().contains("broken-step-output"), "{err}");
+}

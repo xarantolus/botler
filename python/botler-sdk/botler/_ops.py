@@ -114,7 +114,7 @@ def replay_event(*, event_id: str, job: str, branch: str | None = None, minutes:
 
 
 def get_proposal(*, id: str) -> dict[str, Any]:
-    """A proposal's status, deployment summary, gate report and review notes."""
+    """A proposal's status and stage, deployment summary, gate report, review notes, and `process`: how proposals move and what happens next with this one (tell the user no more than that)."""
     return call("get_proposal", {"id": id})
 
 

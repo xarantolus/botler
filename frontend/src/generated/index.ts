@@ -215,6 +215,7 @@ export type * from "./Severity";
 export type * from "./Source";
 export type * from "./SpawnAgent";
 export type * from "./SpawnEnv";
+export type * from "./StageMark";
 export type * from "./StateGet";
 export type * from "./StateSet";
 export type * from "./StateValue";

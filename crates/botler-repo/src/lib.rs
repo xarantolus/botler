@@ -413,6 +413,37 @@ impl Repo {
         }
     }
 
+    /// `git patch-id --stable` of the change from `base` to `head`: the same for the same change
+    /// rebased elsewhere (line numbers do not count). `None` if nothing changes.
+    pub async fn patch_id(&self, base: &str, head: &str) -> Result<Option<String>> {
+        let diff = self.git(&["diff", "--no-ext-diff", "--no-color", base, head]).await?;
+        if diff.is_empty() {
+            return Ok(None);
+        }
+        let mut child = self
+            .cmd()
+            .args(["patch-id", "--stable"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let mut stdin = child.stdin.take().ok_or_else(|| Error::Malformed("patch-id has no stdin".into()))?;
+        let write = async move {
+            stdin.write_all(diff.as_bytes()).await?;
+            stdin.write_all(b"\n").await
+        };
+        let (written, out) = tokio::join!(write, child.wait_with_output());
+        written?;
+        let out = out?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(Error::Git { args: "patch-id --stable".into(), stderr });
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let id = text.split_whitespace().next().ok_or_else(|| Error::Malformed(format!("patch-id: {text:?}")))?;
+        Ok(Some(id.to_string()))
+    }
+
     /// Rebase `branch_commit` onto main in a throwaway worktree. Returns the new head, or the
     /// unchanged commit if it already descends from main.
     pub async fn rebase_onto_main(&self, branch_commit: &str, label: &str) -> Result<String> {

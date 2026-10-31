@@ -96,6 +96,12 @@ async fn rebase_and_conflict() {
     f.repo.advance_main(&base, &one).await.unwrap();
     let rebased = f.repo.rebase_onto_main(&two, "two").await.unwrap();
     assert_ne!(rebased, two);
+    // The same change, rebased: the same patch id; another change: another one.
+    let patch = f.repo.patch_id(&base, &two).await.unwrap();
+    assert!(patch.is_some());
+    assert_eq!(f.repo.patch_id(&one, &rebased).await.unwrap(), patch);
+    assert_ne!(f.repo.patch_id(&base, &one).await.unwrap(), patch);
+    assert_eq!(f.repo.patch_id(&one, &one).await.unwrap(), None);
     f.repo.advance_main(&one, &rebased).await.unwrap();
 
     let c1 = agent_commit(&f, "a", "agents/a/c1", "botler.toml", "timezone = \"Europe/Berlin\"\n");

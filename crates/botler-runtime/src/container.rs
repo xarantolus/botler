@@ -164,6 +164,17 @@ pub trait Containers: Send + Sync {
     /// Build `dockerfile` (relative to `context`) with `context` as the build context.
     async fn build(&self, context: &Path, dockerfile: &str, tag: &str, labels: &BTreeMap<String, String>)
     -> Result<()>;
+    /// Like [`Containers::build`], sending each line of build output to `progress` as it comes.
+    async fn build_with_progress(
+        &self,
+        context: &Path,
+        dockerfile: &str,
+        tag: &str,
+        labels: &BTreeMap<String, String>,
+        _progress: &mpsc::UnboundedSender<String>,
+    ) -> Result<()> {
+        self.build(context, dockerfile, tag, labels).await
+    }
     /// Tags (`repository:tag`) of images carrying all `labels`.
     async fn images(&self, labels: &BTreeMap<String, String>) -> Result<Vec<String>>;
     /// Remove one tag; the image goes when its last tag does.
@@ -406,6 +417,66 @@ impl Containers for Cli {
         args.push(context.to_string_lossy().into_owned());
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         run(&self.info.binary, &refs).await.map(|_| ())
+    }
+
+    async fn build_with_progress(
+        &self,
+        context: &Path,
+        dockerfile: &str,
+        tag: &str,
+        labels: &BTreeMap<String, String>,
+        progress: &mpsc::UnboundedSender<String>,
+    ) -> Result<()> {
+        let binary = &self.info.binary;
+        let file = context.join(dockerfile).to_string_lossy().into_owned();
+        let mut args = vec!["build".to_string(), "--file".into(), file, "--tag".into(), tag.into()];
+        for (k, v) in labels {
+            args.extend(["--label".into(), format!("{k}={v}")]);
+        }
+        args.push(context.to_string_lossy().into_owned());
+        let io = |source| ContainerError::Io { binary: binary.clone(), source };
+        let mut child = Command::new(binary)
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(io)?;
+        let stdout = child.stdout.take().ok_or(ContainerError::NoPipe("stdout"))?;
+        let mut stderr = child.stderr.take().ok_or(ContainerError::NoPipe("stderr"))?;
+        // The last lines say why a failed step failed.
+        let mut tail = std::collections::VecDeque::new();
+        let lines = async {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Some(line) = lines.next_line().await? {
+                if tail.len() == 20 {
+                    tail.pop_front();
+                }
+                tail.push_back(line.clone());
+                if progress.send(line).is_err() {
+                    tracing::trace!("nobody follows the build any more; it goes on");
+                }
+            }
+            Ok::<_, std::io::Error>(())
+        };
+        let mut err = Vec::new();
+        let (read, errs) = tokio::join!(lines, tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut err));
+        read.map_err(io)?;
+        errs.map_err(io)?;
+        let status = child.wait().await.map_err(io)?;
+        if !status.success() {
+            return Err(ContainerError::Command {
+                binary: binary.clone(),
+                args: args.join(" "),
+                stderr: format!(
+                    "{}\n{}",
+                    tail.iter().map(String::as_str).collect::<Vec<_>>().join("\n"),
+                    String::from_utf8_lossy(&err).trim()
+                ),
+            });
+        }
+        Ok(())
     }
 
     async fn images(&self, labels: &BTreeMap<String, String>) -> Result<Vec<String>> {

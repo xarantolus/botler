@@ -9,12 +9,15 @@ import TimeAgo from "../components/common/TimeAgo.vue";
 import ViewPanel from "../components/common/ViewPanel.vue";
 import { confirm } from "../confirm";
 import type { Proposal } from "../generated";
+import { stageSummary } from "../lib/proposals";
 import { proposalStatusColor, proposalStatusLabel } from "../lib/runs";
 import { notifyError, notifySuccess } from "../notify";
+import { useNow } from "../now";
 import { refreshProposals, refreshStatus, state } from "../store";
 
 const router = useRouter();
 const loading = ref(false);
+const now = useNow(1000);
 
 async function load() {
   loading.value = true;
@@ -78,6 +81,9 @@ function onSelect(_e: Event, row: TableRow<Proposal>) {
           :label="proposalStatusLabel(row.original.status)"
           class="whitespace-nowrap"
         />
+        <span v-if="stageSummary(row.original, now)" class="ms-2 whitespace-nowrap text-xs text-muted" :title="row.original.stage_detail ?? undefined">
+          {{ stageSummary(row.original, now) }}
+        </span>
       </template>
       <template #verdict-cell="{ row }"><span class="text-muted">{{ row.original.verdict ?? "" }}</span></template>
       <template #updated_at-cell="{ row }"><TimeAgo :at="row.original.updated_at" class="whitespace-nowrap text-muted" /></template>

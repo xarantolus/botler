@@ -4,4 +4,8 @@ import type { Proposal } from "./Proposal";
 /**
  * A proposal for the user's review, its deployment summary as markdown.
  */
-export type ProposalView = { proposal: Proposal, summary: string | null, };
+export type ProposalView = { proposal: Proposal, summary: string | null, 
+/**
+ * Where it stands and what happens next, in plain words (what its agent reads in `process`).
+ */
+explained: string, };

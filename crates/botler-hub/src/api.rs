@@ -820,7 +820,8 @@ async fn proposal(
 async fn proposal_view(hub: &Hub, id: &str) -> Result<ProposalView, ApiError> {
     let proposal = hub.store.proposal(id).await?;
     let tz = hub.applied().await.defs.timezone;
-    Ok(ProposalView { summary: proposal.summary.as_ref().map(|s| s.to_markdown(tz)), proposal })
+    let explained = crate::transactions::explain(&proposal, false);
+    Ok(ProposalView { summary: proposal.summary.as_ref().map(|s| s.to_markdown(tz)), explained, proposal })
 }
 
 async fn proposal_diff(

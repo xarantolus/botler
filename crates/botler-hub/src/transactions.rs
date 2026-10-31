@@ -2,8 +2,12 @@
 //!
 //! propose → rebase → validate → deployment summary → gate → reviewer → decision → (user) →
 //! merge → apply. Every step is recorded on the proposal and reported to the proposing agent as
-//! a `proposal.updated` event. Approval binds to the pinned, gated commit: if main moves before
-//! the merge, the pipeline starts over instead of merging something nobody reviewed.
+//! a `proposal.updated` event. Approval binds to the change: only a gated commit merges, so if
+//! main moves before the merge the pipeline rebases and gates again, and the approval carries
+//! over only if the rebased change is the same patch and needs no approval the earlier one did
+//! not cover; otherwise it is reviewed (and maybe asked) again. When main moves, every proposal
+//! in flight is rebased onto it right away ([`main_moved`]): one that conflicts fails at once,
+//! so its agent can resolve it instead of anyone approving a dead change.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,11 +18,12 @@ use botler_core::defs::Environment;
 use botler_core::payloads::{BuiltinPayload, ProposalUpdatedPayload};
 use botler_runtime::Mount;
 use botler_store::{
-    DialogKind, NewDialog, NewProposal, Priority, Proposal, ProposalDecision, ProposalKind, ProposalStage,
-    ProposalStatus,
+    DialogKind, DialogStatus, NewDialog, NewProposal, Priority, Proposal, ProposalDecision, ProposalKind,
+    ProposalStage, ProposalStatus,
 };
 use chrono::Utc;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::mpsc;
 
 use crate::environment::{self, Runnable};
 use crate::hub::{Hub, HubError, Live, Result, load_at};
@@ -29,6 +34,16 @@ const MAX_ATTEMPTS: i64 = 3;
 const GATE_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const REPORT_LINES: usize = 200;
 const DIFF_LIMIT: usize = 60_000;
+/// Live progress (detail, output tail) is saved and shown at most this often.
+const PROGRESS_EVERY: Duration = Duration::from_secs(2);
+const PROGRESS_LINES: usize = 40;
+
+/// The pipeline, for agents reading a proposal; see [`explain`] for where one stands.
+pub const PROCESS: &str = "A proposal goes: rebase onto main → validate (deployment summary) → gate \
+(first builds the image it runs in, which can take minutes) → reviewer agent → the user, only if the \
+reviewer escalates or the change needs their approval → merge and apply. If main moves before the \
+merge, the proposal is rebased and checked again; an approved change that is unchanged merges \
+without asking again. Never promise the user more than this.";
 
 /// Start a proposal for `branch` (pushed by `instance`). The pipeline runs in the background.
 pub async fn propose(hub: &Arc<Hub>, instance: &str, branch: &str, title: &str) -> Result<Proposal> {
@@ -87,9 +102,25 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     if attempt > MAX_ATTEMPTS {
         return fail(hub, id, "main kept changing while this proposal was in flight; propose again").await;
     }
+    let before = hub.store.proposal(id).await?;
+    let main = hub.repo.main().await?;
+    if before.stage == Some(ProposalStage::Merge) && !before.status.is_terminal() {
+        // The hub stopped after main moved to it, before recording the merge.
+        if let Some(head) = &before.head_commit
+            && hub.repo.is_ancestor(head, &main).await?
+        {
+            hub.store.set_proposal_merged(id, head).await?;
+            return update(hub, id, "merged", &format!("Merged as {}.", short(head))).await;
+        }
+        // Approved, then main moved under the merge (or a merge from before approvals were
+        // recorded was interrupted): that approval may carry over.
+        if before.approved_patch.is_none() {
+            record_approval(hub, &before).await?;
+        }
+    }
     // Atomically back to the start, also from the merge stage (main moved under the merge, or
     // the hub restarted mid-merge): a re-run must really run.
-    if !hub.store.restart_proposal(id).await? {
+    if !hub.store.restart_proposal(id, &format!("rebasing onto main {}", short(&main))).await? {
         tracing::info!(proposal = %id, "proposal finished before its pipeline (re-)ran");
         return Ok(());
     }
@@ -132,8 +163,29 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     if !ok {
         return fail(hub, id, &format!("the gate failed; fix and propose again:\n```\n{report}\n```")).await;
     }
+    hub.store.set_proposal_gated(id, &head).await?;
 
-    if !stage(hub, id, ProposalStage::Review).await? {
+    let again = match carry(hub, &hub.store.proposal(id).await?, &base, &head, &summary).await? {
+        Carry::NoApproval => String::new(),
+        Carry::Carries => {
+            hub.store.carry_proposal_approval(id).await?;
+            let by = hub.store.proposal(id).await?.decided_by.unwrap_or_else(|| "the reviewer".into());
+            let by = if by == USER { "the user".to_string() } else { format!("`{by}`") };
+            update(
+                hub,
+                id,
+                "gating",
+                &format!(
+                    "Rebased onto the new main unchanged and passed the gate again: the approval (by {by}) carries over. Merging without asking again."
+                ),
+            )
+            .await?;
+            return merge(hub, id).await;
+        }
+        Carry::Lost(why) => format!("The earlier approval does not carry over: {why}. "),
+    };
+
+    if !stage(hub, id, ProposalStage::Review, "starting a reviewer").await? {
         return Ok(());
     }
     // The reviewer is spawned while the proposal is still `gating`; it cannot submit before the
@@ -142,9 +194,10 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     match reviewer {
         Some(name) => {
             hub.store.set_proposal_reviewing(id, &name).await?;
+            hub.store.set_proposal_progress(id, &format!("reviewer `{name}` is reading the diff"), None).await?;
             // A reviewer that fails or goes quiet hands the decision to the user.
             crate::turns::expect_reply(hub, crate::turns::HUB, &name, None, None).await?;
-            update(hub, id, "reviewing", &format!("Gate passed. Reviewer `{name}` is looking at it.")).await
+            update(hub, id, "reviewing", &format!("{again}Gate passed. Reviewer `{name}` is looking at it.")).await
         }
         // No reviewer agent defined: the user decides.
         None => decide_and_act(hub, id, "hub", None, "no reviewer agent is defined").await,
@@ -159,12 +212,27 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
         return Ok((true, "no gate/run in this commit; nothing to check".into()));
     }
     let stopped = || Ok((false, "stopped: the proposal was decided".into()));
-    if !stage(hub, id, ProposalStage::Image).await? {
+    let image_name = if applied.defs.images.contains("dev") { "dev" } else { "agent" };
+    if !stage(hub, id, ProposalStage::Image, &format!("checking image {image_name}")).await? {
         return stopped();
     }
-    let image_name = if applied.defs.images.contains("dev") { "dev" } else { "agent" };
-    let image = images::ensure_agent_image(hub, image_name, commit).await?;
-    if !stage(hub, id, ProposalStage::Gate).await? {
+    let image = {
+        let mut progress = Progress::new(hub, id, format!("building image {image_name}"));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        if !applied.defs.images.contains(image_name) {
+            return Err(HubError::Undefined { kind: "image", name: image_name.into() });
+        }
+        let recipe = images::Recipe::agent(image_name);
+        let build = images::ensure_with(hub, &recipe, commit, Some(&tx));
+        tokio::pin!(build);
+        loop {
+            tokio::select! {
+                built = &mut build => break built?,
+                Some(line) = rx.recv() => progress.line(&line).await?,
+            }
+        }
+    };
+    if !stage(hub, id, ProposalStage::Gate, "starting the gate").await? {
         return stopped();
     }
     let dir = hub.paths.root.join("gates").join(id);
@@ -184,13 +252,23 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
     spec.workdir = Some("/workspace".into());
     let mut att = hub.containers.run_attached(&spec).await?;
     let mut out = String::new();
-    let read = tokio::time::timeout(GATE_TIMEOUT, att.stdout.read_to_string(&mut out)).await;
+    let mut progress = Progress::new(hub, id, "gate running".into());
+    let read = tokio::time::timeout(GATE_TIMEOUT, async {
+        let mut lines = BufReader::new(&mut att.stdout).lines();
+        while let Some(line) = lines.next_line().await? {
+            out.push_str(&line);
+            out.push('\n');
+            progress.line(&line).await?;
+        }
+        Ok::<_, HubError>(())
+    })
+    .await;
     let code = match read {
-        Ok(Ok(_)) => match tokio::time::timeout(Duration::from_secs(30), att.exited).await {
+        Ok(Ok(())) => match tokio::time::timeout(Duration::from_secs(30), att.exited).await {
             Ok(Ok(c)) => c,
             _ => None,
         },
-        Ok(Err(e)) => return Err(HubError::Io(e)),
+        Ok(Err(e)) => return Err(e),
         Err(_) => {
             if att.kill.send(()).is_err() {
                 tracing::debug!("gate already gone");
@@ -323,7 +401,7 @@ fn summary_of(p: &Proposal) -> Result<ChangeSummary> {
 }
 
 async fn ask_user(hub: &Hub, p: &Proposal, summary: &ChangeSummary, notes: &str) -> Result<()> {
-    if !stage(hub, &p.id, ProposalStage::Approval).await? {
+    if !stage(hub, &p.id, ProposalStage::Approval, "waiting for your approval").await? {
         return Ok(());
     }
     hub.store.set_proposal_status(&p.id, ProposalStatus::AwaitingUser).await?;
@@ -376,6 +454,8 @@ pub async fn on_approval(hub: &Arc<Hub>, id: &str, approved: bool, reason: Optio
             return Err(HubError::Forbidden(format!("proposal {id} is already decided")));
         }
         close_approval(hub, id, "approve").await?;
+        let said = reason.map(|r| format!(" (\"{r}\")")).unwrap_or_default();
+        update(hub, id, "approved", &format!("The user approved it{said}; merging.")).await?;
         return merge(hub, id).await;
     }
     let Some(reason) = reason else {
@@ -417,8 +497,8 @@ pub(crate) async fn close_approval(hub: &Hub, id: &str, answer: &str) -> Result<
 /// Move an in-flight proposal to `stage` and show it live. False once it was decided (the user
 /// rejected it): the pipeline then stops. Any other refusal (it is merging) is a bug that would
 /// leave the proposal stuck, so it is an error, which fails the proposal visibly.
-async fn stage(hub: &Hub, id: &str, stage: ProposalStage) -> Result<bool> {
-    if hub.store.set_proposal_stage(id, stage).await? {
+async fn stage(hub: &Hub, id: &str, stage: ProposalStage, detail: &str) -> Result<bool> {
+    if hub.store.set_proposal_stage(id, stage, detail).await? {
         broadcast(hub, id).await?;
         return Ok(true);
     }
@@ -446,27 +526,234 @@ async fn broadcast(hub: &Hub, id: &str) -> Result<()> {
 /// Fast-forward main to the reviewed commit, apply it, tell everyone.
 async fn merge(hub: &Arc<Hub>, id: &str) -> Result<()> {
     // From here on a rejection cannot stop it.
-    if !stage(hub, id, ProposalStage::Merge).await? {
+    if !stage(hub, id, ProposalStage::Merge, "fast-forwarding main").await? {
         return Ok(());
     }
     let p = hub.store.proposal(id).await?;
+    // What merges now is what was approved; it carries over a clean rebase.
+    record_approval(hub, &p).await?;
     let head = p.head_commit.clone().unwrap_or_default();
     let base = p.base_commit.clone().unwrap_or_default();
-    match hub.repo.advance_main(&base, &head).await {
-        Ok(()) => {}
-        Err(botler_repo::Error::MainMoved { .. } | botler_repo::Error::NotFastForward { .. }) => {
-            update(hub, id, "gating", "main changed meanwhile; re-checking against the new main.").await?;
-            spawn_pipeline(hub.clone(), id.to_string());
-            return Ok(());
-        }
-        Err(e) => return Err(e.into()),
+    // Only the gated commit merges: one rebased since (main moved) is gated first.
+    let moved = p.gated_commit.as_deref() != Some(head.as_str())
+        || match hub.repo.advance_main(&base, &head).await {
+            Ok(()) => false,
+            Err(botler_repo::Error::MainMoved { .. } | botler_repo::Error::NotFastForward { .. }) => true,
+            Err(e) => return Err(e.into()),
+        };
+    if moved {
+        let detail = "main changed meanwhile; rebasing and re-checking against the new main. \
+                      If the change is unchanged, the approval carries over and it merges without asking again.";
+        update(hub, id, "gating", detail).await?;
+        spawn_pipeline(hub.clone(), id.to_string());
+        return Ok(());
     }
+    hub.store.set_proposal_progress(id, "applying", None).await?;
     let applied = load_at(&hub.repo, &head).await?;
     hub.apply(applied).await?;
     hub.store.set_proposal_merged(id, &head).await?;
     tracing::info!(proposal = %id, commit = %head, "proposal merged");
     mirror(hub).await;
-    update(hub, id, "merged", &format!("Merged as {} and applied.", &head[..head.len().min(12)])).await
+    update(hub, id, "merged", &format!("Merged as {} and applied.", short(&head))).await?;
+    after_main_moved(hub).await;
+    Ok(())
+}
+
+fn short(commit: &str) -> &str {
+    &commit[..commit.len().min(12)]
+}
+
+/// Record what is approved: the change's patch id and the escalations its summary lists.
+async fn record_approval(hub: &Hub, p: &Proposal) -> Result<()> {
+    let (Some(base), Some(head)) = (&p.base_commit, &p.head_commit) else { return Ok(()) };
+    let Some(patch) = hub.repo.patch_id(base, head).await? else { return Ok(()) };
+    let escalations = p.summary.as_ref().map(|s| s.escalations.as_slice()).unwrap_or_default();
+    Ok(hub.store.set_proposal_approval(&p.id, Some((&patch, escalations))).await?)
+}
+
+enum Carry {
+    NoApproval,
+    Carries,
+    /// Why not; the approval is dropped.
+    Lost(String),
+}
+
+/// Whether the earlier approval of `p` covers the change rebased to `base..head` with `summary`:
+/// the same patch, and nothing needing approval that the earlier one did not cover.
+async fn carry(hub: &Hub, p: &Proposal, base: &str, head: &str, summary: &ChangeSummary) -> Result<Carry> {
+    let Some(approved) = p.approved_patch.as_deref() else { return Ok(Carry::NoApproval) };
+    let why = if hub.repo.patch_id(base, head).await?.as_deref() != Some(approved) {
+        "rebased onto the new main, the change is not the same patch any more".to_string()
+    } else {
+        let covered = p.approved_escalations.as_deref().unwrap_or_default();
+        let new: Vec<String> =
+            summary.escalations.iter().filter(|e| !covered.contains(e)).map(|e| e.explain()).collect();
+        if new.is_empty() {
+            return Ok(Carry::Carries);
+        }
+        format!("on the new main it also needs approval because it {}", new.join("; "))
+    };
+    hub.store.set_proposal_approval(&p.id, None).await?;
+    Ok(Carry::Lost(why))
+}
+
+/// [`main_moved`], logged instead of failing whatever moved main.
+pub async fn after_main_moved(hub: &Hub) {
+    if let Err(e) = main_moved(hub).await {
+        tracing::error!(error = %e, "could not rebase the proposals in flight onto the new main");
+    }
+}
+
+/// Main moved: rebase every proposal in flight onto it now. One that conflicts fails, so its
+/// agent hears it (and can resolve it) and nobody approves a dead change. One waiting for its
+/// reviewer or the user that rebases to the same patch gets the new head pinned; it is gated
+/// again at merge time. One whose pipeline runs (`gating`) is only checked: the pipeline rebases
+/// it again before merging.
+pub async fn main_moved(hub: &Hub) -> Result<()> {
+    static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = ONE_AT_A_TIME.lock().await;
+    let main = hub.repo.main().await?;
+    for p in hub.store.in_flight_proposals().await? {
+        // Not checked yet, or merging: its own pipeline deals with the new main.
+        if matches!(p.stage, None | Some(ProposalStage::Rebase | ProposalStage::Merge)) {
+            continue;
+        }
+        let (Some(base), Some(head)) = (p.base_commit.as_deref(), p.head_commit.as_deref()) else { continue };
+        if base == main {
+            continue;
+        }
+        let rebased = match hub.repo.rebase_onto_main(head, &p.title).await {
+            Ok(h) => h,
+            Err(botler_repo::Error::Conflict { detail, .. }) => {
+                let why = format!(
+                    "main moved and this change no longer rebases onto it. Rebase your branch onto main, \
+                     resolve the conflict, push and propose again:\n{detail}"
+                );
+                fail(hub, &p.id, &why).await?;
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if p.status == ProposalStatus::Gating
+            || hub.repo.patch_id(&main, &rebased).await? != hub.repo.patch_id(base, head).await?
+        {
+            continue;
+        }
+        if hub.store.set_proposal_rebased(&p.id, &main, &rebased).await? {
+            hub.repo.pin(&format!("refs/proposals/{}", p.id), &rebased).await?;
+            broadcast(hub, &p.id).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The current stage's live detail and output tail, saved and shown at most every
+/// [`PROGRESS_EVERY`] (the agent hears only about stage changes).
+struct Progress<'a> {
+    hub: &'a Hub,
+    id: &'a str,
+    what: String,
+    /// The image build's current `STEP n/m: …`.
+    step: Option<String>,
+    tail: std::collections::VecDeque<String>,
+    shown: Option<std::time::Instant>,
+}
+
+impl<'a> Progress<'a> {
+    fn new(hub: &'a Hub, id: &'a str, what: String) -> Self {
+        Self { hub, id, what, step: None, tail: Default::default(), shown: None }
+    }
+
+    async fn line(&mut self, line: &str) -> Result<()> {
+        let line = line.trim_end();
+        if line.is_empty() {
+            return Ok(());
+        }
+        if line.starts_with("STEP ") {
+            self.step = Some(clip(line, 100));
+        }
+        if self.tail.len() == PROGRESS_LINES {
+            self.tail.pop_front();
+        }
+        self.tail.push_back(clip(line, 300));
+        if self.shown.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
+            self.shown = Some(std::time::Instant::now());
+            let detail = match (&self.step, self.tail.back()) {
+                (Some(step), _) => format!("{} ({step})", self.what),
+                (None, Some(last)) => format!("{}, last line: {}", self.what, clip(last, 100)),
+                (None, None) => self.what.clone(),
+            };
+            let log = self.tail.iter().map(String::as_str).collect::<Vec<_>>().join("\n");
+            self.hub.store.set_proposal_progress(self.id, &detail, Some(&log)).await?;
+            broadcast(self.hub, self.id).await?;
+        }
+        Ok(())
+    }
+}
+
+fn clip(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
+/// Where `p` stands, in a sentence or two: what happens now. `for_agent` adds whether its agent
+/// needs to do anything. See [`PROCESS`].
+pub fn explain(p: &Proposal, for_agent: bool) -> String {
+    let by = |who: Option<&str>| match who {
+        Some(USER) => "the user".to_string(),
+        Some(who) => format!("`{who}`"),
+        None => "the reviewer".to_string(),
+    };
+    let wait = "Nothing for you to do; you hear about every step as proposal.updated.";
+    let (now, todo) = match (p.status, p.stage) {
+        (ProposalStatus::Merged, _) => {
+            (format!("Merged as {} and applied: it is live.", short(p.merged_commit.as_deref().unwrap_or("?"))), "")
+        }
+        (ProposalStatus::Rejected, _) => (
+            format!(
+                "Rejected by {}: {}.",
+                by(p.decided_by.as_deref()),
+                p.decision_reason.as_deref().or(p.verdict.as_deref()).unwrap_or("see the notes")
+            ),
+            "Address that before proposing again; do not propose it unchanged.",
+        ),
+        (ProposalStatus::Failed, _) => (
+            "Failed; the notes say why.".to_string(),
+            "Fix the problem on your branch, push, and call propose_change again.",
+        ),
+        (ProposalStatus::Approved, _) => ("Approved.".to_string(), ""),
+        (_, Some(ProposalStage::Merge)) => (format!("Approved by {}; merging now.", by(p.decided_by.as_deref())), wait),
+        (ProposalStatus::AwaitingUser, _) => (
+            format!(
+                "Checked and reviewed; waiting for the user to approve or reject it ({}).",
+                p.decision.as_deref().map_or("it needs their approval", |d| d.trim_start_matches("asked you: "))
+            ),
+            wait,
+        ),
+        (ProposalStatus::Reviewing, _) => {
+            (format!("The gate passed; reviewer {} is reviewing it.", by(p.reviewer.as_deref())), wait)
+        }
+        (ProposalStatus::Gating, stage) => {
+            let doing = match stage {
+                None | Some(ProposalStage::Rebase) => "being rebased onto main and validated",
+                Some(ProposalStage::Image) => "building the image the gate runs in (this can take minutes)",
+                Some(ProposalStage::Gate) => "running the gate",
+                _ => "being checked",
+            };
+            let now = if p.approved_patch.is_some() {
+                format!(
+                    "Approved by {}, but main moved before the merge, so it is {doing} again. If the change is unchanged it merges without asking again; otherwise it is reviewed again.",
+                    by(p.decided_by.as_deref())
+                )
+            } else {
+                format!("It is {doing}; then a reviewer looks at it.")
+            };
+            (now, wait)
+        }
+    };
+    if for_agent && !todo.is_empty() { format!("{now} {todo}") } else { now }
 }
 
 /// Push main to the configured mirror; failures are logged, never fatal.
@@ -480,6 +767,13 @@ async fn mirror(hub: &Hub) {
 async fn fail(hub: &Hub, id: &str, why: &str) -> Result<()> {
     if !hub.store.set_proposal_outcome(id, ProposalStatus::Failed, why).await? {
         return Ok(()); // decided meanwhile
+    }
+    // Nobody is asked about a dead proposal.
+    let reason = format!("the proposal failed: {}", why.lines().next().unwrap_or(why));
+    for d in hub.store.open_dialogs().await? {
+        if d.kind == DialogKind::Approval && d.proposal_id.as_deref() == Some(id) {
+            hub.store.close_dialog(&d.id, DialogStatus::Aborted, &reason).await?;
+        }
     }
     update(hub, id, "failed", why).await
 }
@@ -557,6 +851,7 @@ pub async fn revert(hub: &Hub, commit: &str) -> Result<String> {
     hub.apply(applied).await?;
     mirror(hub).await;
     tracing::info!(reverted = commit, commit = %head, "reverted by the user");
+    after_main_moved(hub).await;
     Ok(head)
 }
 

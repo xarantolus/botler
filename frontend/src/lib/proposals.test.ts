@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Proposal } from "../generated";
-import { gateVerdict, pipeline, rejectable, splitRows, unifiedRows } from "./proposals";
+import { gateVerdict, pipeline, rejectable, splitRows, stageSummary, stepTimes, unifiedRows } from "./proposals";
 
 const hunks = [
   { header: "@@ -3,4 +3,5 @@ fn main", old_start: 3, new_start: 3, lines: [" a", "-b", "-c", "+B", "+C", "+D", " e", "\\ No newline at end of file"] },
@@ -63,6 +63,13 @@ const proposal = (extra: Partial<Proposal>): Proposal => ({
   attempts: 1,
   stage: "rebase",
   stage_at: "2026-10-30T10:00:00Z",
+  stages: [],
+  stage_detail: null,
+  stage_log: null,
+  gated_commit: null,
+  approved_patch: null,
+  approved_escalations: null,
+  carried_over: 0,
   decision: null,
   decided_by: null,
   decided_at: null,
@@ -81,6 +88,25 @@ describe("pipeline", () => {
     expect(steps[1]!.description).toBe("building the image · 2m 05s");
     expect(pipeline(proposal({ stage: "gate" }), now).steps[1]!.description).toBe("running checks · 2m 05s");
     expect(gateVerdict(proposal({ stage: "gate" }))).toEqual({ label: "running", color: "info" });
+  });
+
+  it("shows the live detail of the current stage and how long each step took", () => {
+    const p = proposal({
+      stage: "gate",
+      stage_at: "2026-10-30T10:01:00Z",
+      stage_detail: "gate running, last line: ok",
+      stages: [
+        { stage: "rebase", at: "2026-10-30T10:00:00Z" },
+        { stage: "image", at: "2026-10-30T10:00:03Z" },
+        { stage: "gate", at: "2026-10-30T10:01:00Z" },
+      ],
+    });
+    const { steps } = pipeline(p, now);
+    expect(steps[0]!.description).toBe("onto main · 3s");
+    expect(steps[1]!.description).toBe("gate running, last line: ok · 1m 05s");
+    expect(stepTimes(p, now)[1]).toBe(122_000);
+    expect(stageSummary(p, now)).toBe("checking · 1m 05s");
+    expect(stageSummary(proposal({ status: "merged" }), now)).toBe("");
   });
 
   it("explains an auto-merge: approval was not needed", () => {

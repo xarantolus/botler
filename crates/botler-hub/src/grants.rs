@@ -280,6 +280,7 @@ pub async fn commit_edit(
             Ok(()) => {
                 hub.apply(applied).await?;
                 tracing::info!(path, commit = %head, "hub commit applied");
+                crate::transactions::after_main_moved(hub).await;
                 return Ok(());
             }
             Err(botler_repo::Error::MainMoved { .. }) if attempt == 0 => continue,

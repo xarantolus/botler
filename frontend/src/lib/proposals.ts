@@ -119,44 +119,67 @@ export interface Step {
   icon: string;
 }
 
-/** The pipeline as steps, and which one it is at (`steps.length` once merged). */
+/** Which step (of `pipeline`'s five) each stage belongs to. */
+const STEP_OF: Record<ProposalStage, number> = { rebase: 0, image: 1, gate: 1, review: 2, approval: 3, merge: 4 };
+
+/** Time spent in each step, from the stage history (summed over re-runs); the current stage
+ * runs until `now`, a finished proposal's last one until it finished. */
+export function stepTimes(p: Pick<Proposal, "stages" | "status" | "updated_at">, now = Date.now()): number[] {
+  const t = [0, 0, 0, 0, 0];
+  p.stages.forEach((m, i) => {
+    const next = p.stages[i + 1];
+    const end = next ? new Date(next.at).getTime() : inFlight(p) ? now : new Date(p.updated_at).getTime();
+    t[STEP_OF[m.stage]]! += Math.max(0, end - new Date(m.at).getTime());
+  });
+  return t;
+}
+
+/** In-flight: where it is and for how long, e.g. "checking · 1m 12s". */
+export function stageSummary(p: Pick<Proposal, "status" | "stage" | "stage_at">, now = Date.now()): string {
+  if (!inFlight(p)) return "";
+  const since = p.stage_at ? ` · ${elapsed(now - new Date(p.stage_at).getTime())}` : "";
+  return `${stageLabel(p)}${since}`;
+}
+
+/** The pipeline as steps, and which one it is at (`steps.length` once merged). Each step says
+ * how long it took; the current one what it is doing right now. */
 export function pipeline(p: Proposal, now = Date.now()): { steps: Step[]; current: number } {
   const since = p.stage_at ? ` · ${elapsed(now - new Date(p.stage_at).getTime())}` : "";
   const live = inFlight(p);
-  const idx = [0, 1, 1, 2, 3, 4][at(p)] ?? 0;
+  const idx = p.stage ? STEP_OF[p.stage] : 0;
   const byUser = p.decided_by === "user";
   const gate = gateVerdict(p);
   const gateText =
     live && p.stage === "image"
-      ? `building the image${since}`
+      ? "building the image"
       : live && p.stage === "gate"
-        ? `running checks${since}`
+        ? "running checks"
         : (gate?.label ?? (!live && idx === 1 && p.status === "rejected" ? "stopped" : ""));
   const approval = p.status === "awaiting_user"
     ? "waiting for you"
     : byUser
-      ? p.status === "rejected" ? "rejected by you" : "approved by you"
-      : p.status === "merged" ? "not needed" : "";
-  const steps: Step[] = [
-    { title: "Rebase", description: live && idx === 0 ? `onto main${since}` : "onto main", icon: "i-lucide-git-branch" },
-    { title: "Gate", description: gateText, icon: "i-lucide-shield-check" },
-    {
-      title: "Review",
-      description: p.verdict
-        ? p.verdict
-        : live && idx === 2
-          ? `${p.reviewer ?? "reviewer"} is reviewing${since}`
-          : idx > 2 && !p.reviewer
-            ? "no reviewer"
-            : "",
-      icon: "i-lucide-user-check",
-    },
-    { title: "Approval", description: approval, icon: "i-lucide-hand" },
-    {
-      title: "Merge",
-      description: p.merged_commit ? p.merged_commit.slice(0, 10) : "",
-      icon: "i-lucide-git-merge",
-    },
+      ? p.status === "rejected" ? "rejected by you" : p.carried_over > 0 ? "approved by you, carried over" : "approved by you"
+      : p.status === "merged" ? (p.carried_over > 0 ? "carried over" : "not needed") : "";
+  const review = p.verdict
+    ? p.verdict
+    : live && idx === 2
+      ? `${p.reviewer ?? "reviewer"} is reviewing`
+      : idx > 2 && !p.reviewer
+        ? "no reviewer"
+        : "";
+  const texts = ["onto main", gateText, review, approval, p.merged_commit ? p.merged_commit.slice(0, 10) : ""];
+  const times = stepTimes(p, now);
+  const meta: [string, string][] = [
+    ["Rebase", "i-lucide-git-branch"],
+    ["Gate", "i-lucide-shield-check"],
+    ["Review", "i-lucide-user-check"],
+    ["Approval", "i-lucide-hand"],
+    ["Merge", "i-lucide-git-merge"],
   ];
+  const steps: Step[] = meta.map(([title, icon], i) => {
+    if (live && i === idx) return { title, icon, description: `${p.stage_detail ?? texts[i]}${since}` };
+    const took = times[i]! >= 1000 ? elapsed(times[i]!) : "";
+    return { title, icon, description: [texts[i], took].filter(Boolean).join(" · ") };
+  });
   return { steps, current: p.status === "merged" ? steps.length : idx };
 }

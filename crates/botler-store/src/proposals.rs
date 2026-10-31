@@ -39,6 +39,13 @@ text_enum!(ProposalStage {
     Merge = "merge",
 });
 
+/// When the pipeline entered a stage.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+pub struct StageMark {
+    pub stage: ProposalStage,
+    pub at: DateTime<Utc>,
+}
+
 /// Who decided a proposal and why.
 #[derive(Clone, Debug)]
 pub struct ProposalDecision<'a> {
@@ -76,6 +83,21 @@ pub struct Proposal {
     /// Where the pipeline is, or stopped.
     pub stage: Option<ProposalStage>,
     pub stage_at: Option<DateTime<Utc>>,
+    /// Every stage entered, in order, across re-runs.
+    pub stages: Vec<StageMark>,
+    /// What the current stage is doing right now, e.g. `building image dev (STEP 7/14: RUN …)`.
+    pub stage_detail: Option<String>,
+    /// The last lines of the current stage's output (image build, gate).
+    pub stage_log: Option<String>,
+    /// The head the gate last passed on; a merge of any other head re-checks first.
+    pub gated_commit: Option<String>,
+    /// `git patch-id` of the approved change: an identical change rebased onto a newer main
+    /// keeps its approval.
+    pub approved_patch: Option<String>,
+    /// The escalations the approval covered.
+    pub approved_escalations: Option<Vec<botler_core::change::Escalation>>,
+    /// How often the approval carried over a clean rebase.
+    pub carried_over: i64,
     /// Why it went the way it did, e.g. `merged without asking you: the reviewer approved and nothing needs your approval`.
     pub decision: Option<String>,
     pub decided_by: Option<String>,
@@ -97,6 +119,15 @@ pub struct NewProposal {
     pub args: Option<serde_json::Value>,
     pub args_hash: Option<String>,
     pub code_version: Option<String>,
+}
+
+/// Enter a stage (binds: stage, now, now, stage, now): its history grows, the last stage's live
+/// detail and output go.
+macro_rules! enter_stage {
+    () => {
+        "stage = ?, stage_at = ?, updated_at = ?, stage_log = NULL, \
+         stages = json_insert(COALESCE(stages, '[]'), '$[#]', json_object('stage', ?, 'at', ?))"
+    };
 }
 
 fn row(r: &SqliteRow) -> Result<Proposal> {
@@ -128,6 +159,13 @@ fn row(r: &SqliteRow) -> Result<Proposal> {
         attempts: r.get("attempts"),
         stage: r.get::<Option<String>, _>("stage").map(|s| ProposalStage::parse(T, &s)).transpose()?,
         stage_at: parse_opt_ts(T, r.get("stage_at"))?,
+        stages: json(r, "stages")?.unwrap_or_default(),
+        stage_detail: r.get("stage_detail"),
+        stage_log: r.get("stage_log"),
+        gated_commit: r.get("gated_commit"),
+        approved_patch: r.get("approved_patch"),
+        approved_escalations: json(r, "approved_escalations")?,
+        carried_over: r.get("carried_over"),
         decision: r.get("decision"),
         decided_by: r.get("decided_by"),
         decided_at: parse_opt_ts(T, r.get("decided_at"))?,
@@ -187,6 +225,14 @@ impl Store {
     /// Proposals that were mid-flight when the hub stopped.
     pub async fn unfinished_proposals(&self) -> Result<Vec<Proposal>> {
         let rows = sqlx::query("SELECT * FROM proposals WHERE status IN ('gating', 'reviewing') ORDER BY created_at")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(row).collect()
+    }
+
+    /// Proposals not finished yet, including those waiting for the user.
+    pub async fn in_flight_proposals(&self) -> Result<Vec<Proposal>> {
+        let rows = sqlx::query("SELECT * FROM proposals WHERE kind = 'change' AND status IN ('gating', 'reviewing', 'awaiting_user') ORDER BY created_at")
             .fetch_all(&self.pool)
             .await?;
         rows.iter().map(row).collect()
@@ -287,16 +333,21 @@ impl Store {
         Ok(())
     }
 
-    /// Move an in-flight proposal to `stage`. False if it finished, or is merging (which a
-    /// rejection can no longer stop).
-    pub async fn set_proposal_stage(&self, id: &str, stage: ProposalStage) -> Result<bool> {
+    /// Move an in-flight proposal to `stage`, doing `detail`. False if it finished, or is merging
+    /// (which a rejection can no longer stop).
+    pub async fn set_proposal_stage(&self, id: &str, stage: ProposalStage, detail: &str) -> Result<bool> {
         let now = ts(Utc::now());
-        let n = sqlx::query(
-            "UPDATE proposals SET stage = ?, stage_at = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user') AND COALESCE(stage, '') != 'merge'",
-        )
+        let n = sqlx::query(concat!(
+            "UPDATE proposals SET ",
+            enter_stage!(),
+            ", stage_detail = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user') AND COALESCE(stage, '') != 'merge'",
+        ))
         .bind(stage.as_str())
         .bind(&now)
         .bind(&now)
+        .bind(stage.as_str())
+        .bind(&now)
+        .bind(detail)
         .bind(id)
         .execute(&self.pool)
         .await?
@@ -307,13 +358,20 @@ impl Store {
     /// Start an in-flight proposal's pipeline over: back to `gating` at the rebase stage, from any
     /// stage, merge included (main moved under the merge, or the hub restarted mid-merge). False
     /// if it had already finished.
-    pub async fn restart_proposal(&self, id: &str) -> Result<bool> {
+    pub async fn restart_proposal(&self, id: &str, detail: &str) -> Result<bool> {
         let now = ts(Utc::now());
-        let n = sqlx::query(
-            "UPDATE proposals SET status = 'gating', stage = 'rebase', stage_at = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')",
-        )
+        let stage = ProposalStage::Rebase.as_str();
+        let n = sqlx::query(concat!(
+            "UPDATE proposals SET status = 'gating', ",
+            enter_stage!(),
+            ", stage_detail = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')",
+        ))
+        .bind(stage)
         .bind(&now)
         .bind(&now)
+        .bind(stage)
+        .bind(&now)
+        .bind(detail)
         .bind(id)
         .execute(&self.pool)
         .await?
@@ -345,5 +403,68 @@ impl Store {
         .await?
         .rows_affected();
         Ok(n == 1)
+    }
+
+    /// What the current stage is doing now, and its output tail.
+    pub async fn set_proposal_progress(&self, id: &str, detail: &str, log: Option<&str>) -> Result<()> {
+        sqlx::query("UPDATE proposals SET stage_detail = ?, stage_log = COALESCE(?, stage_log) WHERE id = ?")
+            .bind(detail)
+            .bind(log)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The gate passed on `commit`.
+    pub async fn set_proposal_gated(&self, id: &str, commit: &str) -> Result<()> {
+        sqlx::query("UPDATE proposals SET gated_commit = ?, updated_at = ? WHERE id = ?")
+            .bind(commit)
+            .bind(ts(Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Main moved and the change rebased onto it unchanged: the new base and head.
+    pub async fn set_proposal_rebased(&self, id: &str, base: &str, head: &str) -> Result<bool> {
+        let n = sqlx::query("UPDATE proposals SET base_commit = ?, head_commit = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')")
+            .bind(base)
+            .bind(head)
+            .bind(ts(Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(n == 1)
+    }
+
+    /// Record what was approved (the change's patch id and the escalations it covered), or with
+    /// `None` drop the approval.
+    pub async fn set_proposal_approval(
+        &self,
+        id: &str,
+        approval: Option<(&str, &[botler_core::change::Escalation])>,
+    ) -> Result<()> {
+        let escalations = approval.map(|(_, e)| crate::encode("approved escalations", e)).transpose()?;
+        sqlx::query("UPDATE proposals SET approved_patch = ?, approved_escalations = ?, updated_at = ? WHERE id = ?")
+            .bind(approval.map(|(p, _)| p))
+            .bind(escalations)
+            .bind(ts(Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The approval carried over a clean rebase.
+    pub async fn carry_proposal_approval(&self, id: &str) -> Result<()> {
+        sqlx::query("UPDATE proposals SET carried_over = carried_over + 1, updated_at = ? WHERE id = ?")
+            .bind(ts(Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }

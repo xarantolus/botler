@@ -25,9 +25,17 @@ const error = ref<string | null>(null);
 const busy = ref<"approve" | "reject" | null>(null);
 const now = useNow(1000);
 
-const p = computed(() => view.value?.proposal ?? null);
+// Live: the broadcast copy is the freshest (stage detail and output update every few seconds).
+const live = computed(() => state.proposals?.find((x) => x.id === props.id) ?? null);
+const p = computed(() => {
+  const loaded = view.value?.proposal;
+  return loaded && live.value && live.value.updated_at >= loaded.updated_at ? live.value : (loaded ?? null);
+});
 const steps = computed(() => (p.value ? pipeline(p.value, now.value) : null));
 const gate = computed(() => (p.value ? gateVerdict(p.value) : null));
+const liveLog = computed(() =>
+  p.value && inFlight(p.value) && (p.value.stage === "image" || p.value.stage === "gate") ? p.value.stage_log : null,
+);
 
 async function loadView() {
   try {
@@ -62,8 +70,8 @@ watch(
 const isAction = computed(() => p.value?.kind === "action");
 const actionArgs = computed(() => (p.value?.args === null || p.value?.args === undefined ? "" : JSON.stringify(p.value.args, null, 2)));
 
-// Live: the proposal moved. The diff changes only when the head does (a rebase).
-const live = computed(() => state.proposals?.find((x) => x.id === props.id) ?? null);
+// The proposal moved: reload the view (its summary, the explanation). The diff changes only when
+// the head does (a rebase).
 watch(live, (fresh, old) => {
   if (!fresh || !view.value || fresh.updated_at === view.value.proposal.updated_at) return;
   void loadView();
@@ -157,6 +165,15 @@ const fileId = (path: string) => `file-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
             icon="i-lucide-user-check"
             :label="`reviewer: ${p.verdict}`"
           />
+          <UBadge
+            v-if="p.carried_over > 0"
+            color="success"
+            variant="outline"
+            size="sm"
+            icon="i-lucide-repeat"
+            label="approval carried over"
+            title="Main moved; the change rebased onto it unchanged, so the earlier approval still applied."
+          />
           <span>
             from
             <ULink :to="`/chat/${encodeURIComponent(p.instance)}`" class="font-medium text-default hover:underline">{{ p.instance }}</ULink>
@@ -186,6 +203,20 @@ const fileId = (path: string) => `file-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
         class="w-full"
         :ui="{ description: 'text-xs' }"
       />
+
+      <!-- Where it stands, in the words its agent reads. -->
+      <p v-if="view?.explained && !isAction" class="flex items-start gap-2 text-sm text-default">
+        <UIcon name="i-lucide-info" class="mt-0.5 size-4 shrink-0 text-primary" />
+        <span>{{ view.explained }}</span>
+      </p>
+
+      <!-- The live output of the image build or the gate. -->
+      <UCollapsible v-if="liveLog" class="rounded-md border border-default">
+        <UButton color="neutral" variant="ghost" block class="justify-between px-3" trailing-icon="i-lucide-chevron-down" :label="p.stage === 'image' ? 'Image build output' : 'Gate output'" />
+        <template #content>
+          <div class="border-t border-default p-3"><CodeBlock :text="liveLog" max-height="24rem" /></div>
+        </template>
+      </UCollapsible>
 
       <!-- Why it went the way it did -->
       <UAlert

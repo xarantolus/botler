@@ -118,7 +118,10 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         fields: &[
             ("proposal_id", "the proposal"),
             ("title", "its title"),
-            ("status", "gating | reviewing | awaiting_user | merged | rejected | failed"),
+            (
+                "status",
+                "gating | reviewing | awaiting_user | approved (by the user; merging next) | merged | rejected | failed",
+            ),
             ("detail", "gate failures, reviewer notes, or the reason for the decision"),
             ("summary", "the deployment summary of the change"),
             ("reason", "the user's reason for rejecting it (or comment on approving it)"),
@@ -132,7 +135,9 @@ pub const BUILTIN: &[BuiltinEvent] = &[
                    `gate/run` and everything the gate checks are files on your branch: a gate failure is always \
                    fixable there (changes to `gate/` need the user's approval). \
                    If it was rejected, read `reason` (the user's words) or the reviewer's notes in `detail` \
-                   before trying anything else, and address them in the next proposal.",
+                   before trying anything else, and address them in the next proposal. \
+                   Unsure what a status means or what happens next? `get_proposal` returns `process`, \
+                   which says; tell the user no more than that.",
     },
     BuiltinEvent {
         kind: kinds::TRIAL_FINISHED,
