@@ -167,7 +167,7 @@ watch(
 );
 
 function showRequest() {
-  void reveal("[aria-label^='Question'], [aria-label^='Approval'], [aria-label^='Secrets']");
+  void reveal("[data-open-dialog]");
 }
 
 const composer = useTemplateRef<{ focus: () => void }>("composer");

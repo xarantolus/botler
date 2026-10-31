@@ -36,8 +36,11 @@ describe("phaseBadge", () => {
 
   it("says when a chat waits on the user, asleep or not", () => {
     const asleep = phaseBadge({ state: "dormant", status: null, waitingOnUser: 1 });
-    expect([asleep.label, asleep.detail]).toEqual(["waiting for you", "Sleeping, waiting for your answer"]);
-    expect(phaseBadge({ state: "running", status: null, waitingOnUser: 1 }).detail).toBe("Waiting for your answer");
+    expect([asleep.label, asleep.detail]).toEqual(["waiting for you", "Sleeping, 1 request waiting for your answer"]);
+    // It counts them, so answering one of several does not look like it did nothing.
+    expect(phaseBadge({ state: "running", status: null, waitingOnUser: 2 }).detail).toBe(
+      "2 requests waiting for your answer",
+    );
     // Working beats waiting: the agent is busy right now.
     expect(phaseBadge({ state: "running", status: null, busy: true, waitingOnUser: 1 }).label).toBe("working");
   });

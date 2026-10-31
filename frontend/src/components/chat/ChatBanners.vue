@@ -122,9 +122,12 @@ const skipped = computed(() => state.status?.skipped_definitions ?? []);
       variant="subtle"
       icon="i-lucide-hand"
       :title="badge?.detail ?? 'Waiting for your answer'"
-      description="It continues once you answer the request below."
+      description="It continues once you answer them."
       orientation="horizontal"
-      :actions="[{ label: 'Show', color: 'warning', variant: 'outline', size: 'xs', onClick: () => emit('showRequest') }]"
+      :actions="[
+        { label: 'Show', color: 'warning', variant: 'outline', size: 'xs', onClick: () => emit('showRequest') },
+        { label: 'All requests', color: 'warning', variant: 'ghost', size: 'xs', to: '/requests' },
+      ]"
     />
   </div>
 </template>

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // One dialog (a question, a credentials request, an access request or an approval), shown inline in its chat and in
 // the requests inbox. Open dialogs are interactive; answered, aborted and expired ones show their
-// outcome read-only.
+// outcome read-only (`compact`: as one line, in a chat).
 import { computed, reactive, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { call } from "../../api/client";
 import { confirmDecision } from "../../confirm";
 import type { Dialog, DialogView, SecretInput } from "../../generated";
@@ -14,7 +15,9 @@ import MarkdownText from "./MarkdownText.vue";
 import SecretValueInput from "./SecretValueInput.vue";
 import TimeAgo from "./TimeAgo.vue";
 
-const props = defineProps<{ dialog: Dialog | DialogView; showChat?: boolean }>();
+const props = defineProps<{ dialog: Dialog | DialogView; showChat?: boolean; compact?: boolean }>();
+const router = useRouter();
+const route = useRoute();
 
 const d = computed(() => props.dialog);
 const open = computed(() => d.value.status === "open");
@@ -46,11 +49,16 @@ async function answer(text: string, reason?: string) {
   const answer = text.trim();
   if (!answer || busy.value) return;
   busy.value = answer;
+  // Read before the refresh replaces the dialog.
+  const proposal = d.value.kind === "approval" ? d.value.proposal_id : null;
   try {
     await call("answer_dialog", { params: { id: d.value.id }, body: { answer, reason } });
     notifySuccess("Answered", `${d.value.question} → ${answer}`);
     free.value = "";
     await done();
+    // Follow the decided proposal through its pipeline.
+    if (proposal && !(route.name === "proposal" && route.params.id === proposal))
+      void router.push({ name: "proposal", params: { id: proposal } });
   } catch (e) {
     notifyError("Could not answer", e);
   } finally {
@@ -110,11 +118,33 @@ function onFreeKey(e: KeyboardEvent) {
 </script>
 
 <template>
+  <div
+    v-if="compact && !open"
+    class="flex min-w-0 items-center gap-2 rounded-md border border-default px-3 py-1.5 text-sm text-muted"
+    :aria-label="`${kind.label}: ${d.question}`"
+  >
+    <UIcon :name="kind.icon" class="size-4 shrink-0" />
+    <span class="min-w-0 truncate" :title="d.question">{{ d.question }}</span>
+    <UBadge
+      :color="dialogStatusColor(d.status)"
+      variant="subtle"
+      size="sm"
+      :label="d.answer ?? d.status"
+      :title="d.abort_reason ?? d.answer ?? undefined"
+      class="max-w-40 shrink-0"
+      :ui="{ label: 'truncate' }"
+    />
+    <ULink v-if="d.proposal_id" :to="`/proposals/${d.proposal_id}`" class="ms-auto shrink-0 text-primary hover:underline">
+      {{ isAction ? "Details" : "Review" }}
+    </ULink>
+  </div>
   <UCard
+    v-else
     :variant="open ? 'outline' : 'subtle'"
     :class="[!open && 'opacity-75', open && d.priority === 'blocking' && 'ring-warning/50']"
     :ui="{ header: 'p-3 sm:px-4', body: 'p-3 sm:p-4', footer: 'p-3 sm:px-4' }"
     :aria-label="`${kind.label}: ${d.question}`"
+    :data-open-dialog="open || undefined"
   >
     <template #header>
       <div class="flex flex-wrap items-center gap-1.5 text-xs text-muted">

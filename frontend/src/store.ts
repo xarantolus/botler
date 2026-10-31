@@ -112,15 +112,24 @@ export function refreshInstances() {
   });
 }
 
+// Refreshes overlap (the live stream and an answer both ask): only the newest response is
+// applied, so a slow older one cannot bring back a dialog that was just answered.
+let dialogsSeq = 0;
+let proposalsSeq = 0;
+
 export function refreshDialogs() {
+  const seq = ++dialogsSeq;
   return guarded("Loading requests", async () => {
-    state.dialogs = await call("dialogs", {});
+    const dialogs = await call("dialogs", {});
+    if (seq === dialogsSeq) state.dialogs = dialogs;
   });
 }
 
 export function refreshProposals() {
+  const seq = ++proposalsSeq;
   return guarded("Loading proposals", async () => {
-    state.proposals = await call("proposals", {});
+    const proposals = await call("proposals", {});
+    if (seq === proposalsSeq) state.proposals = proposals;
   });
 }
 

@@ -62,11 +62,13 @@ export function phaseBadge(s: ChatSituation): Badge {
   const running = st ? st.status === "running" : s.state === "running";
   if (running && s.busy) return { label: "working", type: "success", busy: true };
   if (s.waitingOnUser) {
+    const n = s.waitingOnUser;
+    const waiting = `${n} ${n === 1 ? "request" : "requests"} waiting for your answer`;
     return {
       label: "waiting for you",
       type: "warning",
       busy: false,
-      detail: running ? "Waiting for your answer" : "Sleeping, waiting for your answer",
+      detail: running ? waiting : `Sleeping, ${waiting}`,
     };
   }
   if (s.pending) return { label: "queued", type: "info", busy: true, detail: `${s.pending} message(s) queued` };
