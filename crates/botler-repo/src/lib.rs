@@ -75,7 +75,7 @@ fn is_definition_path(path: &str) -> bool {
         ["policies", f] => f.ends_with(".toml") || f.ends_with(".md"),
         ["agents", _, "agent.toml" | "AGENTS.md"] => true,
         ["jobs", _, "job.toml" | "Dockerfile"] => true,
-        ["triggers" | "events", f] => f.ends_with(".toml"),
+        ["triggers" | "events" | "mounts", f] => f.ends_with(".toml"),
         ["images", _, "Dockerfile"] => true,
         _ => false,
     }

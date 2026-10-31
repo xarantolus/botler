@@ -102,6 +102,8 @@ pub fn changes(old: &AgentEnv, new: &AgentEnv) -> Vec<String> {
     diff(&mut out, "access", &old.held, &new.held);
     diff(&mut out, "secret groups", &old.env.secrets, &new.env.secrets);
     diff(&mut out, "services", &old.env.mcp, &new.env.mcp);
+    let mounts = |e: &AgentEnv| e.env.mounts.iter().map(|(n, m)| format!("{n} ({})", m.as_str())).collect::<Vec<_>>();
+    diff(&mut out, "shares", &mounts(old), &mounts(new));
     if old.env.mcp_stdio != new.env.mcp_stdio {
         out.push("MCP servers changed".into());
     }

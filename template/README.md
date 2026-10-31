@@ -9,6 +9,7 @@ branch and calling `propose_change` (gate → reviewer → user if needed → me
 | `secrets.toml` | Secret declarations (values live in the hub, never here) |
 | `agents/<name>/` | Agent definitions (`agent.toml`) and their prompts (`AGENTS.md`) |
 | `jobs/<name>/` | Deterministic containers: oneshot or long-running services |
+| `mounts/` | Network shares (SMB, SFTP, WebDAV) granted to chats and jobs |
 | `triggers/` | When something happens, do something |
 | `events/` | Declared event types |
 | `tools/`, `connectors/`, `packages/` | Python code agents and jobs use |

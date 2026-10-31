@@ -305,10 +305,13 @@ pub const BUILTIN: &[BuiltinEvent] = &[
     },
     BuiltinEvent {
         kind: kinds::ENVIRONMENT_UPDATED,
-        summary: "Your container was restarted with a changed environment (e.g. a merged change); this conversation goes on.",
-        fields: &[("changes", "what changed: tools, image, instructions, pi resources, secrets, services")],
+        summary: "Your container was restarted with a changed environment (e.g. a merged change), or a network share could not be mounted; this conversation goes on.",
+        fields: &[(
+            "changes",
+            "what changed: tools, image, instructions, pi resources, secrets, services, shares; or `mount <name> unavailable: <why>`",
+        )],
         follow_up: &[],
-        guidance: "Use what is new from now on (new tools are in your tool list). Nothing to answer.",
+        guidance: "Use what is new from now on (new tools are in your tool list). An unavailable share is reported to the user as an incident: if your task needs it, say so; never work around it. Nothing to answer otherwise.",
     },
     BuiltinEvent {
         kind: kinds::CHAT_STOPPED,

@@ -111,9 +111,9 @@ impl Op for SpawnAgent {
             .get(&self.definition)
             .ok_or_else(|| HubError::Undefined { kind: "agent", name: self.definition.clone() })?;
         let wanted: Vec<Resource> =
-            wanted.into_iter().filter(|r| !botler_core::defs::env_gives(&def.spec.env, r)).collect();
+            wanted.into_iter().filter(|r| !botler_core::defs::env_gives(&def.spec.env, r, None)).collect();
         for r in &wanted {
-            crate::grants::check(&applied.defs, def, r)?;
+            crate::grants::check(&applied.defs, def, r, None)?;
         }
         let parent = caller.instance();
         let instance = router::new_instance(hub, &self.definition, parent, Some(&self.task)).await?;
@@ -122,7 +122,7 @@ impl Op for SpawnAgent {
             // The user decides directly; a parent passes on what it holds; policy may allow it.
             let by = match parent {
                 None => Some("user".to_string()),
-                Some(p) if crate::grants::holds(hub, p, r).await? => Some(format!("spawn:{p}")),
+                Some(p) if crate::grants::holds(hub, p, r, None).await? => Some(format!("spawn:{p}")),
                 Some(_) if applied.defs.grant_policy.mode(r) == GrantMode::Auto => Some("policy".into()),
                 Some(_) => None,
             };

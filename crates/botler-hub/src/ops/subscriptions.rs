@@ -91,7 +91,7 @@ impl Op for Subscribe {
         }
         for t in matches.iter().filter(|t| defs.events.get(*t).is_some_and(|e| e.restricted)) {
             let r = Resource::new(ResourceKind::Event, t.clone());
-            if !crate::grants::holds(hub, instance, &r).await? {
+            if !crate::grants::holds(hub, instance, &r, None).await? {
                 return Err(OpError::Forbidden(format!(
                     "`{t}` is restricted; ask for it with `request_access(\"{r}\", reason)` first"
                 )));
