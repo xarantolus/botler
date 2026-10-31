@@ -78,7 +78,7 @@ async fn a_new_tool_restarts_botler_in_the_same_session_and_it_is_told() {
     let old_spec = e.fake.containers()[&container(&e)].spec.clone();
     add_weather(&e).await;
     refresh_after_debounce(&e).await;
-    assert!(e.hub.agents.get("botler").await.is_none(), "stopped between turns");
+    assert!(e.exited("botler").await, "stopped between turns");
     agents::keep_always_on(&e.hub).await.unwrap(); // always-on: back at once
     settle().await;
     let after = wake_id(&e).await.unwrap();
@@ -138,7 +138,7 @@ async fn a_busy_agent_finishes_its_turn_first() {
     settle().await;
     refresh_environments(&e.hub, Utc::now() + Duration::minutes(1)).await.unwrap();
     settle().await;
-    assert!(e.hub.agents.get("botler").await.is_none(), "restarted after the turn");
+    assert!(e.exited("botler").await, "restarted after the turn");
 }
 
 #[tokio::test]
@@ -154,7 +154,7 @@ async fn a_burst_of_merges_restarts_once() {
     assert!(e.hub.agents.get("botler").await.is_some(), "the second merge restarted the wait");
     refresh_environments(&e.hub, t + Duration::seconds(2 * RESTART_DEBOUNCE_SECS)).await.unwrap();
     settle().await;
-    assert!(e.hub.agents.get("botler").await.is_none());
+    assert!(e.exited("botler").await);
     agents::keep_always_on(&e.hub).await.unwrap();
     settle().await;
     let after = wake_id(&e).await.unwrap();

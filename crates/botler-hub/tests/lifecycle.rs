@@ -165,7 +165,7 @@ async fn botler_rolls_over_to_a_fresh_session_seeded_with_its_report() {
     assert_ne!(file, "botler.jsonl");
     // The container restarts after the turn had time to end, on the new session file.
     tokio::time::sleep(botler_hub::handover::RESTART_AFTER + std::time::Duration::from_millis(500)).await;
-    assert!(e.hub.agents.get("botler").await.is_none());
+    assert!(e.exited("botler").await);
     agents::keep_always_on(&e.hub).await.unwrap();
     pump(&e).await;
     let new = e.fake.containers()[&agents::container_name(&e.hub, "botler")].spec.clone();

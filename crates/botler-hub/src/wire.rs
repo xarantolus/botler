@@ -21,7 +21,10 @@ use crate::api::{
 };
 use crate::memory::{MemoryConflict, MemoryHistory, MemoryList, MemoryRead, MemoryWrite};
 use crate::ops::{ClearChatCaches, CollectGarbage, DeleteChat, StorageUsage};
-use crate::ops::{GetProposal, GetRunLogs, Handover, ListConnections, Op, RevokeAccess, StopChat, Unsubscribe};
+use crate::ops::{
+    ForkChat, GetProposal, GetRunLogs, GetSessionTree, GotoEntry, Handover, LabelEntry, ListConnections, Op,
+    RevokeAccess, StopChat, Unsubscribe,
+};
 use crate::phase::WakePhase;
 use crate::review::ProposalDiff;
 use crate::search::{SearchQuery, SearchResults};
@@ -386,6 +389,10 @@ routes! {
         restart_service: crate::ops::RestartService;
         stop_chat: StopChat;
         handover: Handover;
+        session_tree: GetSessionTree;
+        goto_entry: GotoEntry;
+        label_entry: LabelEntry;
+        fork_chat: ForkChat;
     }
     status: GET "/api/v1/status" => HubStatus;
     usage: GET "/api/v1/usage" => Usage;
