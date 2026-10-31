@@ -13,7 +13,7 @@ use botler_core::payloads::{
     AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, EnvironmentUpdatedPayload, MessagePayload, SendMode,
 };
 use botler_core::{Event, Source};
-use botler_runtime::{ContainerSpec, Mount, PiClient, PiError, PiEvent, PiEventKind, Streaming};
+use botler_runtime::{ContainerSpec, Disposition, Mount, PiClient, PiError, PiEvent, PiEventKind, Streaming};
 use botler_store::{Delivery, Instance, InstanceState};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
@@ -136,6 +136,8 @@ pub struct Agents {
     waking: Mutex<()>,
     /// The applied commit and when it was first seen, to restart agents once per burst of merges.
     applied_at: Mutex<Option<(String, DateTime<Utc>)>>,
+    /// The hub is shutting down: turns it aborts were cut off, not ended (resumed at boot).
+    shutting_down: AtomicBool,
 }
 
 impl std::fmt::Debug for Agents {
@@ -300,8 +302,17 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
         None
     };
     hub.store.mark_delivery_attempt(&d.id).await?;
+    let starts = !busy && !d.quiet;
+    if starts {
+        // In flight from now on (before pi reports it): a hub that stops here resumes it at boot.
+        hub.store.begin_turn(&d.instance).await?;
+    }
     let _delivering = agent.delivering.lock().await;
-    match agent.pi.prompt(&text, &[], streaming).await {
+    let result = agent.pi.prompt(&text, &[], streaming).await;
+    if starts && matches!(result, Ok(Disposition::Handled) | Err(PiError::Rejected { .. })) {
+        hub.store.end_turn(&d.instance, false).await?; // no turn after all
+    }
+    match result {
         Ok(disposition) => {
             hub.store.mark_delivered(&d.id).await?;
             if streaming == Some(Streaming::Steer) && ev.source == Source::User {
@@ -311,7 +322,7 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
             // would race with a settle that arrives before this response is processed.
             tracing::debug!(delivery = %d.id, ?disposition, "delivered");
             agent.touch();
-            Ok(!busy && !d.quiet)
+            Ok(starts)
         }
         Err(PiError::Rejected { error, .. }) if d.attempts + 1 >= MAX_ATTEMPTS => {
             tracing::error!(delivery = %d.id, %error, "pi keeps rejecting delivery; dropping it");
@@ -799,6 +810,9 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
         match &ev.kind {
             PiEventKind::AgentStart => {
                 agent.busy.store(true, Ordering::SeqCst);
+                if let Err(e) = hub.store.begin_turn(&agent.instance).await {
+                    tracing::error!(instance = %agent.instance, error = %e, "could not record the turn's start");
+                }
                 agent.turn().reset();
                 *agent.error() = None;
                 // pi is up and working: the instance is healthy again.
@@ -809,6 +823,13 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
             }
             PiEventKind::AgentSettled => {
                 agent.busy.store(false, Ordering::SeqCst);
+                if hub.agents.shutting_down.load(Ordering::SeqCst) {
+                    // Aborted by the shutdown: cut off, not over. It is resumed at the next boot.
+                    continue;
+                }
+                if let Err(e) = hub.store.end_turn(&agent.instance, true).await {
+                    tracing::error!(instance = %agent.instance, error = %e, "could not record the turn's end");
+                }
                 agent.steered.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
                 agent.touch();
                 if let Err(e) = hub.store.touch_instance(&agent.instance).await {
@@ -957,6 +978,12 @@ async fn watch_exit(
     if let Err(e) = hub.store.set_instance_state(&agent.instance, state, None).await {
         tracing::error!(instance = %agent.instance, error = %e, "could not record agent exit");
     }
+    // No turn survives its container; only one the shutdown cut off is resumed at boot.
+    if !hub.agents.shutting_down.load(Ordering::SeqCst)
+        && let Err(e) = hub.store.end_turn(&agent.instance, false).await
+    {
+        tracing::error!(instance = %agent.instance, error = %e, "could not record the turn's end");
+    }
     {
         let mut live = hub.agents.live.lock().await;
         if live.get(&agent.instance).is_some_and(|a| Arc::ptr_eq(a, &agent)) {
@@ -1082,8 +1109,21 @@ pub async fn stop_all(hub: &Hub) {
     }
 }
 
-/// After a restart no pi connection survives: mark instances dormant and remove leftovers.
+/// Stop every agent because the hub is shutting down. Turns it cuts off stay recorded as in
+/// flight, so the next boot wakes them to continue ([`reconcile_on_boot`]).
+pub async fn shutdown(hub: &Hub) {
+    hub.agents.shutting_down.store(true, Ordering::SeqCst);
+    stop_all(hub).await;
+}
+
+/// Boots in a row a turn is resumed after; the next one opens an incident instead (the turn may
+/// be what takes the hub down).
+pub const MAX_RESUMES: u32 = 2;
+
+/// After a restart no pi connection survives: mark instances dormant, remove leftovers, and wake
+/// the chats whose turn the restart cut off.
 pub async fn reconcile_on_boot(hub: &Hub) -> Result<()> {
+    let interrupted = hub.store.take_interrupted_turns().await?;
     let n = hub.store.reset_running_instances().await?;
     let leftovers = hub.containers.list(&hub.labels("agent")).await?;
     for c in leftovers {
@@ -1092,6 +1132,53 @@ pub async fn reconcile_on_boot(hub: &Hub) -> Result<()> {
     if n > 0 {
         tracing::info!(instances = n, "agents were running before restart; they wake on their next delivery");
     }
+    for t in interrupted {
+        if hub.store.instance(&t.instance).await?.state == InstanceState::Archived {
+            continue;
+        }
+        if t.interruptions > MAX_RESUMES {
+            tracing::error!(instance = %t.instance, interruptions = t.interruptions, "turn keeps being cut off; not resuming it");
+            let failure = crate::failures::Failure {
+                runnable: format!("agent:{}", t.instance),
+                kind: "interrupted",
+                exit_code: None,
+                run_id: None,
+                logs_tail: format!(
+                    "The hub stopped during this chat's turn {} boots in a row (the turn may be what takes it down). \
+                     It was not woken again; a message to it continues it.",
+                    t.interruptions
+                ),
+                commit: Some(hub.applied().await.commit.clone()),
+                event_id: None,
+            };
+            crate::failures::report(hub, failure).await?;
+            continue;
+        }
+        resume_turn(hub, &t).await?;
+    }
+    Ok(())
+}
+
+/// Wake a chat whose turn the hub's restart cut off. Its note goes ahead of anything else queued
+/// for it, so it starts the one turn and the rest follow.
+async fn resume_turn(hub: &Hub, t: &botler_store::InterruptedTurn) -> Result<()> {
+    let at = botler_core::clock::format_local(Utc::now(), hub.applied().await.defs.timezone);
+    let text = format!(
+        "The botler hub restarted at {at} while you were working; your turn was cut off. Your last tool call may \
+         not have finished, or its result is missing. Check where you were (e.g. git status, files, running jobs) \
+         and continue your task."
+    );
+    let mut ev = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None }), Source::Hub)?
+        .to(t.instance.clone());
+    if let Some(d) = hub.store.last_delivered(&t.instance).await? {
+        ev = ev.in_reply_to(&hub.store.event(&d.event_id).await?);
+    }
+    hub.store.append_event(&ev).await?;
+    hub.store.mark_routed(&ev.id.to_string()).await?;
+    let d = hub.store.enqueue_delivery(&ev.id.to_string(), &t.instance, None, None).await?;
+    hub.store.backdate_delivery(&d.id, t.started_at).await?;
+    tracing::info!(instance = %t.instance, interruptions = t.interruptions, "resuming a turn the restart cut off");
+    hub.dispatch_notify.notify_one();
     Ok(())
 }
 

@@ -82,6 +82,8 @@ async fn stop(
         }
         _ => false,
     };
+    // Ended now, even if the hub stops before pi reports the abort: a stopped chat is not resumed.
+    hub.store.end_turn(chat, true).await?;
     let note = format!("stopped by the user{}", reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default());
     let cancelled = hub.store.cancel_deliveries(chat, &note).await?;
     hub.store.clear_turn_retry(chat).await?;

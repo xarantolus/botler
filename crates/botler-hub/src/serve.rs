@@ -96,7 +96,7 @@ pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()
         .with_graceful_shutdown(async move {
             shutdown.await;
             tracing::info!("shutting down: stopping agents");
-            agents::stop_all(&stop_hub).await;
+            agents::shutdown(&stop_hub).await;
         })
         .await?;
     Ok(())

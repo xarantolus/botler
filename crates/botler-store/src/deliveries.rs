@@ -91,6 +91,16 @@ impl Store {
         self.delivery(&id).await
     }
 
+    /// Put a pending delivery in the queue as if it was queued at `at` (deliveries go out oldest first).
+    pub async fn backdate_delivery(&self, id: &str, at: DateTime<Utc>) -> Result<()> {
+        sqlx::query("UPDATE deliveries SET created_at = ? WHERE id = ?")
+            .bind(ts(at))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn delivery(&self, id: &str) -> Result<Delivery> {
         let r = sqlx::query("SELECT * FROM deliveries WHERE id = ?").bind(id).fetch_optional(&self.pool).await?;
         row(&r.ok_or_else(|| crate::not_found("delivery", id))?)

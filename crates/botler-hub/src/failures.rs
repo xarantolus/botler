@@ -12,6 +12,7 @@ use crate::router;
 pub struct Failure {
     pub runnable: String,
     /// exit | timeout | oom | unhealthy | crashloop | start | build (an image; `runnable` is its Dockerfile)
+    /// | interrupted (an agent's turn the hub kept stopping during)
     pub kind: &'static str,
     pub exit_code: Option<i64>,
     pub run_id: Option<String>,

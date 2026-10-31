@@ -82,6 +82,15 @@ pub struct Handoff {
     pub message: String,
 }
 
+/// An instance whose turn was in flight when the hub stopped (see [`Store::take_interrupted_turns`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct InterruptedTurn {
+    pub instance: String,
+    pub started_at: DateTime<Utc>,
+    /// Boots in a row that found it mid-turn, this one included.
+    pub interruptions: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct NewInstance {
     pub name: String,
@@ -399,6 +408,61 @@ impl Store {
         }
         tx.commit().await?;
         Ok(true)
+    }
+
+    /// `name` has a turn in flight (a turn-starting delivery handed to pi, or pi started one).
+    /// Written when it starts, so a hard crash of the hub leaves it set.
+    pub async fn begin_turn(&self, name: &str) -> Result<()> {
+        sqlx::query("UPDATE instances SET turn_started_at = COALESCE(turn_started_at, ?) WHERE name = ?")
+            .bind(ts(Utc::now()))
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// `name`'s turn is over: it `settled` (which also resets the interruption count), or no turn
+    /// is running any more (its container exited, the prompt started none).
+    pub async fn end_turn(&self, name: &str, settled: bool) -> Result<()> {
+        let sql = if settled {
+            "UPDATE instances SET turn_started_at = NULL, turn_interruptions = 0 WHERE name = ?"
+        } else {
+            "UPDATE instances SET turn_started_at = NULL WHERE name = ?"
+        };
+        sqlx::query(sql).bind(name).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// At boot: the instances that were mid-turn when the hub stopped. Their marker is cleared and
+    /// their interruption count bumped.
+    pub async fn take_interrupted_turns(&self) -> Result<Vec<InterruptedTurn>> {
+        const T: &str = "instances";
+        // Writing first takes the write lock up front (a read upgraded later fails when busy).
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "UPDATE instances SET turn_interruptions = turn_interruptions + 1 WHERE turn_started_at IS NOT NULL",
+        )
+        .execute(&mut *tx)
+        .await?;
+        let rows = sqlx::query(
+            "SELECT name, turn_started_at, turn_interruptions FROM instances WHERE turn_started_at IS NOT NULL",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE instances SET turn_started_at = NULL WHERE turn_started_at IS NOT NULL")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        rows.iter()
+            .map(|r| {
+                Ok(InterruptedTurn {
+                    instance: r.get("name"),
+                    started_at: parse_ts(T, r.get("turn_started_at"))?,
+                    interruptions: u32::try_from(r.get::<i64, _>("turn_interruptions"))
+                        .map_err(|e| Error::Corrupt { table: T, detail: format!("bad turn_interruptions: {e}") })?,
+                })
+            })
+            .collect()
     }
 
     /// Crash recovery: no container survives the hub's view of it, so everything not ended is
