@@ -90,7 +90,8 @@ keep running for the visit.
 
 ## Driving the browser yourself
 
-From a container on the services network, CDP is `http://<ip>:9222`. Use the service's IP, not
-its name: Chrome refuses DevTools requests whose `Host` is a name. Get the IP with
-`getent hosts <service>`. Prefer a bridge in the monorepo over ad-hoc driving: it is reviewed,
+To reach the browser, an agent needs the service: `services = ["<service>"]` in its definition
+(proposed as a change) or `request_access("service:<service>", reason)` for one chat. It then
+finds the service in `/botler/agent-dir/services.json` and CDP at `http://<ip>:9222`. Use the
+IP, not the name: Chrome refuses DevTools requests whose `Host` is a name. Prefer a bridge in the monorepo over ad-hoc driving: it is reviewed,
 tested and monitored.
