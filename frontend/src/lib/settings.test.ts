@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogModel, Settings } from "../generated";
-import { changes, contextLabel, draftOf, errorsAt, generalErrors, priceLabel, resolve, searchModels, usedBy } from "./settings";
+import { changes, contextLabel, defaults, draftOf, errorsAt, fieldKind, generalErrors, missing, priceLabel, resolve, searchModels, usedBy, type Schema } from "./settings";
 
 function cat(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
   return {
@@ -86,5 +86,31 @@ describe("schema", () => {
     expect(resolve(root, { $ref: "#/$defs/D" })).toEqual({ node: { type: "string", description: "a duration" }, nullable: false });
     expect(resolve(root, { anyOf: [{ $ref: "#/$defs/D" }, { type: "null" }] }).nullable).toBe(true);
     expect(resolve(root, { type: ["number", "null"] })).toEqual({ node: { type: "number" }, nullable: true });
+  });
+});
+
+describe("forms", () => {
+  const form: Schema = {
+    required: ["folder", "days"],
+    properties: {
+      folder: { type: "string", enum: ["INBOX", "Archive"], default: "INBOX" },
+      days: { type: "array", items: { type: "string", enum: ["mon", "tue"] } },
+      scans: { type: "array", items: { type: "string", format: "file" } },
+      when: { type: "string", format: "date" },
+      notes: { type: "string", "x-multiline": true },
+      every: { type: "integer" },
+    },
+  };
+
+  it("picks an editor per field", () => {
+    const kinds = Object.values(form.properties!).map(fieldKind);
+    expect(kinds).toEqual(["choice", "multi", "files", "date", "multiline", "integer"]);
+  });
+
+  it("starts from the defaults and lists what is still required", () => {
+    const v = defaults(form);
+    expect(v).toEqual({ folder: "INBOX" });
+    expect(missing(form, v)).toEqual(["days"]);
+    expect(missing(form, { ...v, days: ["mon"] })).toEqual([]);
   });
 });

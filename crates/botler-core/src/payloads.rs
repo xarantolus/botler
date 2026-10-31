@@ -119,6 +119,11 @@ pub struct DialogAnsweredPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub outcome: Option<SecretsOutcome>,
+    /// Questions with a form: the submitted values, matching the form's schema. File fields hold
+    /// where the files are in the agent's container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Record<string, unknown>")]
+    pub values: Option<serde_json::Value>,
     /// Guidance for the agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

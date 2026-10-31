@@ -20,4 +20,12 @@ priority?: string,
 /**
  * Withdraw the question after this long, e.g. `1d`.
  */
-expires_in?: string, };
+expires_in?: string, 
+/**
+ * A form instead of free text or `options`: a JSON Schema object whose `properties` are the
+ * fields (`title`, `description`, `default`, `required`). Strings (with `enum`, or `format`
+ * date / date-time / time / file, or `"x-multiline": true`), numbers, integers, booleans,
+ * and arrays of `enum` strings (multi-select) or of files. Never ask for secrets in a form;
+ * use `request_secrets`.
+ */
+form?: Record<string, unknown>, };

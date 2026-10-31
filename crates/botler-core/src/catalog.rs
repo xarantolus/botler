@@ -98,6 +98,7 @@ pub const BUILTIN: &[BuiltinEvent] = &[
             ("answer", "the chosen answer"),
             ("group", "credentials requests: the secret group"),
             ("outcome", "credentials requests: declined, or which fields were added, filled and removed"),
+            ("values", "questions with a form: the submitted values; file fields hold paths in your container"),
             ("note", "guidance from the hub, if any"),
         ],
         follow_up: &[],

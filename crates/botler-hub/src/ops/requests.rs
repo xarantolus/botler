@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{Caller, Op, OpError, Who, parse_when};
+use super::{Caller, Op, OpError, Who, parse_when, to_json};
 use crate::hub::{Hub, HubError};
 use crate::secret_requests::{self, RequestError, SecretRequest};
 
@@ -141,6 +141,20 @@ pub struct AskUser {
     /// Withdraw the question after this long, e.g. `1d`.
     #[serde(default)]
     pub expires_in: Option<String>,
+    /// A form instead of free text or `options`: a JSON Schema object whose `properties` are the
+    /// fields (`title`, `description`, `default`, `required`). Strings (with `enum`, or `format`
+    /// date / date-time / time / file, or `"x-multiline": true`), numbers, integers, booleans,
+    /// and arrays of `enum` strings (multi-select) or of files. Never ask for secrets in a form;
+    /// use `request_secrets`.
+    #[serde(default)]
+    #[ts(optional, type = "Record<string, unknown>")]
+    pub form: Option<serde_json::Value>,
+}
+
+/// What a question dialog's `spec` holds.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct QuestionSpec {
+    pub form: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -151,7 +165,7 @@ pub struct Asked {
 
 impl Op for AskUser {
     const NAME: &'static str = "ask_user";
-    const DESCRIPTION: &'static str = "Ask the user a question and get the answer later as a `dialog.answered` event. `options` are the allowed answers; `about` lists objects (e.g. `proposal:<id>`) whose change withdraws the question.";
+    const DESCRIPTION: &'static str = "Ask the user a question and get the answer later as a `dialog.answered` event. `options` are the allowed answers; `form` (a JSON Schema object) asks for several typed fields at once (choices, multi-select, numbers, dates, files) and the answer's `values` match it; `about` lists objects (e.g. `proposal:<id>`) whose change withdraws the question.";
     const WHO: Who = Who::UserAndAgents;
     const ENDS_TURN: bool = true;
     type Output = Asked;
@@ -165,6 +179,18 @@ impl Op for AskUser {
             other => return Err(OpError::BadRequest(format!("unknown priority {other}"))),
         };
         let expires_at = self.expires_in.as_deref().map(|d| parse_when(None, Some(d), Utc::now())).transpose()?;
+        let spec = match self.form {
+            Some(_) if !self.options.is_empty() => {
+                return Err(OpError::BadRequest(
+                    "give either `options` or a `form`, not both; a form can hold an `enum` field".into(),
+                ));
+            }
+            Some(form) => {
+                crate::forms::check_schema(&form).map_err(|e| OpError::BadRequest(format!("form: {e}")))?;
+                Some(to_json(&QuestionSpec { form })?)
+            }
+            None => None,
+        };
         let d = hub
             .store
             .create_dialog(&NewDialog {
@@ -176,7 +202,7 @@ impl Op for AskUser {
                 about: self.about,
                 priority,
                 proposal_id: None,
-                spec: None,
+                spec,
                 expires_at,
             })
             .await?;

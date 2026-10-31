@@ -4,4 +4,8 @@ export type Answer = { answer: string,
 /**
  * Approvals: why the user rejects (required) or a comment on approving. The agent reads it.
  */
-reason?: string, };
+reason?: string, 
+/**
+ * Questions with a form: the field values (file fields hold uploads, `<id>/<name>`).
+ */
+values?: Record<string, unknown>, };

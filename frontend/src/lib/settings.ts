@@ -99,7 +99,14 @@ export function searchModels(catalog: CatalogModel[], typical: ModelEntry[], ter
 /** A JSON Schema node, as schemars writes them. */
 export interface Schema {
   type?: string | string[];
+  title?: string;
   description?: string;
+  enum?: unknown[];
+  format?: string;
+  default?: unknown;
+  items?: Schema;
+  required?: string[];
+  "x-multiline"?: boolean;
   properties?: Record<string, Schema>;
   $ref?: string;
   anyOf?: Schema[];
@@ -131,4 +138,32 @@ export function resolve(root: Schema, node: Schema): { node: Schema; nullable: b
 export function humanize(key: string): string {
   const s = key.replace(/_/g, " ");
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** How a field is edited. */
+export type FieldKind = "object" | "boolean" | "number" | "integer" | "choice" | "multi" | "file" | "files" | "date" | "date-time" | "time" | "multiline" | "string";
+
+export function fieldKind(n: Schema): FieldKind {
+  if (n.properties) return "object";
+  const t = typeof n.type === "string" ? n.type : "string";
+  if (t === "array") return n.items?.format === "file" ? "files" : "multi";
+  if (t === "boolean" || t === "number" || t === "integer") return t;
+  if (n.enum) return "choice";
+  if (n.format === "file" || n.format === "date" || n.format === "date-time" || n.format === "time") return n.format;
+  return n["x-multiline"] ? "multiline" : "string";
+}
+
+/** A form's starting values: each field's `default`. */
+export function defaults(schema: Schema): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(schema.properties ?? {})
+      .filter(([, f]) => f.default !== undefined)
+      .map(([k, f]) => [k, JSON.parse(JSON.stringify(f.default))]),
+  );
+}
+
+/** Required fields of a form that are still empty. */
+export function missing(schema: Schema, values: Record<string, unknown>): string[] {
+  const empty = (v: unknown) => v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
+  return (schema.required ?? []).filter((k) => empty(values[k]));
 }

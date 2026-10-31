@@ -2,7 +2,7 @@
 // One dialog (a question, a credentials request, an access request or an approval), shown inline in its chat and in
 // the requests inbox. Open dialogs are interactive; answered, aborted and expired ones show their
 // outcome read-only (`compact`: as one line, in a chat).
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { call } from "../../api/client";
 import { confirmDecision } from "../../confirm";
@@ -10,6 +10,8 @@ import type { Dialog, DialogView, SecretInput } from "../../generated";
 import { dialogStatusColor } from "../../lib/runs";
 import { notifyError, notifySuccess } from "../../notify";
 import { refreshDialogs, refreshStatus, state } from "../../store";
+import { defaults, missing, type Schema } from "../../lib/settings";
+import SchemaFields from "../settings/SchemaFields.vue";
 import ChangeSummary from "./ChangeSummary.vue";
 import MarkdownText from "./MarkdownText.vue";
 import SecretValueInput from "./SecretValueInput.vue";
@@ -45,15 +47,29 @@ async function done() {
   await Promise.all([refreshDialogs(), refreshStatus()]);
 }
 
-async function answer(text: string, reason?: string) {
-  const answer = text.trim();
+/** A question's form (`ask_user(form)`), and what the user has entered. */
+const schema = computed(() =>
+  d.value.kind === "question" ? ((d.value.spec as { form?: Schema } | null)?.form ?? null) : null,
+);
+const formValues = ref<Record<string, unknown>>({});
+watch(schema, (s) => (formValues.value = s ? defaults(s) : {}), { immediate: true });
+const formMissing = computed(() => (schema.value ? missing(schema.value, formValues.value) : []));
+
+/** The entered values without empty optional fields. */
+function filled(): Record<string, unknown> {
+  const empty = (v: unknown) => v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
+  return Object.fromEntries(Object.entries(formValues.value).filter(([, v]) => !empty(v)));
+}
+
+async function answer(text: string, reason?: string, values?: Record<string, unknown>) {
+  const answer = values ? "form" : text.trim();
   if (!answer || busy.value) return;
   busy.value = answer;
   // Read before the refresh replaces the dialog.
   const proposal = d.value.kind === "approval" ? d.value.proposal_id : null;
   try {
-    await call("answer_dialog", { params: { id: d.value.id }, body: { answer, reason } });
-    notifySuccess("Answered", `${d.value.question} → ${answer}`);
+    await call("answer_dialog", { params: { id: d.value.id }, body: { answer, reason, values } });
+    notifySuccess("Answered", values ? d.value.question : `${d.value.question} → ${answer}`);
     free.value = "";
     await done();
     // Follow the decided proposal through its pipeline.
@@ -251,6 +267,15 @@ function onFreeKey(e: KeyboardEvent) {
           <code class="font-mono">{{ visitUrl }}</code> · service {{ view.visit.service }}
         </p>
       </template>
+
+      <!-- A question's form. -->
+      <form v-else-if="schema" class="flex flex-col gap-4" @submit.prevent="answer('', undefined, filled())">
+        <SchemaFields v-model="formValues" :root="schema" :node="schema" path="values" :errors="[]" />
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <span v-if="formMissing.length" class="me-auto text-xs text-muted">Still needed: {{ formMissing.join(", ") }}</span>
+          <UButton type="submit" icon="i-lucide-send-horizontal" label="Submit" :loading="busy === 'form'" :disabled="!!busy || formMissing.length > 0" />
+        </div>
+      </form>
 
       <!-- Approvals and questions with choices: every choice the same size, long ones wrap. -->
       <div v-else-if="d.ctas.length" class="space-y-2">

@@ -368,17 +368,18 @@ def get_events(*, correlation: str | None = None, limit: int | None = None, type
     return call("get_events", {"correlation": correlation, "limit": limit, "type": type})
 
 
-def ask_user(*, question: str, about: list[str] | None = None, detail: str | None = None, expires_in: str | None = None, options: list[str] | None = None, priority: str | None = None) -> dict[str, Any]:
-    """Ask the user a question and get the answer later as a `dialog.answered` event. `options` are the allowed answers; `about` lists objects (e.g. `proposal:<id>`) whose change withdraws the question.
+def ask_user(*, question: str, about: list[str] | None = None, detail: str | None = None, expires_in: str | None = None, form: Any = None, options: list[str] | None = None, priority: str | None = None) -> dict[str, Any]:
+    """Ask the user a question and get the answer later as a `dialog.answered` event. `options` are the allowed answers; `form` (a JSON Schema object) asks for several typed fields at once (choices, multi-select, numbers, dates, files) and the answer's `values` match it; `about` lists objects (e.g. `proposal:<id>`) whose change withdraws the question.
 
     Args:
         about: Objects whose change withdraws the question, e.g. `proposal:<id>`.
         detail: Background the user needs to answer.
         expires_in: Withdraw the question after this long, e.g. `1d`.
+        form: A form instead of free text or `options`: a JSON Schema object whose `properties` are the fields (`title`, `description`, `default`, `required`). Strings (with `enum`, or `format` date / date-time / time / file, or `"x-multiline": true`), numbers, integers, booleans, and arrays of `enum` strings (multi-select) or of files. Never ask for secrets in a form; use `request_secrets`.
         options: Allowed answers, e.g. ["yes", "no"]. Empty means free text.
         priority: `blocking` (you cannot continue; notifies the user), `normal`, or `info`.
     """
-    return call("ask_user", {"question": question, "about": about, "detail": detail, "expires_in": expires_in, "options": options, "priority": priority})
+    return call("ask_user", {"question": question, "about": about, "detail": detail, "expires_in": expires_in, "form": form, "options": options, "priority": priority})
 
 
 def request_visit(*, host_port: int, instructions: str, title: str, expires_in: str | None = None, path: str | None = None) -> dict[str, Any]:

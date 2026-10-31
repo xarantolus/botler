@@ -226,6 +226,7 @@ pub async fn answer(hub: &Hub, dialog_id: &str, answer: &str) -> Result<Dialog, 
         answer: answer.into(),
         group: None,
         outcome: None,
+        values: None,
         note: Some(note),
     });
     hub.emit(builtin(payload, Source::User)?.to(d.instance.clone())).await?;

@@ -490,6 +490,22 @@ pub struct Answer {
     #[serde(default)]
     #[ts(optional)]
     reason: Option<String>,
+    /// Questions with a form: the field values (file fields hold uploads, `<id>/<name>`).
+    #[serde(default)]
+    #[ts(optional, type = "Record<string, unknown>")]
+    values: Option<serde_json::Value>,
+}
+
+/// A question's form, if it has one.
+fn form_of(d: &botler_store::Dialog) -> Result<Option<serde_json::Value>, ApiError> {
+    if d.kind != botler_store::DialogKind::Question {
+        return Ok(None);
+    }
+    let Some(spec) = d.spec.clone() else { return Ok(None) };
+    let q: crate::ops::QuestionSpec = serde_json::from_value(spec).map_err(|e| {
+        ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("question {} has an unreadable form: {e}", d.id))
+    })?;
+    Ok(Some(q.form))
 }
 
 async fn answer_dialog(
@@ -520,13 +536,30 @@ async fn answer_dialog(
         decide(&hub, pid, a.answer == "approve", a.reason.as_deref()).await?;
         return Ok(Json(DialogAnswer { dialog: hub.store.dialog(&id).await? }));
     }
-    let d = hub.store.answer_dialog(&id, &a.answer).await?;
+    let (answer, values) = match form_of(&d)? {
+        Some(form) => {
+            let bad = |m: String| ApiError(StatusCode::BAD_REQUEST, m);
+            let values = a.values.ok_or_else(|| bad("this question is a form; send its `values`".into()))?;
+            crate::forms::check_values(&form, &values).map_err(bad)?;
+            if d.status != DialogStatus::Open {
+                // Let the store say why (answered, withdrawn, expired).
+                hub.store.answer_dialog(&id, "").await?;
+            }
+            let uploads = crate::forms::files(&form, &values);
+            let paths = crate::uploads::attach(&hub, &d.instance, &uploads).await.map_err(HubError::from)?;
+            let map: Vec<_> = uploads.into_iter().zip(paths).collect();
+            (crate::forms::summary(&form, &values), Some(crate::forms::with_paths(&values, &map)))
+        }
+        None => (a.answer, None),
+    };
+    let d = hub.store.answer_dialog(&id, &answer).await?;
     let ev = user_event(BuiltinPayload::DialogAnswered(DialogAnsweredPayload {
         dialog_id: d.id.clone(),
         question: d.question.clone(),
-        answer: a.answer,
+        answer,
         group: None,
         outcome: None,
+        values,
         note: None,
     }))?
     .to(d.instance.clone());

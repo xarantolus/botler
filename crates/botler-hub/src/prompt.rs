@@ -43,7 +43,9 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
            information the other side needs. Do not reply to acknowledgements, and end a conversation with a \
            final message that needs no reply.\n\
          - `ask_user(question, options, about)` asks the user and waits for an answer as an event. Use it \
-           for decisions that are theirs; never guess at them.\n\
+           for decisions that are theirs; never guess at them. When you need several values at once (a \
+           setup: which folders, how often, a sample file), send one `form` (a JSON Schema) instead of \
+           several questions; the answer's `values` match it. Secrets never go in a form.\n\
          - Your plain reply text is shown to the user when they are the one talking to you. To show them a \
            file (a screenshot, a picture, a video, a PDF, any type), save it in your home and call \
            `attach_files([path])`: it appears with your reply. `send_message(to, text, files=[...])` gives files \

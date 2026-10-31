@@ -11,6 +11,11 @@ group?: string,
  */
 outcome?: SecretsOutcome, 
 /**
+ * Questions with a form: the submitted values, matching the form's schema. File fields hold
+ * where the files are in the agent's container.
+ */
+values?: Record<string, unknown>, 
+/**
  * Guidance for the agent.
  */
 note?: string, };

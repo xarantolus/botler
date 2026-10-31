@@ -13,6 +13,7 @@ pub mod control;
 pub mod embedded;
 pub mod environment;
 pub mod failures;
+pub mod forms;
 pub mod grants;
 pub mod handover;
 pub mod health;
