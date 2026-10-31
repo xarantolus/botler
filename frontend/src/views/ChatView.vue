@@ -211,6 +211,7 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
           class="min-w-56"
           @update:model-value="(f: string) => showSession(f)"
         />
+        <UButton size="xs" color="neutral" variant="ghost" icon="i-lucide-git-branch" label="Tree" @click="shell.sessionTree = true" />
         <template v-if="earlier">
           <span>An earlier session, before a handover: read only.</span>
           <UButton size="xs" variant="link" label="Back to the current session" class="p-0" @click="showSession(session.instance.session_file)" />

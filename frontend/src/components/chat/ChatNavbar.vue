@@ -14,7 +14,9 @@ import { inFlight, stageLabel } from "../../lib/proposals";
 import { frontDoorName, refreshInstances, refreshSession, state } from "../../store";
 import { handoverChat, stopChat } from "../../chatActions";
 import PhaseBadge from "../common/PhaseBadge.vue";
+import { shell } from "../../shell";
 import ConnectionsSlideover from "./ConnectionsSlideover.vue";
+import SessionTreeSlideover from "./SessionTreeSlideover.vue";
 
 const props = defineProps<{
   name: string;
@@ -179,6 +181,10 @@ const menu = computed((): DropdownMenuItem[][] => {
         <UButton icon="i-lucide-waypoints" color="neutral" variant="ghost" aria-label="Connections" @click="connections = true" />
       </UTooltip>
       <ConnectionsSlideover v-model:open="connections" :name="name" />
+      <UTooltip text="Session tree: branches, continue from an earlier point, fork">
+        <UButton icon="i-lucide-git-branch" color="neutral" variant="ghost" aria-label="Session tree" @click="shell.sessionTree = true" />
+      </UTooltip>
+      <SessionTreeSlideover v-model:open="shell.sessionTree" :name="name" />
       <UDropdownMenu :items="menu" :content="{ align: 'end' }">
         <UButton icon="i-lucide-ellipsis-vertical" color="neutral" variant="ghost" aria-label="Chat actions" />
       </UDropdownMenu>

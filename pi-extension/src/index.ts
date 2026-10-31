@@ -134,6 +134,8 @@ function toText(result: unknown): string {
 const PREFIX = "botler:delivery ";
 const SEEN = "botler.delivered";
 const NOTE = "botler.note";
+/** Written after navigating the session tree: the leaf is the last entry, so this pins it. */
+const NAV = "botler.nav";
 
 // Mirrors botler_core::event::payload::DeliveryEnvelope.
 interface Envelope {
@@ -167,6 +169,23 @@ export function header(env: Envelope): string {
 export default function botler(pi: ExtensionAPI) {
   let seen = new Set<string>();
   const registered = new Set<string>();
+
+  // Session tree commands, sent by the hub only while pi is idle (navigating throws mid-turn).
+  pi.registerCommand("botler-goto", {
+    description: "botler: continue this conversation from an earlier entry",
+    handler: async (args, ctx) => {
+      const target = args.trim();
+      const { cancelled } = await ctx.navigateTree(target);
+      if (!cancelled) pi.appendEntry(NAV, { target });
+    },
+  });
+  pi.registerCommand("botler-label", {
+    description: "botler: label an entry of this conversation (no label: remove it)",
+    handler: async (args) => {
+      const [target = "", ...words] = args.trim().split(/\s+/);
+      pi.setLabel(target, words.join(" ") || undefined);
+    },
+  });
 
   pi.on("session_start", async (_event, ctx) => {
     for (const op of loadJson<OpDecl>(TURN_TOOLS_FILE)) {
