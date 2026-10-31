@@ -74,7 +74,13 @@ pub fn check(defs: &Definitions, def: &AgentDef, r: &Resource, mode: Option<Moun
 pub async fn environment(hub: &Hub, instance: &str) -> Result<(Environment, Vec<String>), HubError> {
     let grants: Vec<Grant> = hub.store.live_grants(instance).await?.into_iter().filter(|g| g.stale.is_none()).collect();
     let held: Vec<(Resource, Option<MountMode>)> = grants.iter().map(|g| (g.resource(), g.mode)).collect();
-    let env = botler_core::defs::environment_of(held.iter().map(|(r, m)| (r, *m)));
+    let mut env = botler_core::defs::environment_of(held.iter().map(|(r, m)| (r, *m)));
+    // A granted service that serves MCP gives the chat its tools.
+    let applied = hub.applied().await;
+    let (mcp, plain) =
+        env.services.into_iter().partition(|s| applied.defs.jobs.get(s).is_some_and(|j| j.spec.serves_mcp));
+    env.services = plain;
+    env.mcp.extend::<Vec<String>>(mcp);
     Ok((env, grants.into_iter().map(|g| g.id).collect()))
 }
 

@@ -7,6 +7,8 @@ requires-python = ">=3.11"
 [tool.uv.workspace]
 # Every job, tool package and connector is a workspace member.
 members = ["packages/*", "tools/*", "connectors/*", "jobs/*"]
+# Jobs with no Python of their own.
+exclude = ["jobs/browser"]
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.8", "pyright>=1.1.390"]

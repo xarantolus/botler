@@ -129,7 +129,7 @@ pub fn environment_of<'a>(held: impl IntoIterator<Item = (&'a Resource, Option<M
     for (r, mode) in held {
         match r.kind {
             ResourceKind::Secret => env.secrets.push(r.name.clone()),
-            // A grant reaches the service; it is no MCP server unless the definition says so.
+            // A grant reaches the service; the hub adds its MCP tools when it `serves_mcp`.
             ResourceKind::Service => env.services.push(r.name.clone()),
             ResourceKind::Mount => {
                 let m = env.mounts.entry(r.name.clone()).or_default();

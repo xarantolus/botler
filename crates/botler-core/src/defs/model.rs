@@ -478,6 +478,10 @@ pub struct Job {
     /// Declared event types this job or service emits (listed as their producer).
     #[serde(default)]
     pub emits: Vec<String>,
+    /// Services: `http://<name>:<port>/mcp` is an MCP server, so a chat granted the service
+    /// (`request_access("service:<name>")`) gets its tools, not only the network path to it.
+    #[serde(default)]
+    pub serves_mcp: bool,
     /// Actions: JSON Schema of the arguments object `invoke_action` must pass.
     #[serde(default)]
     pub args: Option<serde_json::Value>,

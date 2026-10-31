@@ -5,4 +5,7 @@
 version = 1
 
 [resources]
+# The agents' browser (jobs/browser): every chat gets its own isolated context, and it holds no
+# secrets, so using it needs no approval.
+"service:browser" = "auto"
 # "secret:github-ssh" = "auto"

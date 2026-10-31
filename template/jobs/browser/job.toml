@@ -1,0 +1,15 @@
+version = 1
+description = "The agents' browser: Playwright MCP driving a real desktop Chromium (not headless) with ads and trackers blocked. Each chat's MCP connection gets its own isolated browser context (cookies, storage, tabs), closed after 10 idle minutes. A chat gets its tools with request_access(\"service:browser\"). Skill `browser`."
+lifetime = "service"
+# browser-session starts Xvfb and Chromium (images/browser), then execs Playwright MCP, which
+# attaches over DevTools. --isolated: a fresh in-memory context per MCP session, so chats never
+# see each other's cookies or tabs. --allowed-hosts: only callers addressing the service by name;
+# a page in this Chromium calling localhost is refused.
+command = [
+  "browser-session", "playwright-mcp",
+  "--cdp-endpoint", "http://127.0.0.1:9223", "--isolated", "--idle-timeout", "600000",
+  "--port", "8000", "--host", "0.0.0.0", "--allowed-hosts", "browser:8000",
+  "--output-dir", "/tmp/playwright-mcp",
+]
+port = 8000
+serves_mcp = true

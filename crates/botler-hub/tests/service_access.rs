@@ -51,3 +51,26 @@ async fn a_service_grant_joins_the_network_without_an_mcp_entry() {
             .any(|m| matches!(m, botler_runtime::Mount::Bind { dst, .. } if dst == "/botler/agent-dir/services.json"))
     );
 }
+
+#[tokio::test]
+async fn a_grant_to_a_service_that_serves_mcp_gives_its_tools() {
+    let e = common::env().await;
+    e.hub.store.set_secret(&e.hub.secret_key, "OPENROUTER_API_KEY", "sk").await.unwrap();
+    let files = common::job("web", "lifetime = \"service\"\ncommand = [\"serve\"]\nport = 8000\nserves_mcp = true\n");
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    e.commit(&refs).await;
+    services::reconcile(&e.hub).await.unwrap();
+
+    let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    grants::give(&e.hub, &chat, &Resource::new(ResourceKind::Service, "web"), None, "user", false).await.unwrap();
+    let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+        .to(chat.clone())
+        .payload(json!({"text": "browse"}));
+    e.hub.emit(ev).await.unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+
+    let mcp: Value =
+        serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir(&chat).join("mcp.json")).unwrap()).unwrap();
+    assert_eq!(mcp["mcpServers"]["web"]["url"], "http://web:8000/mcp");
+}

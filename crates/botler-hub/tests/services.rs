@@ -152,7 +152,7 @@ async fn only_changes_to_its_inputs_restart_it_and_removal_stops_it() {
     e.commit(&[("jobs/app/job.toml", "command = [\"true\"]\n")]).await; // now a oneshot
     services::reconcile(&e.hub).await.unwrap();
     assert_eq!(e.hub.store.run(&second.id).await.unwrap().status, RunStatus::Cancelled);
-    assert!(e.fake.containers().is_empty());
+    assert!(!e.fake.containers().contains_key(&services::container_name(&e.hub, "app")));
     assert!(e.hub.store.open_incidents().await.unwrap().is_empty());
 }
 
@@ -209,13 +209,14 @@ async fn hubs_sharing_a_runtime_leave_each_other_alone() {
     }
     let mine =
         |e: &common::Env| fake.containers().keys().filter(|n| n.starts_with(&format!("botler-{}-", e.hub.id))).count();
-    assert_eq!((mine(&a), mine(&b)), (2, 2));
+    // Each: its front door, `app` and the template's `browser`.
+    assert_eq!((mine(&a), mine(&b)), (3, 3));
     agents::stop_all(&b.hub).await;
     // B restarts (removing its leftover agents), pauses and drops its service.
     agents::reconcile_on_boot(&b.hub).await.unwrap();
     control::pause(&b.hub).await.unwrap();
     services::reconcile(&b.hub).await.unwrap();
-    assert_eq!((mine(&a), mine(&b)), (2, 0));
+    assert_eq!((mine(&a), mine(&b)), (3, 0));
     assert_eq!(current(&a).await.status, RunStatus::Running);
     // An exit event of B's service never reaches A's runs, and A's own reconcile keeps it running.
     services::reconcile(&a.hub).await.unwrap();

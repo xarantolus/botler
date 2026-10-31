@@ -8,20 +8,42 @@ head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 8 > "$VNC_PASSWO
 # A previous container's lock would make Chromium refuse the profile.
 rm -f /data/chrome-profile/SingletonLock /data/chrome-profile/SingletonSocket /data/chrome-profile/SingletonCookie
 
-Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
 i=0
 while [ ! -e /tmp/.X11-unix/X99 ]; do
   i=$((i + 1)); [ "$i" -le 100 ] || { echo "Xvfb did not start:" >&2; cat /tmp/xvfb.log >&2; exit 1; }
   sleep 0.1
 done
 
+# Ad and tracker blocking for every browser context (also the isolated ones extensions never
+# reach): the image's pinned blocklist goes into /etc/hosts, which Chromium resolves first.
+# BROWSER_ADBLOCK=0 turns it off.
+if [ "${BROWSER_ADBLOCK:-1}" != 0 ] && ! grep -q '^# botler blocklist' /etc/hosts; then
+  { echo '# botler blocklist'; cat /opt/blocklist/hosts; } >> /etc/hosts
+fi
+
+# Chromium, built as positional parameters so the user agent (with spaces) stays one argument and
+# the bridge command in the script's "$@" is untouched.
 # The page never sees the hub's token: Chromium gets an environment without it.
 # --no-sandbox: Chromium's sandbox needs user namespaces the container does not have; the container
 # is the boundary. No --remote-allow-origins: DevTools then refuses web pages (they always send an
 # Origin), so page JavaScript cannot drive the browser.
-env -u BOTLER_TOKEN -u BOTLER_URL chromium --no-sandbox --user-data-dir=/data/chrome-profile \
-  --remote-debugging-port=9223 --no-first-run --no-default-browser-check --disable-dev-shm-usage \
-  --window-position=0,0 --window-size=1280,800 about:blank >/tmp/chromium.log 2>&1 &
+# Looking like a normal desktop Chrome: a real X display (never --headless), no automation flag,
+# a Chrome user agent matching this Chromium's version, and WebGL through SwiftShader (the
+# container has no GPU, and a browser without WebGL stands out).
+start_browser() {
+  set -- --no-sandbox --user-data-dir=/data/chrome-profile \
+    --remote-debugging-port=9223 --no-first-run --no-default-browser-check --disable-dev-shm-usage \
+    --disable-blink-features=AutomationControlled --password-store=basic \
+    --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader \
+    --window-position=0,0 --window-size=1920,1080
+  version="$(chromium --version 2>/dev/null | awk '{print $2}')"
+  if [ -n "$version" ]; then
+    set -- "$@" "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} Safari/537.36"
+  fi
+  env -u BOTLER_TOKEN -u BOTLER_URL chromium "$@" about:blank >/tmp/chromium.log 2>&1 &
+}
+start_browser
 x11vnc -display :99 -forever -shared -localhost -rfbport 5900 -passwdfile "read:$VNC_PASSWORD_FILE" \
   -quiet >/tmp/x11vnc.log 2>&1 &
 /opt/websockify/bin/websockify --web /opt/novnc 6080 localhost:5900 >/tmp/novnc.log 2>&1 &

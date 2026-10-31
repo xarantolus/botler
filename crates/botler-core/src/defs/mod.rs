@@ -862,6 +862,9 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
         if j.spec.lifetime != Lifetime::Service && (j.spec.env.port.is_some() || !j.spec.env.publish.is_empty()) {
             l.err(&path, "`port` and `publish` only apply to services (lifetime = \"service\")");
         }
+        if j.spec.serves_mcp && (j.spec.lifetime != Lifetime::Service || j.spec.env.port.is_none()) {
+            l.err(&path, "`serves_mcp` needs a service (lifetime = \"service\") with a `port`");
+        }
         for p in &j.spec.env.publish {
             if p.host_port < 1024 {
                 l.err(
