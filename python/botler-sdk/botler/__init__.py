@@ -18,11 +18,13 @@ from ._client import BotlerError
 
 if TYPE_CHECKING:
     from .events import Event
+    from .settings import Settings
     from .tools import tool
 
 __all__ = [
     "BotlerError",
     "Event",
+    "Settings",
     "action_args",
     "emit",
     "health",
@@ -117,4 +119,8 @@ def __getattr__(name: str) -> Any:
         from .tools import tool
 
         return tool
+    if name == "Settings":
+        from .settings import Settings
+
+        return Settings
     raise AttributeError(f"module 'botler' has no attribute {name!r}")

@@ -57,6 +57,35 @@ Add a `Dockerfile`, a `pyproject.toml`, `src/` and `tests/`, as in `jobs/example
 - Give the loop's step injectable `state`, `emit` and `healthy` parameters so tests run without a
   hub (see `jobs/example-watcher/tests/`).
 
+## 3b. Settings the user can change
+
+What the user may want to adjust (folders, intervals, thresholds, where to notify) is a
+**settings model**, not a constant. Then the user edits it under Settings → Jobs & services
+without a proposal.
+
+```python
+# jobs/mail-watch/src/mail_watch/settings.py  (this path and the class name are how it is found)
+from pydantic import Field
+
+import botler
+
+
+class Settings(botler.Settings):
+    """Which folders to watch and how often."""
+
+    folders: list[str] = Field(["INBOX"], description="IMAP folders to watch")
+    every_minutes: int = Field(5, ge=1, description="How often to look")
+```
+
+- Read the values with `Settings.load()` at start. A change restarts a service.
+- Give every field a default, so the service runs before anyone sets a value.
+- Use `Literal[...]` for choices (they render as a dropdown) and `list[Literal[...]]` for
+  multi-select.
+- `python -m botler.settings manifest` regenerates `settings.manifest.json`; the gate checks it.
+- The values live in `jobs/<name>/settings.toml`, which the page commits as the user. Agents may
+  propose changes to that file too.
+- Never put secrets in settings: those belong in a secret group.
+
 ## 4. The trigger (`triggers/<name>.toml`)
 
 ```toml

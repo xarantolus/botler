@@ -71,10 +71,12 @@ pub enum Merge {
 fn is_definition_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
-        ["botler.toml" | "secrets.toml" | "tools.manifest.json" | "events.manifest.json"] => true,
+        [
+            "botler.toml" | "secrets.toml" | "tools.manifest.json" | "events.manifest.json" | "settings.manifest.json",
+        ] => true,
         ["policies", f] => f.ends_with(".toml") || f.ends_with(".md"),
         ["agents", _, "agent.toml" | "AGENTS.md"] => true,
-        ["jobs", _, "job.toml" | "Dockerfile"] => true,
+        ["jobs", _, "job.toml" | "Dockerfile" | "settings.toml"] => true,
         ["triggers" | "events" | "mounts", f] => f.ends_with(".toml"),
         ["images", _, "Dockerfile"] => true,
         _ => false,

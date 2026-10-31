@@ -2,6 +2,7 @@
 import type { AgentSettings } from "./AgentSettings";
 import type { FieldError } from "./FieldError";
 import type { ModelsEdit } from "./ModelsEdit";
+import type { RunnableSettings } from "./RunnableSettings";
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
@@ -35,4 +36,8 @@ services: Array<string>,
 /**
  * Problems with the current settings, e.g. model ids OpenRouter does not list.
  */
-warnings: Array<FieldError>, };
+warnings: Array<FieldError>, 
+/**
+ * Jobs and services with a `Settings` model.
+ */
+runnables: Array<RunnableSettings>, };

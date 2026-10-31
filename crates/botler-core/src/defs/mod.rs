@@ -61,6 +61,33 @@ pub struct AgentDef {
 pub struct JobDef {
     pub name: String,
     pub spec: Job,
+    /// The user-editable settings, when the job declares a `Settings` model.
+    pub settings: Option<JobSettings>,
+}
+
+/// A runnable's settings: the schema from its pydantic `Settings` model (`settings.manifest.json`)
+/// and the values in `jobs/<name>/settings.toml`. The runnable reads them from
+/// `/botler/settings.json`, with the model's defaults for what the file leaves out.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct JobSettings {
+    pub description: String,
+    pub schema: serde_json::Value,
+    /// The values set in `settings.toml` (an object; `{}` without the file).
+    pub values: serde_json::Value,
+}
+
+/// One entry of `settings.manifest.json`.
+#[derive(Clone, Debug, serde::Deserialize)]
+struct SettingsDecl {
+    job: String,
+    #[serde(default)]
+    description: String,
+    schema: serde_json::Value,
+}
+
+/// Where a runnable's settings values live.
+pub fn settings_path(job: &str) -> String {
+    format!("jobs/{job}/settings.toml")
 }
 
 /// Everything the hub applies from one commit of the monorepo.
@@ -549,7 +576,7 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
         for t in &spec.triggers {
             raw_triggers.push((path.clone(), t.clone(), Some(Target::Run(name.clone()))));
         }
-        defs.jobs.insert(name.clone(), JobDef { name, spec });
+        defs.jobs.insert(name.clone(), JobDef { name, spec, settings: None });
     }
 
     for entry in l.list("triggers") {
@@ -589,6 +616,51 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
         {
             l.err("events", format!("schema of {} is invalid: {err}", e.kind));
         }
+    }
+
+    // Generated from pydantic `Settings` models by the SDK (`python -m botler.settings manifest`).
+    let decls = match tree.read("settings.manifest.json") {
+        Ok(Some(bytes)) => serde_json::from_slice::<Vec<SettingsDecl>>(&bytes).unwrap_or_else(|e| {
+            l.err("settings.manifest.json", e.to_string());
+            vec![]
+        }),
+        Ok(None) => vec![],
+        Err(e) => {
+            l.err("settings.manifest.json", format!("could not read: {e}"));
+            vec![]
+        }
+    };
+    for d in decls {
+        let Some(job) = defs.jobs.get_mut(&d.job) else {
+            l.err("settings.manifest.json", format!("settings for job {} which does not exist", d.job));
+            continue;
+        };
+        if let Err(e) = crate::event_check::compile(&d.schema) {
+            l.err("settings.manifest.json", format!("settings schema of {} is invalid: {e}", d.job));
+            continue;
+        }
+        job.settings =
+            Some(JobSettings { description: d.description, schema: d.schema, values: serde_json::json!({}) });
+    }
+    let names: Vec<String> = defs.jobs.keys().cloned().collect();
+    for name in names {
+        let path = settings_path(&name);
+        let Some(values) = l.toml::<toml::Table>(&path) else { continue };
+        let values = serde_json::to_value(values).unwrap_or_default();
+        let Some(settings) = defs.jobs.get_mut(&name).and_then(|j| j.settings.as_mut()) else {
+            l.err(&path, "settings.toml without a `Settings` model in the job (see `python -m botler.settings`)");
+            continue;
+        };
+        if let Ok(v) = crate::event_check::compile(&settings.schema) {
+            for e in v.iter_errors(&values).take(10) {
+                let at = e.instance_path().to_string();
+                l.err(
+                    &path,
+                    if at.is_empty() { e.to_string() } else { format!("{}: {e}", at.trim_start_matches('/')) },
+                );
+            }
+        }
+        settings.values = values;
     }
 
     match tree.read("tools.manifest.json") {

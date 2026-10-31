@@ -16,6 +16,7 @@ pub const SDK: &[(&str, &str)] = sdk![
     "botler/_discover.py",
     "botler/_ops.py",
     "botler/events.py",
+    "botler/settings.py",
     "botler/tools.py",
     "botler/py.typed",
 ];

@@ -38,6 +38,21 @@ pub struct Settings {
     pub services: Vec<String>,
     /// Problems with the current settings, e.g. model ids OpenRouter does not list.
     pub warnings: Vec<FieldError>,
+    /// Jobs and services with a `Settings` model.
+    pub runnables: Vec<RunnableSettings>,
+}
+
+/// A job's or service's settings form: its model's schema and the values in its settings.toml.
+#[derive(Debug, Serialize, TS)]
+pub struct RunnableSettings {
+    pub job: String,
+    pub description: String,
+    /// `oneshot`, `service` or `action`.
+    pub lifetime: String,
+    pub enabled: bool,
+    pub schema: Value,
+    /// Only what settings.toml sets; the schema's defaults apply to the rest.
+    pub values: Value,
 }
 
 /// `[models]`: the default and the models we typically use.
@@ -83,6 +98,10 @@ pub struct SettingsEdit {
     #[serde(default)]
     #[ts(optional)]
     pub deployment: Option<DeploymentEdit>,
+    /// Per job: all of its settings values (those equal to the default are not written).
+    #[serde(default)]
+    #[ts(optional)]
+    pub runnables: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -132,9 +151,12 @@ fn by_file(diags: &[Diagnostic]) -> Vec<FieldError> {
     diags
         .iter()
         .map(|d| {
-            let field = match d.path.strip_prefix("agents/").and_then(|p| p.strip_suffix("/agent.toml")) {
-                Some(agent) => format!("agents.{agent}"),
-                None => d.path.clone(),
+            let agent = d.path.strip_prefix("agents/").and_then(|p| p.strip_suffix("/agent.toml"));
+            let job = d.path.strip_prefix("jobs/").and_then(|p| p.strip_suffix("/settings.toml"));
+            let field = match (agent, job) {
+                (Some(agent), _) => format!("agents.{agent}"),
+                (_, Some(job)) => format!("runnables.{job}"),
+                _ => d.path.clone(),
             };
             FieldError { field, message: d.message.clone() }
         })
@@ -167,7 +189,37 @@ pub async fn get(hub: &Hub) -> Result<Settings> {
         tools: defs.tools.keys().cloned().collect(),
         services: defs.services().filter(|j| j.spec.env.port.is_some()).map(|j| j.name.clone()).collect(),
         warnings: by_file(&crate::model_catalog::warnings(hub, defs).await),
+        runnables: defs
+            .jobs
+            .values()
+            .filter_map(|j| {
+                let s = j.settings.as_ref()?;
+                Some(RunnableSettings {
+                    job: j.name.clone(),
+                    description: if s.description.is_empty() {
+                        j.spec.description.clone()
+                    } else {
+                        s.description.clone()
+                    },
+                    lifetime: format!("{:?}", j.spec.lifetime).to_lowercase(),
+                    enabled: j.spec.enabled,
+                    schema: s.schema.clone(),
+                    values: s.values.clone(),
+                })
+            })
+            .collect(),
     })
+}
+
+/// `values` as settings.toml should hold them: without the fields equal to their default.
+fn non_default(schema: &Value, values: &Value) -> Value {
+    let props = schema.get("properties").and_then(Value::as_object);
+    let kept = values
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(k, v)| !v.is_null() && props.and_then(|p| p.get(*k)).and_then(|f| f.get("default")) != Some(*v));
+    Value::Object(kept.map(|(k, v)| (k.clone(), v.clone())).collect())
 }
 
 /// Apply the user's edit as a commit on main. Field problems come back in `errors`, unsaved.
@@ -226,6 +278,23 @@ pub async fn save(hub: &Hub, edit: &SettingsEdit) -> Result<SettingsSaved> {
         }
         None => None,
     };
+    let mut runnables = Vec::new();
+    for (job, values) in edit.runnables.iter().flatten() {
+        let Some(s) = base.defs.jobs.get(job).and_then(|j| j.settings.as_ref()) else {
+            errors.push(FieldError { field: format!("runnables.{job}"), message: "no such job with settings".into() });
+            continue;
+        };
+        let values = non_default(&s.schema, values);
+        match botler_core::event_check::compile(&s.schema) {
+            Ok(v) => errors.extend(v.iter_errors(&values).take(10).map(|e| {
+                let at = e.instance_path().to_string().trim_start_matches('/').replace('/', ".");
+                let field = if at.is_empty() { format!("runnables.{job}") } else { format!("runnables.{job}.{at}") };
+                FieldError { field, message: e.to_string() }
+            })),
+            Err(e) => errors.push(FieldError { field: format!("runnables.{job}"), message: e }),
+        }
+        runnables.push((job.clone(), s.values.clone(), values));
+    }
     if !errors.is_empty() {
         return Ok(SettingsSaved { saved: false, commit: hub.repo.main().await?, errors, warnings: vec![] });
     }
@@ -269,6 +338,22 @@ pub async fn save(hub: &Hub, edit: &SettingsEdit) -> Result<SettingsSaved> {
             let text = hub.repo.read_file(&main, &path).await?.unwrap_or_default();
             let mut doc = parse_doc(&path, &text)?;
             apply_json(doc.as_table_mut(), &old, &to_json(a)?, &format!("agents/{name}: "), &mut changed);
+            let new = doc.to_string();
+            if new != text {
+                files.push((path, new));
+            }
+        }
+        for (job, old, new) in &runnables {
+            let path = botler_core::defs::settings_path(job);
+            let text = hub.repo.read_file(&main, &path).await?.unwrap_or_default();
+            let mut doc = parse_doc(&path, &text)?;
+            apply_json(doc.as_table_mut(), old, new, &format!("{job}: "), &mut changed);
+            // An emptied list is a value here (the default may not be empty), not a removal.
+            for (k, v) in new.as_object().into_iter().flatten() {
+                if v.as_array().is_some_and(Vec::is_empty) {
+                    set(doc.as_table_mut(), k, v);
+                }
+            }
             let new = doc.to_string();
             if new != text {
                 files.push((path, new));

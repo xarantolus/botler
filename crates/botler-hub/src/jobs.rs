@@ -1,7 +1,7 @@
 //! Job runs: oneshot containers started by triggers, timers, agents or replays, and the shared
 //! launch and exit handling that services (`services.rs`) use too.
 
-use botler_core::defs::{Environment, Job, Lifetime, Overlap};
+use botler_core::defs::{Environment, JobDef, Lifetime, Overlap};
 use botler_core::payloads::{BuiltinPayload, RunnableFinishedPayload};
 use botler_core::{Event, Source};
 use botler_runtime::Mount;
@@ -103,6 +103,9 @@ pub async fn launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<()> {
     }
 }
 
+/// Where a runnable finds its settings.
+pub const SETTINGS_FILE: &str = "/botler/settings.json";
+
 /// Start the container for `run` of any kind: image, secrets, SDK, token and event file, plus a
 /// service's network, stable name and published ports.
 pub async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<()> {
@@ -113,7 +116,7 @@ pub async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<(
         .get(&run.runnable)
         .ok_or_else(|| HubError::Undefined { kind: "job", name: run.runnable.clone() })?;
     let timeout = def.spec.timeout.unwrap_or(applied.defs.instance.defaults.job_timeout).as_chrono();
-    launch_job(hub, run, &def.spec, &def.spec.env, timeout, event).await
+    launch_job(hub, run, def, &def.spec.env, timeout, event).await
 }
 
 /// Start the container for `run` of `job` (from any commit) in `env`. Its token lives `timeout`
@@ -121,7 +124,7 @@ pub async fn try_launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<(
 pub(crate) async fn launch_job(
     hub: &Hub,
     run: &Run,
-    job: &Job,
+    def: &JobDef,
     env: &Environment,
     timeout: Duration,
     event: Option<&Event>,
@@ -135,7 +138,7 @@ pub(crate) async fn launch_job(
     // A service's token lives as long as its run: `Caller::resolve` refuses it once the run ends.
     let ttl = if service { Duration::days(3650) } else { timeout + Duration::minutes(5) };
     let what = Runnable::Run { run, ttl };
-    let mut spec = environment::container_spec(hub, env, what, image, job.command.clone(), &[]).await?;
+    let mut spec = environment::container_spec(hub, env, what, image, def.spec.command.clone(), &[]).await?;
     let run_dir = hub.paths.root.join("runs").join(&run.id);
     tokio::fs::create_dir_all(&run_dir).await?;
     let event_file = run_dir.join("event.json");
@@ -144,6 +147,13 @@ pub(crate) async fn launch_job(
     tokio::fs::write(&event_file, event_json).await?;
     spec.mounts.push(Mount::Bind { src: event_file, dst: "/botler/event.json".into(), read_only: true });
     spec.env.insert("BOTLER_EVENT_FILE".into(), "/botler/event.json".into());
+    if let Some(settings) = &def.settings {
+        // `botler.settings`: the values from settings.toml; the model fills in its defaults.
+        let file = run_dir.join("settings.json");
+        let json = serde_json::to_vec_pretty(&settings.values).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+        tokio::fs::write(&file, json).await?;
+        spec.mounts.push(Mount::Bind { src: file, dst: SETTINGS_FILE.into(), read_only: true });
+    }
     if run.kind == RunKind::Action {
         // Exactly the arguments the user approved.
         let p = crate::actions::proposal_of(hub, run).await?;

@@ -1,0 +1,21 @@
+[
+  {
+    "description": "How often the example watcher ticks.",
+    "job": "example-watcher",
+    "schema": {
+      "additionalProperties": false,
+      "description": "How often the example watcher ticks.",
+      "properties": {
+        "interval_seconds": {
+          "default": 30.0,
+          "description": "Seconds between ticks",
+          "minimum": 5,
+          "title": "Interval Seconds",
+          "type": "number"
+        }
+      },
+      "title": "Settings",
+      "type": "object"
+    }
+  }
+]

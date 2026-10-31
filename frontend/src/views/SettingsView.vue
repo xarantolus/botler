@@ -26,6 +26,7 @@ const tabs: TabsItem[] = [
   { label: "Models", value: "models", icon: "i-lucide-cpu" },
   { label: "Agents", value: "agents", icon: "i-lucide-bot" },
   { label: "Deployment", value: "deployment", icon: "i-lucide-sliders-horizontal" },
+  { label: "Jobs & services", value: "runnables", icon: "i-lucide-cog" },
   { label: "Channels", value: "channels", icon: "i-lucide-radio-tower" },
 ];
 
@@ -50,7 +51,7 @@ const edit = computed(() => (loaded.value && draft.value ? changes(loaded.value,
 const models = computed(() => catalog.value?.models ?? []);
 const typical = computed(() => draft.value?.models.models ?? []);
 const users = computed(() => usedBy(loaded.value?.agents ?? []));
-const general = computed(() => generalErrors(errors.value, ["models", "agents", "defaults", "push"]));
+const general = computed(() => generalErrors(errors.value, ["models", "agents", "defaults", "push", "runnables"]));
 const defaults = computed(() => draft.value?.defaults ?? {});
 
 async function save() {
@@ -245,6 +246,33 @@ function setPush(on: boolean) {
       </template>
 
       <ChannelsPanel v-else-if="tab === 'channels'" />
+
+      <template v-else-if="tab === 'runnables'">
+        <p v-if="!loaded.runnables.length" class="text-sm text-muted">
+          No job or service has settings yet. Agents add them with a <code class="font-mono">Settings</code> model
+          (<code class="font-mono">botler.Settings</code>).
+        </p>
+        <UCard v-for="r in loaded.runnables" :key="r.job">
+          <template #header>
+            <div class="flex flex-wrap items-center gap-2">
+              <p class="font-mono font-semibold text-highlighted">{{ r.job }}</p>
+              <UBadge color="neutral" variant="subtle" size="sm" :label="r.lifetime" />
+              <UBadge v-if="!r.enabled" color="warning" variant="subtle" size="sm" label="disabled" />
+            </div>
+            <p v-if="r.description" class="mt-1 text-sm text-muted">{{ r.description }}</p>
+          </template>
+          <SchemaFields
+            v-model="draft.runnables[r.job]!"
+            :root="r.schema as Schema"
+            :node="r.schema as Schema"
+            :path="`runnables.${r.job}`"
+            :errors="errors"
+          />
+          <p class="mt-3 text-xs text-dimmed">
+            Saved in <code class="font-mono">jobs/{{ r.job }}/settings.toml</code>{{ r.lifetime === "service" ? "; the service restarts with them" : "" }}.
+          </p>
+        </UCard>
+      </template>
 
       <template v-else>
         <UCard>

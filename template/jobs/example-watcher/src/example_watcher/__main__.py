@@ -11,7 +11,8 @@ from typing import Protocol
 import botler
 from shared.events import ExampleTick
 
-INTERVAL_SECONDS = 30.0
+from .settings import Settings
+
 CURSOR = "count"
 
 
@@ -29,10 +30,12 @@ def step(state: State, emit: Callable[[ExampleTick], object], healthy: Callable[
 
 
 def main() -> None:
+    # The user changes these on the Settings page; a change restarts the service.
+    settings = Settings.load()
     while True:
         count = step(botler.state, botler.emit, botler.health.ok)
         botler.log("ticked", count=count)
-        time.sleep(INTERVAL_SECONDS)
+        time.sleep(settings.interval_seconds)
 
 
 if __name__ == "__main__":

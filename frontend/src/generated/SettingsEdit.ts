@@ -2,6 +2,7 @@
 import type { AgentEdit } from "./AgentEdit";
 import type { DeploymentEdit } from "./DeploymentEdit";
 import type { ModelsEdit } from "./ModelsEdit";
+import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
  * A save: only the sections and agents the user changed.
@@ -10,4 +11,8 @@ export type SettingsEdit = {
 /**
  * The commit the page was loaded at (`Settings::commit`).
  */
-commit: string, models?: ModelsEdit, agents?: { [key in string]: AgentEdit }, deployment?: DeploymentEdit, };
+commit: string, models?: ModelsEdit, agents?: { [key in string]: AgentEdit }, deployment?: DeploymentEdit, 
+/**
+ * Per job: all of its settings values (those equal to the default are not written).
+ */
+runnables?: { [key in string]: JsonValue }, };

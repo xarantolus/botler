@@ -347,3 +347,42 @@ def test_render_hints_match_the_hub() -> None:
         hub[props["kind"].get("const") or props["kind"]["enum"][0]] = set(props) - {"kind"}
     models = (Links, Table, Markdown, KeyValue, Image, Json)
     assert {m.model_fields["kind"].default: set(m.model_fields) - {"kind"} for m in models} == hub
+
+
+def test_settings_manifest_and_load(tmp_path: Path) -> None:
+    pkg = tmp_path / "jobs" / "mail-watch" / "src" / "mail_watch_settings_demo"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "settings.py").write_text(
+        textwrap.dedent(
+            '''
+            from pydantic import Field
+
+            import botler
+
+
+            class Settings(botler.Settings):
+                """Which folders to watch."""
+
+                folders: list[str] = ["INBOX"]
+                every_minutes: int = Field(5, ge=1, description="How often to look")
+            '''
+        )
+    )
+    p = run_py("", "-m", "botler.settings", "manifest", "--root", str(tmp_path))
+    assert p.returncode == 0, p.stderr
+    [entry] = json.loads((tmp_path / "settings.manifest.json").read_text())
+    assert (entry["job"], entry["description"]) == ("mail-watch", "Which folders to watch.")
+    assert entry["schema"]["properties"]["every_minutes"]["minimum"] == 1
+    assert entry["schema"]["additionalProperties"] is False
+
+    values = tmp_path / "settings.json"
+    values.write_text(json.dumps({"every_minutes": 15}))
+    code = (
+        f"import sys; sys.path.insert(0, {str(pkg.parent)!r}); from mail_watch_settings_demo.settings import Settings; "
+        "s = Settings.load(); print(s.every_minutes, s.folders)"
+    )
+    p = run_py(code, BOTLER_SETTINGS_FILE=str(values))
+    assert p.stdout.split() == ["15", "['INBOX']"], p.stderr
+    p = run_py(code, BOTLER_SETTINGS_FILE=str(tmp_path / "missing.json"))
+    assert p.stdout.split() == ["5", "['INBOX']"], "defaults without a file"

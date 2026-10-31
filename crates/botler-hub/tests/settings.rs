@@ -133,3 +133,51 @@ async fn edits_are_committed_as_the_user_and_keep_the_files_layout() {
     let r = api(&e, "PUT", Some(same)).await;
     assert_eq!((&r["saved"], &r["commit"]), (&json!(true), &s["commit"]), "{r}");
 }
+
+/// A job's `Settings` model is a form on the page; saved values are committed in its
+/// settings.toml (defaults left out) and reach its runs as `/botler/settings.json`.
+#[tokio::test]
+async fn runnable_settings_are_edited_committed_and_delivered() {
+    let e = common::env().await;
+    let schema = json!({
+        "type": "object", "additionalProperties": false,
+        "properties": {
+            "folders": {"type": "array", "items": {"type": "string"}, "default": ["INBOX"]},
+            "every_minutes": {"type": "integer", "minimum": 1, "default": 5}
+        }
+    });
+    let manifest = json!([{"job": "watch", "description": "What to watch.", "schema": schema}]).to_string();
+    let mut files = common::job("watch", "lifetime = \"service\"\ncommand = [\"w\"]\n");
+    files.push(("settings.manifest.json".into(), manifest));
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    e.commit(&refs).await;
+
+    let s = api(&e, "GET", None).await;
+    let r = s["runnables"].as_array().unwrap().iter().find(|r| r["job"] == "watch").unwrap().clone();
+    assert_eq!((r["description"].as_str(), &r["values"]), (Some("What to watch."), &json!({})));
+
+    let save = |values: Value| json!({"commit": s["commit"], "runnables": {"watch": values}});
+    let bad = api(&e, "PUT", Some(save(json!({"every_minutes": 0, "folders": ["INBOX"]})))).await;
+    assert_eq!(bad["saved"], false);
+    assert_eq!(bad["errors"][0]["field"], "runnables.watch.every_minutes", "{bad}");
+    let ok = api(&e, "PUT", Some(save(json!({"every_minutes": 15, "folders": ["INBOX"]})))).await;
+    assert_eq!(ok["saved"], true, "{ok}");
+    assert_eq!(file(&e, "jobs/watch/settings.toml").await.trim(), "every_minutes = 15", "defaults are not written");
+
+    // An unknown key in the file is a load error for that job.
+    let main = e.hub.repo.main().await.unwrap();
+    let typo = botler_hub::hub::load_at(&e.hub.repo, &main).await.unwrap();
+    assert_eq!(typo.defs.jobs["watch"].settings.as_ref().unwrap().values, json!({"every_minutes": 15}));
+    let head = e.push("typo", &[("jobs/watch/settings.toml", "every_minute = 15\n")]).await;
+    let err = botler_hub::hub::load_at(&e.hub.repo, &head).await.unwrap_err().to_string();
+    assert!(err.contains("settings.toml") || err.contains("definitions"), "{err}");
+
+    botler_hub::services::reconcile(&e.hub).await.unwrap();
+    let c = &e.fake.containers()[&botler_hub::services::container_name(&e.hub, "watch")];
+    let mount = c.spec.mounts.iter().find_map(|m| match m {
+        botler_runtime::Mount::Bind { src, dst, .. } if dst == "/botler/settings.json" => Some(src.clone()),
+        _ => None,
+    });
+    let delivered: Value = serde_json::from_slice(&std::fs::read(mount.expect("settings mounted")).unwrap()).unwrap();
+    assert_eq!(delivered, json!({"every_minutes": 15}));
+}

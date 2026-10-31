@@ -94,7 +94,7 @@ pub async fn start(
         .await?;
     hub.store.create_trial(&run.id, instance, branch, minutes, &withheld).await?;
     tracing::info!(run = %run.id, job = %def.name, %branch, minutes, "trial starting");
-    let (hub2, run2, job) = (hub.clone(), run.clone(), def.spec.clone());
+    let (hub2, run2, job) = (hub.clone(), run.clone(), def.clone());
     tokio::spawn(async move {
         let timeout = Duration::minutes(i64::from(minutes));
         if let Err(e) = jobs::launch_job(&hub2, &run2, &job, &env, timeout, event.as_ref()).await {

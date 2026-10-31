@@ -32,6 +32,16 @@ const settings: Settings = {
   tools: [],
   services: [],
   warnings: [],
+  runnables: [
+    {
+      job: "watch",
+      description: "",
+      lifetime: "service",
+      enabled: true,
+      schema: { properties: { every: { type: "integer", default: 5 }, folder: { type: "string" } } },
+      values: { folder: "INBOX" },
+    },
+  ],
 };
 
 describe("changes", () => {
@@ -43,6 +53,13 @@ describe("changes", () => {
     d.push = { ntfy_url: "https://ntfy.sh", topic_secret: "T" };
     expect(changes(settings, d)?.deployment).toEqual({ defaults: { idle_timeout: "15m" }, push: d.push });
     expect(settings.agents[1]!.edit.idle_timeout).toBe("30m"); // the loaded copy is untouched
+  });
+
+  it("fills a job's settings from the defaults and sends all of them when one changes", () => {
+    const d = draftOf(settings);
+    expect(d.runnables.watch).toEqual({ every: 5, folder: "INBOX" });
+    d.runnables.watch!.every = 10;
+    expect(changes(settings, d)?.runnables).toEqual({ watch: { every: 10, folder: "INBOX" } });
   });
 });
 

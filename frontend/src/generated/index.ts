@@ -205,6 +205,7 @@ export type * from "./RunLogs";
 export type * from "./RunStatus";
 export type * from "./RunnableFailedPayload";
 export type * from "./RunnableFinishedPayload";
+export type * from "./RunnableSettings";
 export type * from "./RunsQuery";
 export type * from "./RuntimeInfo";
 export type * from "./Saved";

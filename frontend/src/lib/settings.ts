@@ -10,6 +10,8 @@ export interface Draft {
   defaults: Record<string, unknown>;
   /** null: push is off. */
   push: Record<string, unknown> | null;
+  /** Per job: its settings with the schema's defaults filled in. */
+  runnables: Record<string, Record<string, unknown>>;
 }
 
 export function draftOf(s: Settings): Draft {
@@ -19,6 +21,9 @@ export function draftOf(s: Settings): Draft {
     agents: Object.fromEntries(s.agents.map((a) => [a.name, copy(a.edit)])),
     defaults: copy(s.defaults) as Record<string, unknown>,
     push: copy(s.push) as Record<string, unknown> | null,
+    runnables: Object.fromEntries(
+      s.runnables.map((r) => [r.job, { ...defaults(r.schema as Schema), ...copy(r.values as Record<string, unknown>) }]),
+    ),
   };
 }
 
@@ -34,7 +39,11 @@ export function changes(loaded: Settings, draft: Draft): SettingsEdit | null {
   if (!same(before.defaults, draft.defaults) || !same(before.push, draft.push)) {
     edit.deployment = { defaults: draft.defaults as JsonValue, push: draft.push as JsonValue };
   }
-  return edit.models || edit.agents || edit.deployment ? edit : null;
+  const runnables = Object.fromEntries(
+    Object.entries(draft.runnables).filter(([n, v]) => !same(before.runnables[n], v)),
+  ) as Record<string, JsonValue>;
+  if (Object.keys(runnables).length) edit.runnables = runnables;
+  return edit.models || edit.agents || edit.deployment || edit.runnables ? edit : null;
 }
 
 /** The errors at `field` or below it (`agents.chat` gets `agents.chat.model` too). */

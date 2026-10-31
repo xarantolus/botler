@@ -10,6 +10,7 @@ run() { uv run --no-sync "$@"; }
 echo "== uv sync";          uv sync --locked --all-packages
 echo "== events manifest";  run python -m botler.events manifest --check
 echo "== tools manifest";   run python -m botler.tools manifest --check
+echo "== settings manifest"; run python -m botler.settings manifest --check
 echo "== ruff format";      run ruff format --check .
 echo "== ruff lint";        run ruff check .
 echo "== pyright";          run pyright
