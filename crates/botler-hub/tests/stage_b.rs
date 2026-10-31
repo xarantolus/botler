@@ -55,7 +55,7 @@ async fn message_wakes_botler_and_is_delivered_once() {
             "trial_run",
             "request_secrets",
             "request_access",
-            "archive_ready",
+            "handover_ready",
             "ask_user",
             "request_visit"
         ],
@@ -272,12 +272,12 @@ async fn archive_hands_over_and_messaging_restores() {
         "handoff": { "spawn": "dev", "message": "Wire x into the scheduler; see branch agents/<me>/work." }
     });
     assert!(
-        matches!(ops::call(&e.hub, &me, "archive_ready", report.clone()).await, Err(OpError::BadRequest(_))),
+        matches!(ops::call(&e.hub, &me, "handover_ready", report.clone()).await, Err(OpError::BadRequest(_))),
         "only after a request"
     );
 
     e.hub.store.request_archive(&chat).await.unwrap();
-    let out = ops::call(&e.hub, &me, "archive_ready", report).await.unwrap();
+    let out = ops::call(&e.hub, &me, "handover_ready", report).await.unwrap();
     let successor = out["handed_to"].as_str().unwrap().to_string();
     assert!(successor.starts_with("dev-") && successor != chat);
     let archived = e.hub.store.instance(&chat).await.unwrap();

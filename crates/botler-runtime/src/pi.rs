@@ -226,6 +226,11 @@ impl PiClient {
         self.command(json!({ "type": "abort" })).await.map(|_| ())
     }
 
+    /// Token counts and the context's current size (`contextUsage.tokens`).
+    pub async fn session_stats(&self) -> Result<Value> {
+        self.command(json!({ "type": "get_session_stats" })).await
+    }
+
     pub async fn state(&self) -> Result<Value> {
         self.command(json!({ "type": "get_state" })).await
     }

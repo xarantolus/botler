@@ -75,6 +75,7 @@ export type TranscriptData = {
   dialog: Dialog;
   note: NoteData;
   compaction: { summary: string };
+  session: { previous: string; summary: string; outstanding: string[]; state: string[] };
   error: { text: string };
 };
 
@@ -240,6 +241,20 @@ export function buildTranscript(input: TranscriptInput): Transcript {
             },
           ],
           metadata: { at: it.at, delivery: it.delivery, localTime: it.local_time, gap: it.gap },
+        });
+        break;
+      case "session_started":
+        endTurn();
+        messages.push({
+          id: it.id,
+          role: "system",
+          parts: [
+            {
+              type: "data-session",
+              data: { previous: it.previous, summary: it.summary, outstanding: it.outstanding, state: it.state },
+            },
+          ],
+          metadata: { at: it.at },
         });
         break;
       case "compaction":

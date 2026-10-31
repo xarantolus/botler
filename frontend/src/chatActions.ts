@@ -32,3 +32,22 @@ export async function stopChat(chat: string): Promise<void> {
   }
   await Promise.all([refreshSession(chat), refreshInstances()]);
 }
+
+/** Ask a chat to hand over to a fresh session of itself (its report seeds the new session). */
+export async function handoverChat(chat: string): Promise<void> {
+  const ok = await confirm({
+    title: "Start a fresh session?",
+    description:
+      "The agent writes a handover report (summary, outstanding work, where its state lives) after its current turn, then continues in a new session that starts from the report. The old session stays readable.",
+    confirmLabel: "Start fresh session",
+    reason: { label: "Reason", placeholder: "Why now, or what to focus on" },
+  });
+  if (!ok) return;
+  try {
+    const r = await call("handover", { body: { chat, to: "self", reason: ok.reason || undefined } });
+    notifySuccess(r.requested ? "Handover requested" : "A handover is already pending", "The new session starts after the report.");
+  } catch (e) {
+    notifyError("Could not request the handover", e);
+  }
+  await refreshSession(chat);
+}
