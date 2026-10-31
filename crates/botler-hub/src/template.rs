@@ -18,7 +18,7 @@ use botler_store::{DialogStatus, Proposal, ProposalStatus};
 use chrono::Utc;
 use include_dir::{Dir, include_dir};
 
-use crate::hub::{Hub, Result, load_at};
+use crate::hub::{Hub, Result};
 
 static TEMPLATE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../template");
 const BRANCH_PREFIX: &str = "hub/template-";
@@ -126,7 +126,8 @@ pub async fn upgrade(hub: &Arc<Hub>, tree: &str) -> Result<Upgrade> {
         Merge::Clean(commit) if repo.tree(&commit).await? == repo.tree(&main).await? => {
             // Nothing changes: record the merge so the next upgrade uses this snapshot as base.
             repo.advance_main(&main, &commit).await?;
-            hub.apply(load_at(repo, &commit).await?).await?;
+            // Main may not load (a stricter hub): keep applying its valid part.
+            hub.apply(crate::hub::load_tolerant(repo, &commit).await?).await?;
             (Upgrade::AlreadyApplied, commit)
         }
         Merge::Clean(commit) => {
