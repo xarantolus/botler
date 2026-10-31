@@ -102,11 +102,14 @@ const visitUrl = computed(() => {
 
 const formComplete = computed(() => (view.value.form ?? []).every((f) => values[f.name]));
 
+/** A choice's button: the hub's own choices (approve, deny, …) styled and capitalized, the agent's as given. */
 function ctaButton(c: string) {
+  const own = c.charAt(0).toUpperCase() + c.slice(1);
   if (c === "approve" || c === "allow for this chat")
-    return { color: "primary" as const, variant: "solid" as const, icon: "i-lucide-check" };
-  if (c === "reject" || c === "deny") return { color: "error" as const, variant: "soft" as const, icon: "i-lucide-x" };
-  return { color: "neutral" as const, variant: "outline" as const, icon: undefined };
+    return { color: "primary" as const, variant: "solid" as const, icon: "i-lucide-check", label: own };
+  if (c === "reject" || c === "deny") return { color: "error" as const, variant: "soft" as const, icon: "i-lucide-x", label: own };
+  if (c === "always allow") return { color: "neutral" as const, variant: "outline" as const, icon: undefined, label: own };
+  return { color: "neutral" as const, variant: "outline" as const, icon: undefined, label: c };
 }
 
 function onFreeKey(e: KeyboardEvent) {
@@ -249,8 +252,8 @@ function onFreeKey(e: KeyboardEvent) {
         </p>
       </template>
 
-      <!-- Approvals and questions with choices. -->
-      <div v-else-if="d.ctas.length" class="flex flex-wrap justify-end gap-2">
+      <!-- Approvals and questions with choices: every choice the same size, long ones wrap. -->
+      <div v-else-if="d.ctas.length" class="space-y-2">
         <UButton
           v-if="d.proposal_id"
           :to="`/proposals/${d.proposal_id}`"
@@ -258,18 +261,19 @@ function onFreeKey(e: KeyboardEvent) {
           :label="isAction ? 'Details' : 'Review changes'"
           color="neutral"
           variant="outline"
-          class="me-auto"
         />
-        <UButton
-          v-for="c in d.ctas"
-          :key="c"
-          v-bind="ctaButton(c)"
-          :label="c"
-          class="capitalize"
-          :loading="busy === c"
-          :disabled="!!busy && busy !== c"
-          @click="onCta(c)"
-        />
+        <div class="grid gap-2" :class="d.ctas.length > 1 && 'sm:grid-cols-2'">
+          <UButton
+            v-for="c in d.ctas"
+            :key="c"
+            v-bind="ctaButton(c)"
+            block
+            :ui="{ label: 'whitespace-normal text-center' }"
+            :loading="busy === c"
+            :disabled="!!busy && busy !== c"
+            @click="onCta(c)"
+          />
+        </div>
       </div>
 
       <!-- Free-text question. -->

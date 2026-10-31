@@ -116,7 +116,7 @@ describe("DialogCard", () => {
       }),
     });
     expect(w.text()).toContain("Access");
-    const allow = w.findAll("button").find((b) => b.text() === "allow for this chat")!;
+    const allow = w.findAll("button").find((b) => b.text() === "Allow for this chat")!;
     await allow.trigger("click");
     await flushPromises();
     expect(calls[0]).toEqual({
@@ -145,7 +145,7 @@ describe("DialogCard", () => {
     expect(w.text()).toContain("Approval");
     expect(w.text()).toContain("Will start happening");
     expect(w.text()).toContain("passed");
-    expect(w.findAll("button").map((b) => b.text())).toEqual(expect.arrayContaining(["approve", "reject"]));
+    expect(w.findAll("button").map((b) => b.text())).toEqual(expect.arrayContaining(["Approve", "Reject"]));
   });
 
   it("shows an action request with its arguments and code version, not as a change", async () => {
@@ -165,7 +165,7 @@ describe("DialogCard", () => {
       dialog: dialog({ kind: "approval", ctas: ["approve", "reject"], proposal_id: "p1", detail: null }),
     });
     expect(w.find('a[href="/proposals/p1"]').text()).toContain("Review changes");
-    await w.findAll("button").find((b) => b.text() === "reject")!.trigger("click");
+    await w.findAll("button").find((b) => b.text() === "Reject")!.trigger("click");
     await flushPromises();
     const modal = () => document.querySelector('[role="dialog"]')!;
     const confirmButton = () => [...modal().querySelectorAll("button")].find((b) => b.textContent?.trim() === "Reject")!;
