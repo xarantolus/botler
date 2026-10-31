@@ -12,7 +12,6 @@ import RequestsView from "./views/RequestsView.vue";
 import SearchView from "./views/SearchView.vue";
 import SecretsView from "./views/SecretsView.vue";
 import ShareView from "./views/ShareView.vue";
-import StorageView from "./views/StorageView.vue";
 import SystemView from "./views/SystemView.vue";
 import "./style.css";
 
@@ -33,7 +32,7 @@ const router = createRouter({
     { path: "/search", name: "search", component: SearchView },
     { path: "/memory", name: "memory", component: MemoryView },
     { path: "/share", name: "share", component: ShareView },
-    { path: "/storage", name: "storage", component: StorageView },
+    { path: "/storage", redirect: { name: "system", query: { tab: "storage" } } },
     { path: "/:rest(.*)*", redirect: "/" },
   ],
 });

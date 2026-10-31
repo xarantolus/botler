@@ -45,7 +45,7 @@ pub async fn restore(hub: &Hub, instance: &str, as_generic: bool) -> Result<Vec<
     for g in hub.store.live_grants(instance).await?.into_iter().filter(|g| g.stale.is_none()) {
         let r = g.resource();
         let gone = match def {
-            Some(def) => crate::grants::check(defs, def, &r).err().map(|e| e.to_string()),
+            Some(def) => crate::grants::check(defs, def, &r, g.mode).err().map(|e| e.to_string()),
             None => Some("no agent definition".into()),
         };
         let missing = match defs.secret_groups.get(&r.name) {

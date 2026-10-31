@@ -181,8 +181,8 @@ def cancel_request(*, id: str, reason: str) -> dict[str, Any]:
     return call("cancel_request", {"id": id, "reason": reason})
 
 
-def archive_ready(*, summary: str, handoff: Any = None, outstanding: list[str] | None = None, state: list[str] | None = None) -> dict[str, Any]:
-    """Hand over before this chat is archived (only after an archive.requested event): what you did, what is outstanding, where your state lives, and optionally who should continue.
+def handover_ready(*, summary: str, handoff: Any = None, outstanding: list[str] | None = None, state: list[str] | None = None) -> dict[str, Any]:
+    """Hand over, only after an archive.requested or handover.requested event: what you did, what is outstanding, where your state lives, and (when archiving) optionally who should continue. For a handover to yourself you continue on a fresh session that starts from this report.
 
     Args:
         summary: Everything you did in this chat, for someone who has not read it.
@@ -190,7 +190,49 @@ def archive_ready(*, summary: str, handoff: Any = None, outstanding: list[str] |
         outstanding: Work you did not finish.
         state: Where your state lives: branches, files, memory notes, external systems.
     """
-    return call("archive_ready", {"summary": summary, "handoff": handoff, "outstanding": outstanding, "state": state})
+    return call("handover_ready", {"summary": summary, "handoff": handoff, "outstanding": outstanding, "state": state})
+
+
+def handover(*, chat: str, reason: str | None = None, to: str | None = None) -> dict[str, Any]:
+    """Ask a chat to hand over now: to a fresh session of itself (`to = self`, the default) or to another chat or agent (then it is archived). The chat writes its report with `handover_ready`.
+
+    Args:
+        chat: The chat (name or slug).
+        to: `self` (default): continue on a fresh session seeded with its report. Otherwise a chat or an agent definition that takes over; the chat is then archived.
+    """
+    return call("handover", {"chat": chat, "reason": reason, "to": to})
+
+
+def session_tree(*, chat: str) -> dict[str, Any]:
+    """A chat's current session as a tree of entries (ids, parents, labels, the active branch)."""
+    return call("session_tree", {"chat": chat})
+
+
+def goto_entry(*, chat: str, entry: str) -> dict[str, Any]:
+    """Rewind a chat (or switch branch): it continues from this entry of its session tree. Only while it is not working.
+
+    Args:
+        entry: The entry to continue from: later entries stay in the tree on another branch.
+    """
+    return call("goto_entry", {"chat": chat, "entry": entry})
+
+
+def label_entry(*, chat: str, entry: str, label: str | None = None) -> dict[str, Any]:
+    """Label an entry of a chat's session tree (none: remove the label). Only while it is not working.
+
+    Args:
+        label: The label; none removes it.
+    """
+    return call("label_entry", {"chat": chat, "entry": entry, "label": label})
+
+
+def fork_chat(*, chat: str, entry: str) -> dict[str, Any]:
+    """Start a new chat of the same agent definition from a chat's conversation up to one of its assistant entries.
+
+    Args:
+        entry: An assistant entry: the new chat holds the conversation up to and including it.
+    """
+    return call("fork_chat", {"chat": chat, "entry": entry})
 
 
 def stop_chat(*, chat: str, cascade: bool | None = None, reason: str | None = None) -> dict[str, Any]:

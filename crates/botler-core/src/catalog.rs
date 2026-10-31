@@ -192,11 +192,11 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         summary: "This chat is about to be archived. Nothing is deleted, but you will be asleep until someone messages you again.",
         fields: &[("reason", "why it is being archived, if given")],
         follow_up: &[FollowUp {
-            tool: "archive_ready",
+            tool: "handover_ready",
             args: &[],
             why: "hand over: summary, outstanding work, where your state lives, and who should continue",
         }],
-        guidance: "Prepare to be archived. 1) Commit and push any uncommitted work in your workspace to your branch                    (or propose it). 2) Write anything worth remembering to memory. 3) Call `archive_ready` once with a                    summary of everything you did, what is still outstanding, where your state lives (branch, files,                    notes), and a `handoff` if someone should continue the outstanding work (an existing chat, or a new                    agent to spawn). Be complete: whoever picks this up only has your report.",
+        guidance: "Prepare to be archived. 1) Commit and push any uncommitted work in your workspace to your branch                    (or propose it). 2) Write anything worth remembering to memory. 3) Call `handover_ready` once with a                    summary of everything you did, what is still outstanding, where your state lives (branch, files,                    notes), and a `handoff` if someone should continue the outstanding work (an existing chat, or a new                    agent to spawn). Be complete: whoever picks this up only has your report.",
     },
     BuiltinEvent {
         kind: kinds::AGENT_IDLE,
@@ -305,10 +305,13 @@ pub const BUILTIN: &[BuiltinEvent] = &[
     },
     BuiltinEvent {
         kind: kinds::ENVIRONMENT_UPDATED,
-        summary: "Your container was restarted with a changed environment (e.g. a merged change); this conversation goes on.",
-        fields: &[("changes", "what changed: tools, image, instructions, pi resources, secrets, services")],
+        summary: "Your container was restarted with a changed environment (e.g. a merged change), or a network share could not be mounted; this conversation goes on.",
+        fields: &[(
+            "changes",
+            "what changed: tools, image, instructions, pi resources, secrets, services, shares; or `mount <name> unavailable: <why>`",
+        )],
         follow_up: &[],
-        guidance: "Use what is new from now on (new tools are in your tool list). Nothing to answer.",
+        guidance: "Use what is new from now on (new tools are in your tool list). An unavailable share is reported to the user as an incident: if your task needs it, say so; never work around it. Nothing to answer otherwise.",
     },
     BuiltinEvent {
         kind: kinds::CHAT_STOPPED,
@@ -323,6 +326,37 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         follow_up: &[],
         guidance: "Do not resume the stopped work on your own. If it was you, wait for the user's next message; \
                    if it was a chat you started, do not message it to continue unless the user asks.",
+    },
+    BuiltinEvent {
+        kind: kinds::HANDOVER_REQUESTED,
+        summary: "Write a handover report: this conversation is about to continue elsewhere.",
+        fields: &[
+            (
+                "to",
+                "`self`: you continue on a fresh session seeded with your report; otherwise the chat or agent that takes over",
+            ),
+            ("reason", "why, e.g. your context is nearly full"),
+        ],
+        follow_up: &[FollowUp {
+            tool: "handover_ready",
+            args: &[],
+            why: "your report: what you did, what is outstanding, where your state lives",
+        }],
+        guidance: "Finish or park the current step, commit and push work in progress, write what matters to memory, \
+                   then call `handover_ready` once. Be complete: with `to = self` your next session starts from only \
+                   this report (the old conversation stays searchable with `search`).",
+    },
+    BuiltinEvent {
+        kind: kinds::SESSION_STARTED,
+        summary: "This chat continues on a fresh session; below is the handover report you wrote in the previous one.",
+        fields: &[
+            ("previous", "the previous session file (find things in it with `search`)"),
+            ("summary", "what you did"),
+            ("outstanding", "what is still open"),
+            ("state", "where your state lives"),
+        ],
+        follow_up: &[],
+        guidance: "Carry on from the report. Look up details of the earlier conversation with `search` (scope `self`).",
     },
     BuiltinEvent {
         kind: kinds::WEBHOOK_RECEIVED,
@@ -465,6 +499,8 @@ mod tests {
             kinds::ENVIRONMENT_UPDATED,
             kinds::CHAT_STOPPED,
             kinds::WEBHOOK_RECEIVED,
+            kinds::HANDOVER_REQUESTED,
+            kinds::SESSION_STARTED,
         ] {
             assert!(builtin(k).is_some(), "{k} missing from catalog");
         }

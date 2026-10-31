@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use botler_core::catalog;
-use botler_core::defs::{AgentDef, Budget, Environment, Workspace};
+use botler_core::defs::{AgentDef, Budget, Environment, MountMode, Workspace};
 use botler_core::loops::TurnLog;
 use botler_core::payloads::{
     AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, EnvironmentUpdatedPayload, MessagePayload, SendMode,
@@ -60,6 +60,10 @@ pub struct LiveAgent {
     /// it before looking up the delivery that started the turn.
     delivering: Mutex<()>,
     kill: Mutex<Option<oneshot::Sender<()>>>,
+    /// Set when it mounts a share read-write: pending uploads are drained through it before a stop.
+    drain: Option<Arc<dyn botler_runtime::Containers>>,
+    /// Shares that failed to mount have been reported (once per wake).
+    mounts_reported: AtomicBool,
 }
 
 impl LiveAgent {
@@ -94,8 +98,11 @@ impl LiveAgent {
         *self.last_active.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    async fn stop(&self) {
+    pub(crate) async fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
+        if let Some(containers) = &self.drain {
+            crate::mounts::drain(containers, &self.container).await;
+        }
         if let Some(k) = self.kill.lock().await.take()
             && k.send(()).is_err()
         {
@@ -202,6 +209,14 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
         return Ok(());
     }
     let agent = ensure_awake(hub, &instance).await?;
+    if !agent.env.env.mounts.is_empty() && !agent.mounts_reported.load(Ordering::SeqCst) {
+        // pi answers only once the mount entrypoint has handed over to it.
+        agent.pi.is_busy().await?;
+        let failed = crate::mounts::failures(hub, &agent.container, &agent.env.env).await?;
+        let notes = crate::mounts::report(hub, name, &failed).await?;
+        agent.changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(notes);
+        agent.mounts_reported.store(true, Ordering::SeqCst);
+    }
     // A turn this loop started may not show as busy yet: queued messages wait for it too.
     let mut started = false;
     let changes = std::mem::take(&mut *agent.changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
@@ -390,6 +405,8 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         error: std::sync::Mutex::default(),
         delivering: Mutex::default(),
         kill: Mutex::new(Some(attached.kill)),
+        drain: env.mounts.values().any(|m| *m == MountMode::ReadWrite).then(|| hub.containers.clone()),
+        mounts_reported: AtomicBool::new(false),
     });
     hub.agents.live.lock().await.insert(instance.name.clone(), agent.clone());
     hub.store.set_instance_state(&instance.name, InstanceState::Running, Some(&spec.name)).await?;
@@ -607,6 +624,16 @@ async fn container_spec(
     let vars = &mut spec.env;
     vars.insert("PI_OFFLINE".into(), "1".into());
     vars.insert("BOTLER_INSTANCE".into(), instance.name.clone());
+    // Commits in the workspace are the chat's: `git commit` needs an identity.
+    let email = format!("{}@botler.invalid", instance.name);
+    for (key, value) in [
+        ("GIT_AUTHOR_NAME", &instance.name),
+        ("GIT_COMMITTER_NAME", &instance.name),
+        ("GIT_AUTHOR_EMAIL", &email),
+        ("GIT_COMMITTER_EMAIL", &email),
+    ] {
+        vars.insert(key.into(), value.clone());
+    }
     // Lets git in the workspace push to the hub without storing the token in .git/config.
     vars.insert("GIT_CONFIG_COUNT".into(), "2".into());
     vars.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
@@ -805,7 +832,8 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
 
 async fn turn_succeeded(hub: &Hub, agent: &LiveAgent) -> Result<()> {
     crate::turns::succeeded(hub, &agent.instance).await?;
-    notify_parent(hub, agent).await
+    notify_parent(hub, agent).await?;
+    crate::handover::check(hub, agent).await
 }
 
 /// The delivery that started the agent's current turn. A delivery still being recorded may be

@@ -155,3 +155,33 @@ async fn podman_unrelated_merge_skips_build_and_gc_removes_stale() {
         rt.remove_image(&t).await.unwrap();
     }
 }
+
+/// `latest` (what monorepo Dockerfiles build `FROM`) always ends up at the current content-tagged
+/// base: tagged when missing, moved when an older hub left it on another image, without a rebuild.
+#[tokio::test]
+async fn latest_follows_the_current_base() {
+    use botler_hub::assets::{AGENT_BASE_LATEST, agent_base_tag};
+    let e = common::env().await;
+    let fake = e.fake.clone();
+    let id = move |t: String| {
+        let fake = fake.clone();
+        async move { fake.image_id(&t).await.unwrap() }
+    };
+    images::ensure_base(&e.hub).await.unwrap();
+    let base = id(agent_base_tag()).await.expect("built");
+    assert_eq!(id(AGENT_BASE_LATEST.into()).await.as_ref(), Some(&base));
+    assert_eq!(e.fake.builds().len(), 1, "built once, then tagged: {:?}", e.fake.builds());
+
+    // An older hub's base under `latest`.
+    let ctx = e.hub.paths.assets().join("agent-base");
+    e.fake.build(&ctx, "Dockerfile", AGENT_BASE_LATEST, &BTreeMap::new()).await.unwrap();
+    assert_ne!(id(AGENT_BASE_LATEST.into()).await.as_ref(), Some(&base));
+    images::ensure_base(&e.hub).await.unwrap();
+    assert_eq!(id(AGENT_BASE_LATEST.into()).await.as_ref(), Some(&base), "moved back");
+
+    // `latest` gone.
+    e.fake.remove_image(AGENT_BASE_LATEST).await.unwrap();
+    images::ensure_base(&e.hub).await.unwrap();
+    assert_eq!(id(AGENT_BASE_LATEST.into()).await.as_ref(), Some(&base), "tagged again");
+    assert_eq!(e.fake.builds().len(), 2, "no rebuild of the base: {:?}", e.fake.builds());
+}

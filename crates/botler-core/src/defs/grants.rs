@@ -73,9 +73,12 @@ impl FromStr for Resource {
     }
 }
 
-/// How a share is mounted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
+/// How a share is mounted (`ro` < `rw`).
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema, ts_rs::TS,
+)]
 pub enum MountMode {
+    #[default]
     #[serde(rename = "ro")]
     ReadOnly,
     #[serde(rename = "rw")]
@@ -119,27 +122,32 @@ impl GrantPolicy {
     }
 }
 
-/// The environment additions a set of held resources make: secret groups and services (mounts
-/// and event subscriptions do not change the container).
-pub fn environment_of<'a>(held: impl IntoIterator<Item = &'a Resource>) -> Environment {
+/// The environment additions a set of held resources (with their mount modes) make: secret
+/// groups, services and mounts (event subscriptions do not change the container).
+pub fn environment_of<'a>(held: impl IntoIterator<Item = (&'a Resource, Option<MountMode>)>) -> Environment {
     let mut env = Environment::default();
-    for r in held {
+    for (r, mode) in held {
         match r.kind {
             ResourceKind::Secret => env.secrets.push(r.name.clone()),
             // A grant reaches the service; it is no MCP server unless the definition says so.
             ResourceKind::Service => env.services.push(r.name.clone()),
-            ResourceKind::Mount | ResourceKind::Event => {}
+            ResourceKind::Mount => {
+                let m = env.mounts.entry(r.name.clone()).or_default();
+                *m = (*m).max(mode.unwrap_or_default());
+            }
+            ResourceKind::Event => {}
         }
     }
     env
 }
 
-/// Whether environment `env` (a definition's) already gives `r`.
-pub fn env_gives(env: &Environment, r: &Resource) -> bool {
+/// Whether environment `env` (a definition's) already gives `r` (a mount at least in `mode`).
+pub fn env_gives(env: &Environment, r: &Resource, mode: Option<MountMode>) -> bool {
     match r.kind {
         ResourceKind::Secret => env.secrets.contains(&r.name),
         ResourceKind::Service => env.reached().contains(&r.name),
-        ResourceKind::Mount | ResourceKind::Event => false,
+        ResourceKind::Mount => env.mounts.get(&r.name).is_some_and(|m| *m >= mode.unwrap_or_default()),
+        ResourceKind::Event => false,
     }
 }
 
@@ -158,15 +166,21 @@ mod tests {
     }
 
     #[test]
-    fn policy_defaults_to_ask_and_env_collects_secrets_and_services() {
+    fn policy_defaults_to_ask_and_env_collects_secrets_services_and_mounts() {
         let p: GrantPolicy = toml::from_str("[resources]\n\"secret:nas\" = \"auto\"\n").unwrap();
         assert_eq!(p.mode(&"secret:nas".parse().unwrap()), GrantMode::Auto);
         assert_eq!(p.mode(&"secret:github".parse().unwrap()), GrantMode::Ask);
         let held: Vec<Resource> =
             ["secret:a", "service:notes", "mount:nas", "event:x.y"].iter().map(|s| s.parse().unwrap()).collect();
-        let env = environment_of(&held);
+        let ro = Some(MountMode::ReadOnly);
+        let env = environment_of(held.iter().map(|r| (r, ro)));
         assert_eq!(env.secrets, ["a"]);
         assert_eq!((env.mcp.len(), env.services.clone()), (0, vec!["notes".to_string()]), "a grant is no MCP server");
-        assert!(env_gives(&env, &held[0]) && !env_gives(&env, &held[2]));
+        assert_eq!(env.mounts, BTreeMap::from([("nas".to_string(), MountMode::ReadOnly)]));
+        assert!(env_gives(&env, &held[0], None) && env_gives(&env, &held[2], None));
+        assert!(!env_gives(&env, &held[2], Some(MountMode::ReadWrite)) && !env_gives(&env, &held[3], None));
+        // A read-write grant of the same share wins.
+        let both = [(&held[2], ro), (&held[2], Some(MountMode::ReadWrite))];
+        assert_eq!(environment_of(both).mounts["nas"], MountMode::ReadWrite);
     }
 }

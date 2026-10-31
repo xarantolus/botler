@@ -142,6 +142,13 @@ pub struct Defaults {
     #[serde(default = "Defaults::auto_archive_after", with = "never_or_duration")]
     #[schemars(with = "String")]
     pub auto_archive_after: Option<HumanDuration>,
+    /// Persistent agents roll over to a fresh session (seeded with their handover report) when
+    /// their context exceeds this many tokens; 0 turns it off.
+    #[serde(default = "Defaults::rollover_tokens")]
+    pub rollover_tokens: u64,
+    /// ...or when their session has been compacted this many times; 0 turns it off.
+    #[serde(default = "Defaults::rollover_compactions")]
+    pub rollover_compactions: u32,
 }
 
 /// `"never"` or a duration.
@@ -179,6 +186,12 @@ impl Defaults {
     fn reply_within() -> HumanDuration {
         HumanDuration::from_secs(20 * 60)
     }
+    fn rollover_tokens() -> u64 {
+        150_000
+    }
+    fn rollover_compactions() -> u32 {
+        3
+    }
 }
 
 impl Default for Defaults {
@@ -190,6 +203,8 @@ impl Default for Defaults {
             max_spawn_depth: Self::max_spawn_depth(),
             auto_archive_after: Self::auto_archive_after(),
             reply_within: Self::reply_within(),
+            rollover_tokens: Self::rollover_tokens(),
+            rollover_compactions: Self::rollover_compactions(),
         }
     }
 }

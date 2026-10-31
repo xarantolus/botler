@@ -102,7 +102,8 @@ pub struct TrialRun {
 pub struct TrialStarted {
     pub run_id: String,
     pub minutes: u32,
-    /// Secret groups the job declares that you do not hold: it runs without them.
+    /// Secret groups (and `mount:<name>` shares) the job declares that you do not hold: it runs
+    /// without them. Shares you hold are mounted read-only.
     pub withheld_secrets: Vec<String>,
     pub note: String,
 }

@@ -1,0 +1,106 @@
+#!/bin/sh
+# botler's mount entrypoint, bind-mounted read-only into containers that hold network shares
+# (docs/spikes/fuse-mounts.md). The hub writes /botler/mounts/list, one share per line:
+#   name|rclone remote|remote path|mount point|ro or rw|extra rclone flags
+# and passes each share's connection as RCLONE_CONFIG_<REMOTE>_* (the password in plain text;
+# it is obscured here). Per share it writes <name>.state (ok | failed), <name>.error and
+# <name>.log next to the list, where the hub reads them.
+#
+#   botler-mounts up -- CMD...   mount what can be mounted, then exec CMD (agents: a share that
+#                                fails never stops the chat; the hub tells it why)
+#   botler-mounts run -- CMD...  every share must mount; run CMD, then drain and unmount (jobs)
+#   botler-mounts down           wait for pending uploads, then unmount (before a stop)
+DIR=/botler/mounts
+RUN=/run/botler-mounts
+TMO=${BOTLER_MOUNT_TIMEOUT:-30}
+
+fail() { # name message
+  echo failed > "$DIR/$1.state"
+  printf '%s\n' "$2" > "$DIR/$1.error"
+  echo "botler-mounts: mount $1 unavailable: $2" >&2
+  rmdir "$3" 2>/dev/null
+  return 1
+}
+
+mount_one() { # name remote rpath dir mode flags
+  name=$1 remote=$2 dir=$4 log=$DIR/$1.log
+  mkdir -p "$dir" || { fail "$name" "cannot create $dir" "$dir"; return 1; }
+  command -v rclone >/dev/null && command -v fusermount3 >/dev/null || {
+    fail "$name" "rclone and fuse3 are not installed in this image (build it FROM botler/agent-base)" "$dir"
+    return 1
+  }
+  pass=RCLONE_CONFIG_$(echo "$remote" | tr a-z A-Z)_PASS
+  eval "pw=\${$pass:-}"
+  [ -n "$pw" ] && { export "$pass=$(printf %s "$pw" | rclone obscure -)" || { fail "$name" "rclone obscure failed" "$dir"; return 1; }; }
+  # webdav and smb "mount" with wrong credentials and show an empty directory: prove access first,
+  # with short timeouts (an unreachable sftp host otherwise hangs for minutes).
+  if ! timeout "$TMO" rclone lsjson --stat --contimeout 10s --timeout 20s --retries 1 --low-level-retries 1 \
+      "$remote:$3" >/dev/null 2>"$log"; then
+    why=$(tail -n 1 "$log" | sed 's/^[0-9/]* [0-9:]* [A-Z]* *: *//')
+    fail "$name" "${why:-timed out after ${TMO}s}" "$dir"
+    return 1
+  fi
+  ro=; [ "$5" = ro ] && ro=--read-only
+  # shellcheck disable=SC2086 # the flags are separate words
+  timeout "$TMO" rclone mount "$remote:$3" "$dir" $ro --daemon --daemon-wait "${TMO}s" --vfs-cache-mode writes \
+    --rc --rc-no-auth --rc-addr "unix://$RUN/$name.sock" --contimeout 10s --log-file "$log" $6
+  i=0
+  until mountpoint -q "$dir"; do
+    i=$((i + 1)); [ $i -gt $((TMO * 5)) ] && { fail "$name" "$(tail -n 1 "$log")" "$dir"; return 1; }
+    sleep 0.2
+  done
+  echo "$dir" > "$RUN/$name.dir"
+  echo ok > "$DIR/$name.state"
+  echo "botler-mounts: mount $name ready at $dir" >&2
+}
+
+up() { # all: mount every share; returns 1 if any failed
+  mkdir -p "$RUN"
+  bad=0
+  [ -f "$DIR/list" ] || return 0
+  while IFS='|' read -r name remote rpath dir mode flags; do
+    [ -n "$name" ] || continue
+    rm -f "$DIR/$name.state" "$DIR/$name.error"
+    mount_one "$name" "$remote" "$rpath" "$dir" "$mode" "$flags" || bad=1
+  done < "$DIR/list"
+  # The main command needs no share credentials.
+  for v in $(env | sed -n 's/^\(RCLONE_CONFIG_[A-Z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+  return $bad
+}
+
+down() {
+  for s in "$RUN"/*.sock; do
+    [ -S "$s" ] || continue
+    i=0
+    while rclone rc --unix-socket "$s" vfs/stats 2>/dev/null | grep -qE '"(uploadsInProgress|uploadsQueued)": [1-9]'; do
+      i=$((i + 1)); [ $i -gt 600 ] && { echo "botler-mounts: uploads still pending on $s after 5m" >&2; break; }
+      sleep 0.5
+    done
+  done
+  for d in "$RUN"/*.dir; do
+    [ -f "$d" ] && fusermount3 -u "$(cat "$d")" && rm -f "$d"
+  done
+  return 0
+}
+
+case $1 in
+up)
+  shift; [ "$1" = -- ] && shift
+  up
+  exec "$@"
+  ;;
+run)
+  shift; [ "$1" = -- ] && shift
+  up || { down; exit 1; }
+  "$@" &
+  child=$!
+  trap 'kill -TERM $child 2>/dev/null' TERM INT
+  wait $child; code=$?
+  # A trapped signal interrupts `wait`; wait again for the real exit.
+  kill -0 $child 2>/dev/null && { wait $child; code=$?; }
+  down
+  exit $code
+  ;;
+down) down ;;
+*) echo "usage: botler-mounts up|run -- CMD... | down" >&2; exit 2 ;;
+esac

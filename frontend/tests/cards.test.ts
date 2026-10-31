@@ -49,6 +49,20 @@ afterEach(() => {
 });
 
 describe("DialogCard", () => {
+  it("links a visit request to the service's port on this host, then answers done", async () => {
+    const visit = { service: "grafana", host_port: 3300, path: "/login", title: "Grafana", instructions: "Log in as **admin**." };
+    const w = await mountInApp(DialogCard, {
+      dialog: { ...dialog({ kind: "visit", question: "Log in to Grafana", detail: null, ctas: ["done", "cancel"] }), visit },
+    });
+    const open = w.findAll("a").find((a) => a.text() === "Open Grafana")!;
+    expect(open.attributes("href")).toBe(`${window.location.protocol}//${window.location.hostname}:3300/login`);
+    expect([open.attributes("target"), open.attributes("rel")]).toEqual(["_blank", "noopener noreferrer"]);
+    expect(w.find(".md strong").text()).toBe("admin");
+    await w.findAll("button").find((b) => b.text() === "Done")!.trigger("click");
+    await flushPromises();
+    expect(calls[0]).toEqual({ name: "answer_dialog", args: { params: { id: "d1" }, body: { answer: "done" } } });
+  });
+
   it("answers a question with one of its choices", async () => {
     const w = await mountInApp(DialogCard, { dialog: dialog() });
     expect(w.text()).toContain("Which calendar?");

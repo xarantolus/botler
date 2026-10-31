@@ -10,6 +10,7 @@ import type { ChatStoppedPayload } from "./ChatStoppedPayload";
 import type { DialogAbortedPayload } from "./DialogAbortedPayload";
 import type { DialogAnsweredPayload } from "./DialogAnsweredPayload";
 import type { EnvironmentUpdatedPayload } from "./EnvironmentUpdatedPayload";
+import type { HandoverRequestedPayload } from "./HandoverRequestedPayload";
 import type { ManualPayload } from "./ManualPayload";
 import type { MessagePayload } from "./MessagePayload";
 import type { ProposalUpdatedPayload } from "./ProposalUpdatedPayload";
@@ -17,6 +18,7 @@ import type { ReplyOverduePayload } from "./ReplyOverduePayload";
 import type { RunnableFailedPayload } from "./RunnableFailedPayload";
 import type { RunnableFinishedPayload } from "./RunnableFinishedPayload";
 import type { SchedulePayload } from "./SchedulePayload";
+import type { SessionStartedPayload } from "./SessionStartedPayload";
 import type { TimerPayload } from "./TimerPayload";
 import type { TrialFinishedPayload } from "./TrialFinishedPayload";
 import type { WebhookReceivedPayload } from "./WebhookReceivedPayload";
@@ -25,4 +27,4 @@ import type { WebhookReceivedPayload } from "./WebhookReceivedPayload";
  * Every built-in event type with its payload. Serialized as `{ "type": ..., "payload": ... }`,
  * the same two fields an [`Event`] has.
  */
-export type BuiltinPayload = { "type": "message", "payload": MessagePayload } | { "type": "runnable.failed", "payload": RunnableFailedPayload } | { "type": "runnable.finished", "payload": RunnableFinishedPayload } | { "type": "dialog.answered", "payload": DialogAnsweredPayload } | { "type": "dialog.aborted", "payload": DialogAbortedPayload } | { "type": "proposal.updated", "payload": ProposalUpdatedPayload } | { "type": "trial.finished", "payload": TrialFinishedPayload } | { "type": "action.result", "payload": ActionResultPayload } | { "type": "breaker.tripped", "payload": BreakerTrippedPayload } | { "type": "archive.requested", "payload": ArchiveRequestedPayload } | { "type": "agent.idle", "payload": AgentIdlePayload } | { "type": "agent.turn_failed", "payload": AgentTurnFailedPayload } | { "type": "reply.overdue", "payload": ReplyOverduePayload } | { "type": "timer", "payload": TimerPayload } | { "type": "schedule", "payload": SchedulePayload } | { "type": "manual", "payload": ManualPayload } | { "type": "access.changed", "payload": AccessChangedPayload } | { "type": "chat.restored", "payload": ChatRestoredPayload } | { "type": "environment.updated", "payload": EnvironmentUpdatedPayload } | { "type": "chat.stopped", "payload": ChatStoppedPayload } | { "type": "webhook.received", "payload": WebhookReceivedPayload };
+export type BuiltinPayload = { "type": "message", "payload": MessagePayload } | { "type": "runnable.failed", "payload": RunnableFailedPayload } | { "type": "runnable.finished", "payload": RunnableFinishedPayload } | { "type": "dialog.answered", "payload": DialogAnsweredPayload } | { "type": "dialog.aborted", "payload": DialogAbortedPayload } | { "type": "proposal.updated", "payload": ProposalUpdatedPayload } | { "type": "trial.finished", "payload": TrialFinishedPayload } | { "type": "action.result", "payload": ActionResultPayload } | { "type": "breaker.tripped", "payload": BreakerTrippedPayload } | { "type": "archive.requested", "payload": ArchiveRequestedPayload } | { "type": "agent.idle", "payload": AgentIdlePayload } | { "type": "agent.turn_failed", "payload": AgentTurnFailedPayload } | { "type": "reply.overdue", "payload": ReplyOverduePayload } | { "type": "timer", "payload": TimerPayload } | { "type": "schedule", "payload": SchedulePayload } | { "type": "manual", "payload": ManualPayload } | { "type": "access.changed", "payload": AccessChangedPayload } | { "type": "chat.restored", "payload": ChatRestoredPayload } | { "type": "environment.updated", "payload": EnvironmentUpdatedPayload } | { "type": "chat.stopped", "payload": ChatStoppedPayload } | { "type": "handover.requested", "payload": HandoverRequestedPayload } | { "type": "session.started", "payload": SessionStartedPayload } | { "type": "webhook.received", "payload": WebhookReceivedPayload };

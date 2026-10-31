@@ -53,9 +53,11 @@ pub async fn container_spec(
     // place hub-class secrets enter a container.
     let hub_class = matches!(what, Runnable::Run { run, .. } if run.kind == RunKind::Action);
     let mut agent_home = None;
+    let mut style = None;
     let token = match what {
         Runnable::Agent { instance, wake } => {
             spec.name = crate::agents::container_name(hub, &instance.name);
+            style = Some(crate::mounts::Style::Up);
             spec.labels = hub.labels("agent");
             spec.labels.insert("botler.instance".into(), instance.name.clone());
             // The home first: the monorepo clone and file secrets may be mounted inside it.
@@ -78,6 +80,7 @@ pub async fn container_spec(
         Runnable::Run { run, ttl } => {
             service = run.kind == RunKind::Service;
             spec.name = crate::jobs::run_container(hub, run);
+            style = Some(crate::mounts::Style::Run);
             spec.labels = hub.labels(match run.kind {
                 RunKind::Service => "service",
                 RunKind::Trial => "trial",
@@ -141,6 +144,9 @@ pub async fn container_spec(
         .collect();
     if let Some(p) = spec.ports.iter().find(|p| p.host_port == hub.config.listen.port()) {
         return Err(HubError::Forbidden(format!("host port {} is the hub's own port; publish another", p.host_port)));
+    }
+    if let Some(style) = style {
+        crate::mounts::apply(hub, &applied.defs, env, style, &mut spec).await?;
     }
     Ok(spec)
 }

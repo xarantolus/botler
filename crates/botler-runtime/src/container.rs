@@ -85,6 +85,11 @@ pub struct ContainerSpec {
     pub workdir: Option<String>,
     pub memory: Option<String>,
     pub remove_on_exit: bool,
+    /// Host devices passed in (`--device`), e.g. `/dev/fuse`.
+    pub devices: Vec<String>,
+    /// Capabilities added (`--cap-add`); under rootless Podman they apply only inside the
+    /// container's user namespace.
+    pub caps: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,6 +168,8 @@ pub trait Containers: Send + Sync {
     async fn images(&self, labels: &BTreeMap<String, String>) -> Result<Vec<String>>;
     /// Remove one tag; the image goes when its last tag does.
     async fn remove_image(&self, tag: &str) -> Result<()>;
+    /// Point tag `target` at the image `source` names (moving it if it exists).
+    async fn tag(&self, source: &str, target: &str) -> Result<()>;
     /// Size of an image in bytes (layers shared with other images counted in full).
     async fn image_size(&self, tag: &str) -> Result<u64>;
     /// Start detached; returns the container id.
@@ -179,6 +186,8 @@ pub trait Containers: Send + Sync {
     async fn events(&self) -> Result<mpsc::Receiver<ContainerEvent>>;
     /// Create user-defined network `name` unless it exists.
     async fn ensure_network(&self, name: &str) -> Result<()>;
+    /// Run `command` in running container `name`; returns its stdout (an error if it fails).
+    async fn exec(&self, name: &str, command: &[String]) -> Result<String>;
 }
 
 /// The CLI driver.
@@ -258,6 +267,12 @@ impl Cli {
         }
         if let Some(m) = &spec.memory {
             a.extend(["--memory".into(), m.clone()]);
+        }
+        for d in &spec.devices {
+            a.extend(["--device".into(), d.clone()]);
+        }
+        for c in &spec.caps {
+            a.extend(["--cap-add".into(), c.clone()]);
         }
         a.push(spec.image.clone());
         a.extend(spec.command.iter().cloned());
@@ -405,6 +420,10 @@ impl Containers for Cli {
 
     async fn remove_image(&self, tag: &str) -> Result<()> {
         run(&self.info.binary, &["rmi", tag]).await.map(|_| ())
+    }
+
+    async fn tag(&self, source: &str, target: &str) -> Result<()> {
+        run(&self.info.binary, &["tag", source, target]).await.map(|_| ())
     }
 
     async fn image_size(&self, tag: &str) -> Result<u64> {
@@ -623,6 +642,12 @@ impl Containers for Cli {
             r => r.map(|_| ()),
         }
     }
+
+    async fn exec(&self, name: &str, command: &[String]) -> Result<String> {
+        let mut args = vec!["exec", name];
+        args.extend(command.iter().map(String::as_str));
+        run(&self.info.binary, &args).await
+    }
 }
 
 /// Parse one `events --format json` line from podman or docker.
@@ -670,9 +695,12 @@ mod tests {
             labels: BTreeMap::from([("botler.role".into(), "agent".into())]),
             network: NetworkMode::None,
             remove_on_exit: true,
+            devices: vec!["/dev/fuse".into()],
+            caps: vec!["SYS_ADMIN".into()],
             ..Default::default()
         };
         let a = Cli::run_args(&spec).join(" ");
+        assert!(a.contains("--device /dev/fuse --cap-add SYS_ADMIN localhost/"), "{a}");
         assert!(a.starts_with("--name botler-agent-main --init --rm --label botler.hub=1 --label botler.role=agent"));
         assert!(a.contains("--mount type=tmpfs,dst=/botler/agent-dir --mount type=bind,src=/d/models.json,dst=/botler/agent-dir/models.json,ro"));
         assert!(a.contains("--network none"));

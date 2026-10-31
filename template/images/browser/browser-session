@@ -1,0 +1,30 @@
+#!/bin/sh
+# Start the browser desktop (Xvfb, Chromium, x11vnc, noVNC, the CDP forward), then run "$@" (the
+# bridge) as the container's main process: when it exits, the container stops.
+set -eu
+mkdir -p /run/vnc /data/chrome-profile
+# A random VNC password until the bridge sets one for a visit.
+head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 8 > "$VNC_PASSWORD_FILE"
+# A previous container's lock would make Chromium refuse the profile.
+rm -f /data/chrome-profile/SingletonLock /data/chrome-profile/SingletonSocket /data/chrome-profile/SingletonCookie
+
+Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+i=0
+while [ ! -e /tmp/.X11-unix/X99 ]; do
+  i=$((i + 1)); [ "$i" -le 100 ] || { echo "Xvfb did not start:" >&2; cat /tmp/xvfb.log >&2; exit 1; }
+  sleep 0.1
+done
+
+# The page never sees the hub's token: Chromium gets an environment without it.
+# --no-sandbox: Chromium's sandbox needs user namespaces the container does not have; the container
+# is the boundary. No --remote-allow-origins: DevTools then refuses web pages (they always send an
+# Origin), so page JavaScript cannot drive the browser.
+env -u BOTLER_TOKEN -u BOTLER_URL chromium --no-sandbox --user-data-dir=/data/chrome-profile \
+  --remote-debugging-port=9223 --no-first-run --no-default-browser-check --disable-dev-shm-usage \
+  --window-position=0,0 --window-size=1280,800 about:blank >/tmp/chromium.log 2>&1 &
+x11vnc -display :99 -forever -shared -localhost -rfbport 5900 -passwdfile "read:$VNC_PASSWORD_FILE" \
+  -quiet >/tmp/x11vnc.log 2>&1 &
+/opt/websockify/bin/websockify --web /opt/novnc 6080 localhost:5900 >/tmp/novnc.log 2>&1 &
+# Chromium binds DevTools to 127.0.0.1 only; this makes it reachable on the services network.
+socat TCP-LISTEN:9222,fork,reuseaddr TCP:127.0.0.1:9223 &
+exec "$@"

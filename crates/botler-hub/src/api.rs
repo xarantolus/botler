@@ -525,10 +525,18 @@ async fn trace(
     Ok(Json(Trace { event, reached, runs: hub.store.runs_for_event(&id).await?, thread }))
 }
 
+#[derive(Deserialize, ts_rs::TS)]
+pub struct SessionQuery {
+    /// An older session file of the chat (from `sessions`); default the current one.
+    #[ts(optional)]
+    file: Option<String>,
+}
+
 async fn session(
     State(hub): State<AppState>,
     Extension(p): Extension<Principal>,
     Path(instance): Path<String>,
+    Query(q): Query<SessionQuery>,
 ) -> ApiResult<Json<SessionView>> {
     user_only(&p)?;
     let inst = hub
@@ -539,11 +547,13 @@ async fn session(
     let busy = hub.agents.get(&inst.name).await.is_some_and(|a| a.busy());
     let pending = hub.store.pending_deliveries(&inst.name).await?.len();
     let phase = hub.agents.phase(&inst.name).await;
-    let items = crate::sessions::read(&hub, &inst.name).await?;
+    let items = crate::sessions::read(&hub, &inst.name, q.file.as_deref()).await?;
+    let sessions = crate::sessions::files(&hub, &inst.name).await?;
+    let file = q.file.unwrap_or_else(|| inst.session_file.clone());
     let tool_renders =
         hub.applied().await.defs.tools.values().filter_map(|t| Some((t.pi_name(), t.render.clone()?))).collect();
     let queued = queued(&hub, &inst.name).await?;
-    Ok(Json(SessionView { instance: inst, busy, pending, phase, items, tool_renders, queued }))
+    Ok(Json(SessionView { instance: inst, busy, pending, phase, items, tool_renders, queued, sessions, file }))
 }
 
 #[derive(Deserialize, ts_rs::TS)]

@@ -26,7 +26,7 @@ async fn a_service_grant_joins_the_network_without_an_mcp_entry() {
     let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
     let browser = Resource::new(ResourceKind::Service, "browser");
     grants::give(&e.hub, &chat, &browser, None, "user", false).await.unwrap();
-    assert!(grants::holds(&e.hub, &chat, &browser).await.unwrap());
+    assert!(grants::holds(&e.hub, &chat, &browser, None).await.unwrap());
     let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
         .to(chat.clone())
         .payload(json!({"text": "open the page"}));

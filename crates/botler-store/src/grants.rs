@@ -110,6 +110,15 @@ impl Store {
         if let Some(g) =
             self.live_grants(holder).await?.into_iter().find(|g| g.stale.is_none() && g.resource() == *resource)
         {
+            // Held: a wider mount mode (`rw` over `ro`) widens the grant, anything else keeps it.
+            if mode.unwrap_or_default() > g.mode.unwrap_or_default() {
+                sqlx::query("UPDATE grants SET mode = ? WHERE id = ?")
+                    .bind(mode.map(MountMode::as_str))
+                    .bind(&g.id)
+                    .execute(&self.pool)
+                    .await?;
+                return self.grant(&g.id).await;
+            }
             return Ok(g);
         }
         let id = new_id();

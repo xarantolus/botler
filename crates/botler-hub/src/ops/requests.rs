@@ -231,7 +231,7 @@ async fn visit_service(hub: &Hub, instance: &str, host_port: u16) -> Result<Stri
         return Err(OpError::BadRequest(format!("no service publishes host port {host_port}")));
     };
     let r = Resource::new(ResourceKind::Service, job.name.clone());
-    if !crate::grants::holds(hub, instance, &r).await? {
+    if !crate::grants::holds(hub, instance, &r, None).await? {
         return Err(OpError::Forbidden(format!(
             "port {host_port} belongs to service `{}`, which this chat may not use; `request_access(\"{r}\")` first",
             job.name

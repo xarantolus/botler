@@ -142,12 +142,22 @@ export function refreshEvents() {
 }
 
 let sessionFor: string | null = null;
+/** An earlier session file of that chat being viewed (from a handover), or null for the current. */
+let sessionFile: string | null = null;
+
+/** View one of the chat's session files (null: the current one). */
+export function showSessionFile(name: string, file: string | null) {
+  sessionFor = name; // so refreshSession keeps the file
+  sessionFile = file;
+  return refreshSession(name);
+}
 
 export function refreshSession(name: string) {
+  if (sessionFor !== name) sessionFile = null;
   sessionFor = name;
   return guarded(`Loading chat ${name}`, async () => {
     try {
-      const s = await call("session", { params: { instance: name } });
+      const s = await call("session", { params: { instance: name }, query: { file: sessionFile ?? undefined } });
       if (sessionFor !== name) return; // the user moved on
       state.session = s;
       // The session has the streamed message now: show it from there.

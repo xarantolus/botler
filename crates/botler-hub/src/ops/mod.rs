@@ -16,6 +16,7 @@ mod state;
 mod storage;
 mod subscriptions;
 mod timers;
+mod tree;
 mod trial;
 
 use std::future::Future;
@@ -45,6 +46,7 @@ pub use state::*;
 pub use storage::*;
 pub use subscriptions::*;
 pub use timers::*;
+pub use tree::*;
 pub use trial::*;
 
 use crate::auth::Principal;
@@ -264,7 +266,12 @@ pub static OPS: &[OpSpec] = &[
     op::<ListConnections>(),
     op::<ListRequests>(),
     op::<CancelRequest>(),
-    op::<ArchiveReady>(),
+    op::<HandoverReady>(),
+    op::<Handover>(),
+    op::<GetSessionTree>(),
+    op::<GotoEntry>(),
+    op::<LabelEntry>(),
+    op::<ForkChat>(),
     op::<StopChat>(),
     op::<ListEventTypes>(),
     op::<Subscribe>(),

@@ -6,6 +6,7 @@
 mod environment;
 mod grants;
 mod model;
+mod mounts;
 pub mod tree;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,6 +15,7 @@ use std::fmt;
 pub use environment::*;
 pub use grants::*;
 pub use model::*;
+pub use mounts::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 pub use tree::{FsTree, MemTree, Tree, TreeEntry};
@@ -75,6 +77,8 @@ pub struct Definitions {
     /// Every secret by its unique name.
     pub secrets: BTreeMap<String, SecretDecl>,
     pub events: BTreeMap<String, EventDecl>,
+    /// Network shares from `mounts/<name>.toml`.
+    pub mounts: BTreeMap<String, MountDef>,
     pub tools: BTreeMap<String, ToolDecl>,
     pub images: BTreeSet<String>,
     pub policy: CapabilityPolicy,
@@ -387,6 +391,16 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
         }
     }
 
+    for entry in l.list("mounts") {
+        let Some(name) = entry.name.strip_suffix(".toml").filter(|_| !entry.is_dir) else { continue };
+        let path = format!("mounts/{}", entry.name);
+        l.check_name(&path, "mount", name);
+        if let Some(spec) = l.toml::<MountFile>(&path) {
+            l.check_version(&path, spec.version);
+            defs.mounts.insert(name.to_string(), MountDef { name: name.to_string(), spec });
+        }
+    }
+
     let mut raw_triggers: Vec<(String, Trigger, Option<Target>)> = Vec::new();
 
     for entry in l.list("agents") {
@@ -525,6 +539,7 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
 
     // Cross-references, now that every file is loaded.
     validate_models(&mut l, &defs);
+    validate_mounts(&mut l, &defs);
     validate_agents(&mut l, &defs);
     validate_jobs(&mut l, &defs);
     for (path, trigger, default_target) in raw_triggers {
@@ -613,6 +628,66 @@ fn check_route_secret(l: &mut Loader<'_>, defs: &Definitions, path: &str, name: 
     }
 }
 
+fn validate_mounts(l: &mut Loader<'_>, defs: &Definitions) {
+    for m in defs.mounts.values() {
+        let path = format!("mounts/{}.toml", m.name);
+        for p in m.problems() {
+            l.err(&path, p);
+        }
+        check_container_group(l, defs, &path, &m.spec.secrets);
+        let Some(group) = defs.secret_groups.get(&m.spec.secrets) else { continue };
+        let options = m.spec.kind.options();
+        for s in group.secrets.iter().filter_map(|s| defs.secrets.get(s)) {
+            if m.option_for(&s.name).is_none() {
+                let ends = options.iter().map(|o| format!("_{o}")).collect::<Vec<_>>().join(", ");
+                l.err(
+                    &path,
+                    format!(
+                        "secret {} of group {}: a {} share needs names ending in {ends}",
+                        s.name,
+                        group.name,
+                        m.spec.kind.as_str()
+                    ),
+                );
+            }
+            if s.file.is_some() {
+                l.err(&path, format!("secret {} is delivered as a file; a share's secrets must be values", s.name));
+            }
+        }
+        if !group.secrets.iter().any(|s| m.option_for(s) == Some(options[0])) {
+            l.err(
+                &path,
+                format!(
+                    "group {} has no secret ending in _{} (required for {})",
+                    group.name,
+                    options[0],
+                    m.spec.kind.as_str()
+                ),
+            );
+        }
+    }
+}
+
+/// The mounts an agent or job lists: defined, writable when `rw`, reachable, at distinct paths.
+fn check_mounts(l: &mut Loader<'_>, defs: &Definitions, path: &str, env: &Environment) {
+    let mut paths = BTreeMap::new();
+    for (name, mode) in &env.mounts {
+        let Some(m) = defs.mounts.get(name) else {
+            l.err(path, format!("mount {name:?} is not defined in mounts/"));
+            continue;
+        };
+        if *mode == MountMode::ReadWrite && m.spec.read_only {
+            l.err(path, format!("mount {name} is read_only = true in mounts/{name}.toml and cannot be \"rw\""));
+        }
+        if let Some(other) = paths.insert(m.spec.path.trim_end_matches('/'), name) {
+            l.err(path, format!("mounts {other} and {name} both use {}", m.spec.path));
+        }
+    }
+    if !env.mounts.is_empty() && env.network() == Network::None {
+        l.err(path, "mounts are reached over the network; network = \"none\" cannot use them");
+    }
+}
+
 fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
     for a in defs.agents.values() {
         let path = format!("agents/{}/agent.toml", a.name);
@@ -633,6 +708,7 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
         for g in &a.spec.env.secrets {
             check_container_group(l, defs, &path, g);
         }
+        check_mounts(l, defs, &path, &a.spec.env);
         let listed = a.spec.env.mcp.iter().map(|m| ("mcp", m));
         for (field, m) in listed.chain(a.spec.env.services.iter().map(|s| ("services", s))) {
             match defs.jobs.get(m) {
@@ -732,6 +808,7 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
             }
             check_container_group(l, defs, &path, g);
         }
+        check_mounts(l, defs, &path, &j.spec.env);
         if let Some(t) = &j.spec.on_failure {
             check_target(l, defs, &path, t);
         }
@@ -851,6 +928,8 @@ fn is_builtin_event(kind: &str) -> bool {
         ENVIRONMENT_UPDATED,
         TRIAL_FINISHED,
         CHAT_STOPPED,
+        HANDOVER_REQUESTED,
+        SESSION_STARTED,
     ]
     .contains(&kind)
 }

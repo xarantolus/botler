@@ -45,6 +45,10 @@ struct State {
     fail_turns: BTreeMap<String, VecDeque<String>>,
     /// `compact` commands each instance's pi received.
     compactions: BTreeMap<String, u32>,
+    /// Extension commands (`/botler-goto ...`) each pi received, per container.
+    commands: BTreeMap<String, Vec<String>>,
+    /// The context size `get_session_stats` reports, keyed by `BOTLER_INSTANCE`.
+    context_tokens: BTreeMap<String, u64>,
     /// Delivery ids each pi has seen, persisted per session file like the real extension.
     seen: BTreeMap<String, HashSet<String>>,
     events: Vec<mpsc::Sender<ContainerEvent>>,
@@ -53,6 +57,10 @@ struct State {
     networks: HashSet<String>,
     /// Attached containers that are not pi (e.g. the gate) print this and exit with this code.
     script: (String, i32),
+    /// `exec`s run, as (container, command).
+    execs: Vec<(String, Vec<String>)>,
+    /// Shares the fake mount entrypoint reports as failed, with the error.
+    mount_failures: BTreeMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -115,6 +123,16 @@ impl Fake {
         self.lock().fail_turns.entry(instance.into()).or_default().extend(errors.iter().map(|e| e.to_string()));
     }
 
+    /// The extension commands (`/botler-...`) the pi in container `name` ran.
+    pub fn commands(&self, name: &str) -> Vec<String> {
+        self.lock().commands.get(name).cloned().unwrap_or_default()
+    }
+
+    /// Make `instance`'s pi report a context of `tokens`.
+    pub fn set_context_tokens(&self, instance: &str, tokens: u64) {
+        self.lock().context_tokens.insert(instance.into(), tokens);
+    }
+
     /// How often `instance`'s pi was asked to compact its context.
     pub fn compactions(&self, instance: &str) -> u32 {
         self.lock().compactions.get(instance).copied().unwrap_or(0)
@@ -146,6 +164,48 @@ impl Fake {
     /// What attached non-pi containers (the gate) print and their exit code.
     pub fn set_script_result(&self, output: &str, code: i32) {
         self.lock().script = (output.to_string(), code);
+    }
+
+    pub fn execs(&self) -> Vec<(String, Vec<String>)> {
+        self.lock().execs.clone()
+    }
+
+    /// The mount entrypoint reports share `name` as unavailable with `error` (until cleared).
+    pub fn set_mount_failure(&self, name: &str, error: Option<&str>) {
+        let mut st = self.lock();
+        match error {
+            Some(e) => st.mount_failures.insert(name.into(), e.into()),
+            None => st.mount_failures.remove(name),
+        };
+    }
+
+    /// The command after the mount entrypoint (`sh .../botler-mounts up -- <command>`), and, if
+    /// there is one, play the entrypoint: report each listed share in the status directory
+    /// mounted at `/botler/mounts`, as ok or as set by [`Fake::set_mount_failure`].
+    fn unwrap_mounts(&self, spec: &ContainerSpec) -> Result<Vec<String>> {
+        let Some(dashes) = spec.command.iter().position(|c| c == "--") else { return Ok(spec.command.clone()) };
+        if !spec.command.iter().any(|c| c.ends_with("botler-mounts")) {
+            return Ok(spec.command.clone());
+        }
+        let dir = spec.mounts.iter().find_map(|m| match m {
+            crate::container::Mount::Bind { src, dst, .. } if dst == "/botler/mounts" => Some(src.clone()),
+            _ => None,
+        });
+        let io = |e: std::io::Error| ContainerError::Io { binary: "fake".into(), source: e };
+        if let Some(dir) = dir {
+            let list = std::fs::read_to_string(dir.join("list")).map_err(io)?;
+            let failures = self.lock().mount_failures.clone();
+            for name in list.lines().filter_map(|l| l.split('|').next()).filter(|n| !n.is_empty()) {
+                match failures.get(name) {
+                    Some(e) => {
+                        std::fs::write(dir.join(format!("{name}.state")), "failed\n").map_err(io)?;
+                        std::fs::write(dir.join(format!("{name}.error")), format!("{e}\n")).map_err(io)?;
+                    }
+                    None => std::fs::write(dir.join(format!("{name}.state")), "ok\n").map_err(io)?,
+                }
+            }
+        }
+        Ok(spec.command[dashes + 1..].to_vec())
     }
 
     /// Make attached containers exit immediately with code 125, like a failed `podman run`.
@@ -230,6 +290,13 @@ impl Containers for Fake {
             .collect())
     }
 
+    async fn tag(&self, source: &str, target: &str) -> Result<()> {
+        let mut st = self.lock();
+        let image = st.images.get(source).cloned().ok_or_else(|| ContainerError::NotFound(source.into()))?;
+        st.images.insert(target.into(), image);
+        Ok(())
+    }
+
     async fn remove_image(&self, tag: &str) -> Result<()> {
         match self.lock().images.remove(tag) {
             Some(_) => Ok(()),
@@ -246,6 +313,7 @@ impl Containers for Fake {
 
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {
         Self::check_mounts(spec)?;
+        self.unwrap_mounts(spec)?;
         let mut st = self.lock();
         let fail = |stderr: String| ContainerError::Command {
             binary: "fake".into(),
@@ -276,8 +344,9 @@ impl Containers for Fake {
 
     async fn run_attached(&self, spec: &ContainerSpec) -> Result<Attached> {
         Self::check_mounts(spec)?;
+        let command = self.unwrap_mounts(spec)?;
         // pi runs directly or behind the agent forwarder (`node forward.mjs pi ...`).
-        if !spec.command.iter().take(3).any(|c| c == "pi") {
+        if !command.iter().take(3).any(|c| c == "pi") {
             let (output, code) = self.lock().script.clone();
             let (hub_w, _pi_r) = tokio::io::duplex(64);
             let (mut pi_w, hub_r) = tokio::io::duplex(1 << 16);
@@ -455,6 +524,15 @@ impl Containers for Fake {
         self.lock().networks.insert(name.into());
         Ok(())
     }
+
+    async fn exec(&self, name: &str, command: &[String]) -> Result<String> {
+        let mut st = self.lock();
+        if !st.containers.get(name).is_some_and(|c| c.running) {
+            return Err(ContainerError::NotFound(name.into()));
+        }
+        st.execs.push((name.into(), command.to_vec()));
+        Ok(String::new())
+    }
 }
 
 impl Fake {
@@ -466,6 +544,11 @@ impl Fake {
         match kind {
             "prompt" => {
                 let text = cmd.get("message").and_then(Value::as_str).unwrap_or("").to_string();
+                // Like the extension's commands: handled, no turn.
+                if text.starts_with("/botler-") {
+                    self.lock().commands.entry(name.into()).or_default().push(text);
+                    return vec![ok(json!({"disposition": "handled"}))];
+                }
                 let envelope =
                     text.strip_prefix("botler:delivery ").and_then(|env| serde_json::from_str::<Value>(env).ok());
                 if let Some(env) = &envelope
@@ -507,6 +590,10 @@ impl Fake {
                 out
             }
             "get_state" => vec![ok(json!({"isStreaming": self.lock().busy.contains(name), "isCompacting": false}))],
+            "get_session_stats" => {
+                let tokens = self.lock().context_tokens.get(instance).copied().unwrap_or(1000);
+                vec![ok(json!({"sessionFile": session, "contextUsage": {"tokens": tokens, "contextWindow": 200000}}))]
+            }
             "get_last_assistant_text" => {
                 let text = self.lock().last_reply.get(name).cloned().unwrap_or_else(|| "fake reply".into());
                 vec![ok(json!({"text": text}))]

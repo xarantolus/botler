@@ -6,7 +6,7 @@ import type { HandoverReport } from "./HandoverReport";
  */
 export type ArchiveRecord = { 
 /**
- * Whether the agent handed over (`archive_ready`) rather than being archived by force.
+ * Whether the agent handed over (`handover_ready`) rather than being archived by force.
  */
 confirmed_by_agent: boolean, forced: boolean, 
 /**

@@ -11,15 +11,17 @@ export interface ConfirmOptions {
   color?: "primary" | "warning" | "error";
   /** Ask for a reason (returned in the result); optional unless `required`. */
   reason?: { label: string; placeholder?: string; required?: boolean };
+  /** A checkbox (its state is `checked` in the result). */
+  check?: { label: string };
 }
 
 let modal: ReturnType<ReturnType<typeof useOverlay>["create"]> | null = null;
 
-/** Resolves to `{ reason }` when confirmed; null when cancelled or dismissed. */
-export async function confirm(o: ConfirmOptions): Promise<{ reason: string } | null> {
+/** Resolves to `{ reason, checked }` when confirmed; null when cancelled or dismissed. */
+export async function confirm(o: ConfirmOptions): Promise<{ reason: string; checked: boolean } | null> {
   modal ??= useOverlay().create(ConfirmModal);
   const result: unknown = await modal.open(o);
-  return result && typeof result === "object" && "reason" in result ? (result as { reason: string }) : null;
+  return result && typeof result === "object" && "reason" in result ? (result as { reason: string; checked: boolean }) : null;
 }
 
 /** The user's decision on a proposal: approving takes an optional comment, rejecting a reason.

@@ -12,10 +12,21 @@ import { usd } from "../../lib/time";
 import { notifyError, notifySuccess } from "../../notify";
 import { inFlight, stageLabel } from "../../lib/proposals";
 import { frontDoorName, refreshInstances, refreshSession, state } from "../../store";
+import { handoverChat, stopChat } from "../../chatActions";
 import PhaseBadge from "../common/PhaseBadge.vue";
+import { shell } from "../../shell";
 import ConnectionsSlideover from "./ConnectionsSlideover.vue";
+import SessionTreeSlideover from "./SessionTreeSlideover.vue";
 
-const props = defineProps<{ name: string; instance: Instance | null; badge: Badge | null; cost?: number; pending?: number }>();
+const props = defineProps<{
+  name: string;
+  instance: Instance | null;
+  badge: Badge | null;
+  cost?: number;
+  pending?: number;
+  /** The agent is working, or messages wait for it: it can be stopped. */
+  stoppable?: boolean;
+}>();
 const router = useRouter();
 
 const title = computed(() => (props.instance ? chatTitle(props.instance, frontDoorName.value) : props.name));
@@ -106,6 +117,9 @@ const menu = computed((): DropdownMenuItem[][] => {
     },
   ];
   const actions: DropdownMenuItem[] = [];
+  if (i?.persistent && i.state !== "archived") {
+    actions.push({ label: "Start fresh session (handover)…", icon: "i-lucide-refresh-ccw-dot", onSelect: () => void handoverChat(props.name) });
+  }
   if (i?.state === "archived") actions.push({ label: "Restore", icon: "i-lucide-archive-restore", onSelect: () => void restore() });
   else if (i && !isFrontDoor.value) {
     if (i.archive_requested_at) {
@@ -160,10 +174,17 @@ const menu = computed((): DropdownMenuItem[][] => {
         class="hidden sm:inline-flex"
         @click="restore()"
       />
+      <UTooltip v-if="stoppable" text="Stop: abort the turn and cancel what is queued">
+        <UButton icon="i-lucide-octagon-x" color="error" variant="soft" size="sm" label="Stop" @click="stopChat(name)" />
+      </UTooltip>
       <UTooltip text="Connections: access, subscriptions, related chats">
         <UButton icon="i-lucide-waypoints" color="neutral" variant="ghost" aria-label="Connections" @click="connections = true" />
       </UTooltip>
       <ConnectionsSlideover v-model:open="connections" :name="name" />
+      <UTooltip text="Session tree: branches, continue from an earlier point, fork">
+        <UButton icon="i-lucide-git-branch" color="neutral" variant="ghost" aria-label="Session tree" @click="shell.sessionTree = true" />
+      </UTooltip>
+      <SessionTreeSlideover v-model:open="shell.sessionTree" :name="name" />
       <UDropdownMenu :items="menu" :content="{ align: 'end' }">
         <UButton icon="i-lucide-ellipsis-vertical" color="neutral" variant="ghost" aria-label="Chat actions" />
       </UDropdownMenu>

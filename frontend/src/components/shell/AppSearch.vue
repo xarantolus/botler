@@ -2,7 +2,8 @@
 // The command palette (Cmd/Ctrl+K): jump to a chat, a request or a section, or act.
 import type { CommandPaletteGroup, CommandPaletteItem } from "@nuxt/ui";
 import { computed } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { handoverChat, stopChat } from "../../chatActions";
 import { chatTitle } from "../../lib/events";
 import { sections } from "../../navigation";
 import { shell } from "../../shell";
@@ -10,6 +11,12 @@ import { BUILTIN_SHORTCUTS, SHORTCUTS } from "../../shortcuts";
 import { frontDoorName, logout, state, waitingByInstance } from "../../store";
 
 const router = useRouter();
+const route = useRoute();
+const currentInstance = computed(() => state.instances.find((i) => i.name === currentChat.value) ?? null);
+/** The chat on screen, if any. */
+const currentChat = computed(() =>
+  route.name === "chat" && typeof route.params.instance === "string" ? route.params.instance : route.name === "home" ? frontDoorName.value : null,
+);
 const searchTerm = computed({ get: () => shell.paletteTerm, set: (v: string) => (shell.paletteTerm = v) });
 
 const groups = computed((): CommandPaletteGroup<CommandPaletteItem>[] => {
@@ -56,6 +63,19 @@ const groups = computed((): CommandPaletteGroup<CommandPaletteItem>[] => {
       label: "Actions",
       items: [
         { label: "New chat", icon: "i-lucide-square-pen", onSelect: () => (shell.newChat = true) },
+        ...(currentChat.value
+          ? [{ label: "Stop this chat…", suffix: currentChat.value, icon: "i-lucide-octagon-x", onSelect: () => void stopChat(currentChat.value!) }]
+          : []),
+        ...(currentInstance.value?.persistent && currentInstance.value.state !== "archived"
+          ? [
+              {
+                label: "Start fresh session (handover)…",
+                suffix: currentChat.value!,
+                icon: "i-lucide-refresh-ccw-dot",
+                onSelect: () => void handoverChat(currentChat.value!),
+              },
+            ]
+          : []),
         { label: "Log out", icon: "i-lucide-log-out", onSelect: logout },
       ],
     },

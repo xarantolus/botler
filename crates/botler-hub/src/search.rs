@@ -445,6 +445,9 @@ fn entry_docs(item: &Item) -> Vec<(String, String, Option<&str>, String)> {
             vec![(format!("from {}", from.as_deref().unwrap_or("user")), text.clone(), at, id.clone())]
         }
         Item::Note { id, at, text, from, .. } => vec![(format!("note from {from}"), text.clone(), at, id.clone())],
+        Item::SessionStarted { id, at, summary, .. } => {
+            vec![("handover report".to_string(), summary.clone(), at, id.clone())]
+        }
         Item::Assistant { id, at, text, tool_calls, .. } => {
             let mut docs = vec![("assistant".to_string(), text.clone(), at, id.clone())];
             for (i, c) in tool_calls.iter().enumerate() {
