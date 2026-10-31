@@ -46,11 +46,12 @@ pub async fn on_event(hub: &Hub, ev: &botler_runtime::ContainerEvent) -> Result<
         return Ok(());
     }
     if let Some(run_id) = rest.strip_prefix("run-") {
-        let oom = match hub.containers.inspect(&ev.name).await? {
-            Some(c) => c.oom_killed,
-            None => false,
+        // Podman 4 leaves `ContainerExitCode` out of the event when it is 0: inspect has it.
+        let (oom, inspected) = match hub.containers.inspect(&ev.name).await? {
+            Some(c) => (c.oom_killed, c.exit_code),
+            None => (false, None),
         };
-        return jobs::on_exit(hub, run_id, ev.exit_code, oom).await;
+        return jobs::on_exit(hub, run_id, ev.exit_code.or(inspected), oom).await;
     }
     Ok(())
 }
