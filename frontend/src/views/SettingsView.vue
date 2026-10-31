@@ -26,7 +26,7 @@ const tabs: TabsItem[] = [
   { label: "Models", value: "models", icon: "i-lucide-cpu" },
   { label: "Agents", value: "agents", icon: "i-lucide-bot" },
   { label: "Deployment", value: "deployment", icon: "i-lucide-sliders-horizontal" },
-  { label: "Jobs & services", value: "runnables", icon: "i-lucide-cog" },
+  { label: "Jobs & Services", value: "runnables", icon: "i-lucide-cog" },
   { label: "Channels", value: "channels", icon: "i-lucide-radio-tower" },
 ];
 

@@ -60,7 +60,7 @@ Add a `Dockerfile`, a `pyproject.toml`, `src/` and `tests/`, as in `jobs/example
 ## 3b. Settings the user can change
 
 What the user may want to adjust (folders, intervals, thresholds, where to notify) is a
-**settings model**, not a constant. Then the user edits it under Settings → Jobs & services
+**settings model**, not a constant. Then the user edits it under Settings → Jobs & Services
 without a proposal.
 
 ```python
