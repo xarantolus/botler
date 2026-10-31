@@ -14,14 +14,7 @@ use chrono::{Duration, Utc};
 use common::{Env, env};
 use serde_json::{Value, json};
 
-const SECRETS: &str = r#"version = 1
-[[group]]
-name = "openrouter"
-class = "container"
-[[group.secret]]
-name = "OPENROUTER_API_KEY"
-
-[[group]]
+const SECRETS: &str = r#"[[group]]
 name = "nas"
 class = "container"
 [[group.secret]]
@@ -55,7 +48,7 @@ restricted = true
 async fn setup() -> Env {
     let e = env().await;
     let mut files: Vec<(String, String)> = vec![
-        ("secrets.toml".into(), SECRETS.into()),
+        ("secrets.toml".into(), common::secrets_with(SECRETS)),
         ("events/mail.toml".into(), EVENTS.into()),
         ("events/ping.toml".into(), "[[event]]\ntype = \"ping.sent\"\n".into()),
     ];

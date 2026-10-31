@@ -13,11 +13,10 @@ use common::{Env, env};
 use serde_json::{Value, json};
 
 fn secrets(group: &str) -> String {
-    format!(
-        "version = 1\n[[group]]\nname = \"openrouter\"\nclass = \"container\"\n[[group.secret]]\nname = \"OPENROUTER_API_KEY\"\n\
-         [[group]]\nname = \"{group}\"\nclass = \"container\"\n[[group.secret]]\nname = \"NAS_HOST\"\n\
+    common::secrets_with(&format!(
+        "[[group]]\nname = \"{group}\"\nclass = \"container\"\n[[group.secret]]\nname = \"NAS_HOST\"\n\
          [[group.secret]]\nname = \"NAS_PORT\"\n[[group.secret]]\nname = \"NAS_USER\"\n[[group.secret]]\nname = \"NAS_PASS\"\n"
-    )
+    ))
 }
 
 const SHARE: &str = "type = \"sftp\"\nsecrets = \"nas\"\nremote_path = \"photos\"\npath = \"/mnt/nas-photos\"\n";

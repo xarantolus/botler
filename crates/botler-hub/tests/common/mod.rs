@@ -152,3 +152,10 @@ pub fn job(name: &str, toml: &str) -> Vec<(String, String)> {
         (format!("jobs/{name}/Dockerfile"), JOB_DOCKERFILE.to_string()),
     ]
 }
+
+/// The template's `secrets.toml` with `groups` declared after its own, so the template's jobs
+/// keep the groups they are granted.
+pub fn secrets_with(groups: &str) -> String {
+    let template = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template/secrets.toml"));
+    format!("{template}\n{groups}")
+}

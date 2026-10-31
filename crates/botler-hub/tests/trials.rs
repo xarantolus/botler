@@ -13,9 +13,7 @@ use botler_store::{EventQuery, Run, RunStatus};
 use chrono::Duration;
 use serde_json::{Value, json};
 
-const SECRETS: &str = "version = 1\n\
-    [[group]]\nname = \"openrouter\"\nclass = \"container\"\n[[group.secret]]\nname = \"OPENROUTER_API_KEY\"\n\
-    [[group]]\nname = \"other\"\nclass = \"container\"\n[[group.secret]]\nname = \"OTHER_KEY\"\n";
+const SECRETS: &str = "[[group]]\nname = \"other\"\nclass = \"container\"\n[[group.secret]]\nname = \"OTHER_KEY\"\n";
 
 const WATCH: &str = "lifetime = \"service\"\ncommand = [\"python\", \"-m\", \"watch\"]\n\
     secrets = [\"openrouter\", \"other\"]\nvolume = true\nport = 8000\n\
@@ -32,7 +30,7 @@ struct Setup {
 async fn setup(job_toml: &str) -> Setup {
     let e = common::env().await;
     e.commit(&[
-        ("secrets.toml", SECRETS),
+        ("secrets.toml", &common::secrets_with(SECRETS)),
         ("agents/w/agent.toml", "secrets = [\"openrouter\"]\n"),
         ("agents/w/AGENTS.md", "w"),
     ])
