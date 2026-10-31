@@ -10,7 +10,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, post, put};
 use axum::{Extension, Json, Router};
-use botler_core::payloads::{BuiltinPayload, DialogAnsweredPayload, MessagePayload, SecretsOutcome, SendMode};
+use botler_core::payloads::{BuiltinPayload, MessagePayload, SecretsOutcome, SendMode};
 use botler_core::{Event, Source};
 use botler_store::{DialogStatus, EventQuery, Incident, Instance, Proposal, Run};
 use chrono::Utc;
@@ -82,6 +82,9 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/breakers/clear", post(clear_breaker))
         .route("/api/v1/settings", get(settings).put(save_settings))
         .route("/api/v1/models", get(models))
+        .route("/api/v1/channels", get(channels))
+        .route("/api/v1/channels/codes", post(channel_code))
+        .route("/api/v1/channels/bindings/{id}", delete(revoke_binding))
         .route("/git/monorepo.git/{*rest}", any(git))
         .layer(middleware::from_fn_with_state(hub.clone(), authenticate));
     Router::new()
@@ -382,7 +385,7 @@ async fn user_message(
 ) -> ApiResult<Json<EventPosted>> {
     user_only(&p)?;
     let files = crate::uploads::attach(&hub, &m.to, &m.files).await?;
-    let payload = MessagePayload { text: m.text, files, mode: Some(m.mode) };
+    let payload = MessagePayload { text: m.text, files, mode: Some(m.mode), via: None };
     let ev = user_event(BuiltinPayload::Message(payload))?.to(m.to);
     let ev = hub.emit(ev).await?;
     Ok(Json(EventPosted { event_id: ev.id }))
@@ -552,18 +555,7 @@ async fn answer_dialog(
         }
         None => (a.answer, None),
     };
-    let d = hub.store.answer_dialog(&id, &answer).await?;
-    let ev = user_event(BuiltinPayload::DialogAnswered(DialogAnsweredPayload {
-        dialog_id: d.id.clone(),
-        question: d.question.clone(),
-        answer,
-        group: None,
-        outcome: None,
-        values,
-        note: None,
-    }))?
-    .to(d.instance.clone());
-    hub.emit(ev).await?;
+    let d = crate::ops::answer_question(&hub, &id, answer, values).await?;
     Ok(Json(DialogAnswer { dialog: d }))
 }
 
@@ -690,8 +682,9 @@ async fn new_chat(
     user_only(&p)?;
     let def = c.definition.unwrap_or_else(|| "chat".into());
     let name = crate::router::new_instance(&hub, &def, None, None).await?;
-    let ev = user_event(BuiltinPayload::Message(MessagePayload { text: c.text, files: vec![], mode: None }))?
-        .to(name.clone());
+    let ev =
+        user_event(BuiltinPayload::Message(MessagePayload { text: c.text, files: vec![], mode: None, via: None }))?
+            .to(name.clone());
     hub.emit(ev).await?;
     Ok(Json(ChatCreated { instance: name }))
 }
@@ -992,6 +985,42 @@ async fn revert(
     user_only(&p)?;
     let head = crate::transactions::revert(&hub, &r.commit).await?;
     Ok(Json(Reverted { reverted: r.commit, commit: head }))
+}
+
+async fn channels(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<crate::channels::ChannelsView>> {
+    user_only(&p)?;
+    Ok(Json(crate::channels::view(&hub).await?))
+}
+
+async fn channel_code(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Json(n): Json<crate::channels::NewPairingCode>,
+) -> ApiResult<Json<crate::channels::PairingCode>> {
+    user_only(&p)?;
+    let target = match n.target.as_deref() {
+        None | Some("") => botler_core::FRONT_DOOR.to_string(),
+        Some(t) => hub
+            .store
+            .resolve_instance(t)
+            .await?
+            .map(|i| i.name)
+            .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, format!("no chat named {t}")))?,
+    };
+    let (code, expires_at) = crate::channels::create_code(&hub, &target).await?;
+    Ok(Json(crate::channels::PairingCode { code, target, expires_at }))
+}
+
+async fn revoke_binding(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::channels::BindingRevoked>> {
+    user_only(&p)?;
+    Ok(Json(crate::channels::BindingRevoked { revoked: hub.store.revoke_channel_binding(&id).await? }))
 }
 
 async fn pause(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<PauseState>> {

@@ -35,6 +35,7 @@ pub const BUILTIN: &[BuiltinEvent] = &[
                 "mode",
                 "from the user while you worked: `queue` (held until your turn ended) or `steer` (interrupting it)",
             ),
+            ("via", "from the user on a channel (Telegram, email, ...): the channel and the outside account"),
         ],
         follow_up: &[FollowUp {
             tool: "get_events",
@@ -405,6 +406,13 @@ pub fn render(event: &Event, prompt: Option<&str>) -> String {
     let is_user_text = event.kind == kinds::MESSAGE && event.provenance == Provenance::Trusted;
     match (is_user_text, event.payload.get("text").and_then(|t| t.as_str())) {
         (true, Some(text)) => {
+            if let Some(via) = event.payload.get("via") {
+                let channel = via.get("channel").and_then(|c| c.as_str()).unwrap_or("?");
+                out.push_str(&format!(
+                    "Sent by the user on channel `{channel}` (not the web app): your reply goes back there, so keep \
+                     it short and plain; questions you ask reach them there too.\n"
+                ));
+            }
             out.push('\n');
             out.push_str(text);
             out.push('\n');

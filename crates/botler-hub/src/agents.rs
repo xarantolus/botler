@@ -888,6 +888,9 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
 
 async fn turn_succeeded(hub: &Hub, agent: &LiveAgent) -> Result<()> {
     crate::turns::succeeded(hub, &agent.instance).await?;
+    if crate::channels::current(hub, &agent.instance).await?.is_some() {
+        crate::channels::turn_ended(hub, &agent.instance, &last_reply(agent).await).await?;
+    }
     notify_parent(hub, agent).await?;
     crate::handover::check(hub, agent).await
 }
@@ -898,6 +901,17 @@ async fn turn_succeeded(hub: &Hub, agent: &LiveAgent) -> Result<()> {
 pub(crate) async fn turn_start(hub: &Hub, agent: &LiveAgent) -> Result<Option<Delivery>> {
     let _delivering = agent.delivering.lock().await;
     Ok(hub.store.last_delivered(&agent.instance).await?)
+}
+
+/// The text of the agent's last reply (empty when pi cannot say).
+async fn last_reply(agent: &LiveAgent) -> String {
+    match agent.pi.command(json!({ "type": "get_last_assistant_text" })).await {
+        Ok(d) => d.get("text").and_then(|t| t.as_str()).unwrap_or("").to_owned(),
+        Err(e) => {
+            tracing::warn!(instance = %agent.instance, error = %e, "could not read last reply");
+            String::new()
+        }
+    }
 }
 
 /// Tell the agent that spawned this one that it ended its turn, with its final answer, unless
@@ -912,13 +926,7 @@ async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
         tracing::debug!(instance = %agent.instance, %parent, "turn ended by messaging the parent; no notice");
         return Ok(());
     }
-    let last_reply = match agent.pi.command(json!({ "type": "get_last_assistant_text" })).await {
-        Ok(d) => d.get("text").and_then(|t| t.as_str()).unwrap_or("").chars().take(4000).collect::<String>(),
-        Err(e) => {
-            tracing::warn!(instance = %agent.instance, error = %e, "could not read last reply");
-            String::new()
-        }
-    };
+    let last_reply: String = last_reply(agent).await.chars().take(4000).collect();
     let idle = BuiltinPayload::AgentIdle(AgentIdlePayload {
         instance: instance.name.clone(),
         title: instance.title.clone(),
@@ -1207,8 +1215,9 @@ async fn resume_turn(hub: &Hub, t: &botler_store::InterruptedTurn) -> Result<()>
          not have finished, or its result is missing. Check where you were (e.g. git status, files, running jobs) \
          and continue your task."
     );
-    let mut ev = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None }), Source::Hub)?
-        .to(t.instance.clone());
+    let mut ev =
+        builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None, via: None }), Source::Hub)?
+            .to(t.instance.clone());
     if let Some(d) = hub.store.last_delivered(&t.instance).await? {
         ev = ev.in_reply_to(&hub.store.event(&d.event_id).await?);
     }
@@ -1235,10 +1244,12 @@ pub(crate) fn broadcast_state(hub: &Hub, instance: &str, status: AgentStatus) {
 
 /// An urgent note to the front door (`botler`) from the hub.
 pub async fn alarm(hub: &Hub, text: &str) -> Result<()> {
-    let ev =
-        builtin(BuiltinPayload::Message(MessagePayload { text: text.into(), files: vec![], mode: None }), Source::Hub)?
-            .to(botler_core::FRONT_DOOR)
-            .urgent(true);
+    let ev = builtin(
+        BuiltinPayload::Message(MessagePayload { text: text.into(), files: vec![], mode: None, via: None }),
+        Source::Hub,
+    )?
+    .to(botler_core::FRONT_DOOR)
+    .urgent(true);
     hub.emit(ev).await?;
     Ok(())
 }

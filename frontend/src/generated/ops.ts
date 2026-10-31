@@ -2,6 +2,7 @@
 
 import type { AccessRequested } from "./AccessRequested";
 import type { AccessRevoked } from "./AccessRevoked";
+import type { Acked } from "./Acked";
 import type { ActionRequested } from "./ActionRequested";
 import type { AgentSpawned } from "./AgentSpawned";
 import type { AskUser } from "./AskUser";
@@ -11,6 +12,9 @@ import type { BotlerEvent } from "./BotlerEvent";
 import type { CancelRequest } from "./CancelRequest";
 import type { CancelTimer } from "./CancelTimer";
 import type { ChangePreview } from "./ChangePreview";
+import type { ChannelAck } from "./ChannelAck";
+import type { ChannelInbound } from "./ChannelInbound";
+import type { ChannelOutbox } from "./ChannelOutbox";
 import type { ChatForked } from "./ChatForked";
 import type { ChatTitled } from "./ChatTitled";
 import type { Chats } from "./Chats";
@@ -39,6 +43,7 @@ import type { HandoverReady } from "./HandoverReady";
 import type { HandoverRequested } from "./HandoverRequested";
 import type { Health } from "./Health";
 import type { HealthRecorded } from "./HealthRecorded";
+import type { Inbound } from "./Inbound";
 import type { Incident } from "./Incident";
 import type { IncidentResolved } from "./IncidentResolved";
 import type { InvokeAction } from "./InvokeAction";
@@ -62,6 +67,7 @@ import type { MemoryRead } from "./MemoryRead";
 import type { MemoryWrite } from "./MemoryWrite";
 import type { MemoryWritten } from "./MemoryWritten";
 import type { MessageSent } from "./MessageSent";
+import type { Outbox } from "./Outbox";
 import type { PreviewChange } from "./PreviewChange";
 import type { ProposalDetail } from "./ProposalDetail";
 import type { ProposeChange } from "./ProposeChange";
@@ -167,4 +173,7 @@ export interface Ops {
   collect_garbage: { input: CollectGarbage; output: Freed };
   run_job: { input: RunJob; output: JobStarted };
   restart_service: { input: RestartService; output: ServiceRestarted };
+  channel_inbound: { input: ChannelInbound; output: Inbound };
+  channel_outbox: { input: ChannelOutbox; output: Outbox };
+  channel_ack: { input: ChannelAck; output: Acked };
 }

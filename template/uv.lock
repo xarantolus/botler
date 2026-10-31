@@ -8,6 +8,7 @@ members = [
     "browser-example",
     "claude-session",
     "example",
+    "example-channel",
     "example-watcher",
     "shared",
     "web",
@@ -300,6 +301,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2.6" }]
+
+[[package]]
+name = "example-channel"
+version = "0.1.0"
+source = { editable = "jobs/example-channel" }
 
 [[package]]
 name = "example-watcher"

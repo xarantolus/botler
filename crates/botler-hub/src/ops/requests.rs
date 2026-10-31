@@ -151,6 +151,27 @@ pub struct AskUser {
     pub form: Option<serde_json::Value>,
 }
 
+/// Answer a question (or a visit request) and tell its chat.
+pub async fn answer_question(
+    hub: &Hub,
+    id: &str,
+    answer: String,
+    values: Option<serde_json::Value>,
+) -> Result<botler_store::Dialog, HubError> {
+    let d = hub.store.answer_dialog(id, &answer).await?;
+    let payload = botler_core::payloads::BuiltinPayload::DialogAnswered(botler_core::payloads::DialogAnsweredPayload {
+        dialog_id: d.id.clone(),
+        question: d.question.clone(),
+        answer,
+        group: None,
+        outcome: None,
+        values,
+        note: None,
+    });
+    hub.emit(crate::hub::builtin(payload, botler_core::Source::User)?.to(d.instance.clone())).await?;
+    Ok(d)
+}
+
 /// What a question dialog's `spec` holds.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QuestionSpec {

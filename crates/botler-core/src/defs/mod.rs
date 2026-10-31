@@ -865,6 +865,9 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
         if j.spec.serves_mcp && (j.spec.lifetime != Lifetime::Service || j.spec.env.port.is_none()) {
             l.err(&path, "`serves_mcp` needs a service (lifetime = \"service\") with a `port`");
         }
+        if j.spec.channel && j.spec.lifetime != Lifetime::Service {
+            l.err(&path, "`channel` needs a service (lifetime = \"service\"): it polls its outbox all the time");
+        }
         for p in &j.spec.env.publish {
             if p.host_port < 1024 {
                 l.err(

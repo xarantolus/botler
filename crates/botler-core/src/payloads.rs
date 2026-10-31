@@ -26,6 +26,17 @@ pub struct MessagePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mode: Option<SendMode>,
+    /// The user wrote it outside the web app, on a paired channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub via: Option<Via>,
+}
+
+/// Where a message from the user came from: a channel service and the outside account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct Via {
+    pub channel: String,
+    pub sender: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

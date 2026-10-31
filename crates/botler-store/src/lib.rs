@@ -4,6 +4,7 @@
 //! anything derivable (next fire times, rollups, search indexes) is recomputed, never stored.
 
 mod breakers;
+mod channels;
 mod deliveries;
 mod dialogs;
 mod events;
@@ -28,6 +29,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 
 pub use breakers::Breaker;
+pub use channels::{ChannelBinding, ChannelStranger, OutboxItem};
 pub use deliveries::{Delivery, DeliveryStatus};
 pub use dialogs::{Dialog, DialogKind, DialogStatus, NewDialog, Priority};
 pub use events::EventQuery;

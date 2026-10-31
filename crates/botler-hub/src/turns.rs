@@ -195,8 +195,11 @@ pub async fn sweep(hub: &Arc<Hub>, now: DateTime<Utc>) -> Result<Option<DateTime
             "The previous attempt failed with a transient provider error ({}). Continue where you left off.",
             r.error
         );
-        let mut ev = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None }), Source::Hub)?
-            .to(r.instance.clone());
+        let mut ev = builtin(
+            BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None, via: None }),
+            Source::Hub,
+        )?
+        .to(r.instance.clone());
         if let Some(id) = &r.event_id {
             ev = ev.in_reply_to(&hub.store.event(id).await?);
         }

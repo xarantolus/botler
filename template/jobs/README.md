@@ -25,6 +25,10 @@ its effects recorded instead of carried out (skill `background-service`). The fi
 a service needs the user's approval; `enabled = false` keeps a job defined but never run
 (`jobs/example-watcher/` is such a template).
 
+`channel = true` makes a service a channel: it carries the user's messages from Telegram, email
+and the like (skill `channels`, template `jobs/example-channel/`). Every change to a channel needs
+the user's approval.
+
 A job's image is built from the repo root, but the build context holds only `jobs/<name>/`,
 `packages/`, `tools/`, `connectors/`, `pyproject.toml` and `uv.lock` (at their repo paths, e.g.
 `COPY jobs/<name>/ ...`). The image is rebuilt only when one of those changes. `FROM

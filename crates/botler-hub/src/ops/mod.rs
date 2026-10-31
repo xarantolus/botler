@@ -5,6 +5,7 @@
 
 mod access;
 mod actions;
+mod channels;
 mod chats;
 mod incidents;
 mod lifecycle;
@@ -35,6 +36,7 @@ use ts_rs::TS;
 
 pub use access::*;
 pub use actions::*;
+pub use channels::*;
 pub use chats::*;
 pub use incidents::*;
 pub use lifecycle::*;
@@ -303,6 +305,9 @@ pub static OPS: &[OpSpec] = &[
     op::<CollectGarbage>(),
     op::<RunJob>(),
     op::<RestartService>(),
+    op::<ChannelInbound>(),
+    op::<ChannelOutbox>(),
+    op::<ChannelAck>(),
 ];
 
 /// The ops `caller` may call.

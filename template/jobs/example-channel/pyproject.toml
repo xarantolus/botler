@@ -1,0 +1,10 @@
+[project]
+name = "example-channel"
+version = "0.1.0"
+description = "Example channel service: messages between a spool directory and the hub."
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

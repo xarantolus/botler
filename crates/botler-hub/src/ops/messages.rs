@@ -99,6 +99,7 @@ impl Op for SendMessage {
                 text: self.text,
                 files: inbox,
                 mode: None,
+                via: None,
             }),
             caller.source(),
         )?
@@ -152,7 +153,10 @@ impl Op for AttachFiles {
         if self.files.is_empty() {
             return Err(OpError::BadRequest("name at least one file".into()));
         }
-        Ok(FilesAttached { files: agent_files(hub, caller, &self.files).await? })
+        let files = agent_files(hub, caller, &self.files).await?;
+        let names: Vec<String> = files.iter().map(|f| f.file.clone()).collect();
+        crate::channels::attached(hub, caller.agent("")?, &names).await?;
+        Ok(FilesAttached { files })
     }
 }
 

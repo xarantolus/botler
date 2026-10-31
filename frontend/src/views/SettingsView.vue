@@ -6,6 +6,7 @@ import type { TabsItem } from "@nuxt/ui";
 import { computed, onMounted, ref, shallowRef } from "vue";
 import { call } from "../api/client";
 import ViewPanel from "../components/common/ViewPanel.vue";
+import ChannelsPanel from "../components/settings/ChannelsPanel.vue";
 import ModelPicker from "../components/settings/ModelPicker.vue";
 import SchemaFields from "../components/settings/SchemaFields.vue";
 import TimeAgo from "../components/common/TimeAgo.vue";
@@ -25,6 +26,7 @@ const tabs: TabsItem[] = [
   { label: "Models", value: "models", icon: "i-lucide-cpu" },
   { label: "Agents", value: "agents", icon: "i-lucide-bot" },
   { label: "Deployment", value: "deployment", icon: "i-lucide-sliders-horizontal" },
+  { label: "Channels", value: "channels", icon: "i-lucide-radio-tower" },
 ];
 
 async function load() {
@@ -241,6 +243,8 @@ function setPush(on: boolean) {
           </div>
         </UCard>
       </template>
+
+      <ChannelsPanel v-else-if="tab === 'channels'" />
 
       <template v-else>
         <UCard>

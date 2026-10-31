@@ -73,7 +73,7 @@ pub async fn due(hub: &Hub, agent: &LiveAgent, def: &AgentDef) -> Result<bool> {
 
 /// Ask `agent` to save what is worth keeping (delivered by the dispatcher like any message).
 pub async fn send(hub: &Hub, agent: &LiveAgent, now: DateTime<Utc>) -> Result<()> {
-    let payload = BuiltinPayload::Message(MessagePayload { text: PROMPT.into(), files: vec![], mode: None });
+    let payload = BuiltinPayload::Message(MessagePayload { text: PROMPT.into(), files: vec![], mode: None, via: None });
     let ev = builtin(payload, Source::Hub)?.to(agent.instance.clone());
     hub.store.append_event(&ev).await?;
     hub.store.mark_routed(&ev.id.to_string()).await?;

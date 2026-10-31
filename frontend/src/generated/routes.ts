@@ -4,10 +4,12 @@ import type { AccessRevoked } from "./AccessRevoked";
 import type { Answer } from "./Answer";
 import type { ArchiveOutcome } from "./ArchiveOutcome";
 import type { ArchiveRequest } from "./ArchiveRequest";
+import type { BindingRevoked } from "./BindingRevoked";
 import type { BotlerEvent } from "./BotlerEvent";
 import type { BreakerCleared } from "./BreakerCleared";
 import type { Cancelled } from "./Cancelled";
 import type { CatalogView } from "./CatalogView";
+import type { ChannelsView } from "./ChannelsView";
 import type { ChatCreated } from "./ChatCreated";
 import type { ChatForked } from "./ChatForked";
 import type { ChatRestored } from "./ChatRestored";
@@ -45,6 +47,8 @@ import type { MemoryRead } from "./MemoryRead";
 import type { MemoryWrite } from "./MemoryWrite";
 import type { MemoryWritten } from "./MemoryWritten";
 import type { NewChat } from "./NewChat";
+import type { NewPairingCode } from "./NewPairingCode";
+import type { PairingCode } from "./PairingCode";
 import type { PauseState } from "./PauseState";
 import type { Proposal } from "./Proposal";
 import type { ProposalDetail } from "./ProposalDetail";
@@ -120,6 +124,9 @@ export interface Routes {
   settings: { method: "GET"; path: "/api/v1/settings"; params: Record<string, never>; query: never; body: never; response: Settings };
   save_settings: { method: "PUT"; path: "/api/v1/settings"; params: Record<string, never>; query: never; body: SettingsEdit; response: SettingsSaved };
   models: { method: "GET"; path: "/api/v1/models"; params: Record<string, never>; query: never; body: never; response: CatalogView };
+  channels: { method: "GET"; path: "/api/v1/channels"; params: Record<string, never>; query: never; body: never; response: ChannelsView };
+  channel_code: { method: "POST"; path: "/api/v1/channels/codes"; params: Record<string, never>; query: never; body: NewPairingCode; response: PairingCode };
+  revoke_binding: { method: "DELETE"; path: "/api/v1/channels/bindings/{id}"; params: { id: string }; query: never; body: never; response: BindingRevoked };
   run_logs: { method: "POST"; path: "/api/v1/ops/get_run_logs"; params: Record<string, never>; query: never; body: GetRunLogs; response: RunLogs };
   proposal: { method: "POST"; path: "/api/v1/ops/get_proposal"; params: Record<string, never>; query: never; body: GetProposal; response: ProposalDetail };
   memory_list: { method: "POST"; path: "/api/v1/ops/memory_list"; params: Record<string, never>; query: never; body: MemoryList; response: Array<MemoryEntry> };
@@ -176,6 +183,9 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   settings: { method: "GET", path: "/api/v1/settings" },
   save_settings: { method: "PUT", path: "/api/v1/settings" },
   models: { method: "GET", path: "/api/v1/models" },
+  channels: { method: "GET", path: "/api/v1/channels" },
+  channel_code: { method: "POST", path: "/api/v1/channels/codes" },
+  revoke_binding: { method: "DELETE", path: "/api/v1/channels/bindings/{id}" },
   run_logs: { method: "POST", path: "/api/v1/ops/get_run_logs" },
   proposal: { method: "POST", path: "/api/v1/ops/get_proposal" },
   memory_list: { method: "POST", path: "/api/v1/ops/memory_list" },

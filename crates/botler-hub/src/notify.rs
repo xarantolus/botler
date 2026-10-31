@@ -39,6 +39,9 @@ pub async fn dialog_opened(hub: &Hub, d: &Dialog) {
     if hub.live.send(notice).is_err() {
         tracing::trace!("no live viewers");
     }
+    if let Err(e) = crate::channels::dialog_opened(hub, d).await {
+        tracing::error!(dialog = %d.id, error = %e, "could not tell the channel about the request");
+    }
     if d.priority == Priority::Blocking
         && let Some(push) = hub.applied().await.defs.instance.push.clone()
     {

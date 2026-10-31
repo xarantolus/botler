@@ -7,6 +7,7 @@ pub mod api;
 pub mod assets;
 pub mod auth;
 pub mod bindings;
+pub mod channels;
 pub mod checkpoint;
 pub mod config;
 pub mod control;

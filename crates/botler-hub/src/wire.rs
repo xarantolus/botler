@@ -441,4 +441,7 @@ routes! {
     settings: GET "/api/v1/settings" => crate::settings::Settings;
     save_settings: PUT "/api/v1/settings", body: crate::settings::SettingsEdit => crate::settings::SettingsSaved;
     models: GET "/api/v1/models" => crate::model_catalog::CatalogView;
+    channels: GET "/api/v1/channels" => crate::channels::ChannelsView;
+    channel_code: POST "/api/v1/channels/codes", body: crate::channels::NewPairingCode => crate::channels::PairingCode;
+    revoke_binding: DELETE "/api/v1/channels/bindings/{id}" => crate::channels::BindingRevoked;
 }

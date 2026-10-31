@@ -482,6 +482,11 @@ pub struct Job {
     /// (`request_access("service:<name>")`) gets its tools, not only the network path to it.
     #[serde(default)]
     pub serves_mcp: bool,
+    /// Services: a channel that carries the user's messages from outside (Telegram, email, ...).
+    /// It calls `channel_inbound`, `channel_outbox` and `channel_ack`; senders count as the user
+    /// once paired. It can speak as the user, so every change to it asks the user.
+    #[serde(default)]
+    pub channel: bool,
     /// Actions: JSON Schema of the arguments object `invoke_action` must pass.
     #[serde(default)]
     pub args: Option<serde_json::Value>,

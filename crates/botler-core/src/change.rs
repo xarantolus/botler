@@ -91,6 +91,11 @@ pub enum Escalation {
     ActionChanged {
         action: String,
     },
+    /// A channel (a service that speaks as the user) is new, or its code or anything its image is
+    /// built from changed.
+    ChannelChanged {
+        job: String,
+    },
     /// The protection policy itself could not be evaluated; treated as touching everything.
     InvalidPolicy {
         detail: String,
@@ -128,6 +133,9 @@ impl Escalation {
             Self::GrantAuto { resource } => format!("lets any chat get `{resource}` without asking you"),
             Self::ActionChanged { action } => {
                 format!("adds or changes the code of action `{action}`, which may use hub-held secrets")
+            }
+            Self::ChannelChanged { job } => {
+                format!("adds or changes channel `{job}`, which carries messages as you from outside")
             }
             Self::InvalidPolicy { detail } => {
                 format!("cannot evaluate protected paths ({detail}); treating all paths as protected")
@@ -365,6 +373,14 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         let touched = changed_paths.iter().any(|p| inputs.iter().any(|i| p == i || p.starts_with(&format!("{i}/"))));
         if !was_action || touched {
             esc.insert(Escalation::ActionChanged { action: j.name.clone() });
+        }
+    }
+    for j in new.jobs.values().filter(|j| j.spec.channel) {
+        let was_channel = old.jobs.get(&j.name).is_some_and(|o| o.spec.channel);
+        let inputs = crate::defs::job_inputs(&j.name);
+        let touched = changed_paths.iter().any(|p| inputs.iter().any(|i| p == i || p.starts_with(&format!("{i}/"))));
+        if !was_channel || touched {
+            esc.insert(Escalation::ChannelChanged { job: j.name.clone() });
         }
     }
 
@@ -1050,6 +1066,29 @@ mod tests {
         assert_eq!(changed(&["packages/shared/mail.py"]).len(), 1, "shared code it is built from");
         assert!(changed(&["jobs/other/run.py", "agents/main/AGENTS.md"]).is_empty());
         assert!(changed(&["jobs/sender/x.py"]).is_empty(), "a prefix is not the directory");
+    }
+
+    /// A channel speaks as the user: every change to it asks, not only the first.
+    #[test]
+    fn channel_changes_always_ask_the_user() {
+        let channel = "lifetime = \"service\"\ncommand = [\"x\"]\nchannel = true\n";
+        let with = base().with("jobs/tg/job.toml", channel).with("jobs/tg/Dockerfile", "FROM x");
+        let new = defs(&with);
+        let changed = |paths: &[&str]| -> Vec<Escalation> {
+            let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+            preview(&new, &new, &paths, Utc::now())
+                .escalations
+                .into_iter()
+                .filter(|e| matches!(e, Escalation::ChannelChanged { .. }))
+                .collect()
+        };
+        let added = preview(&defs(&base()), &new, &["jobs/tg/job.toml".into()], Utc::now());
+        assert!(added.escalations.contains(&Escalation::ChannelChanged { job: "tg".into() }));
+        assert_eq!(changed(&["jobs/tg/bot.py"]), vec![Escalation::ChannelChanged { job: "tg".into() }]);
+        assert!(changed(&["jobs/other/x.py"]).is_empty());
+        let oneshot =
+            base().with("jobs/tg/job.toml", "command = [\"x\"]\nchannel = true\n").with("jobs/tg/Dockerfile", "FROM x");
+        assert!(load(&oneshot).errors().any(|d| d.message.contains("`channel` needs a service")));
     }
 
     #[test]

@@ -1,0 +1,10 @@
+version = 1
+description = "Example channel: carries messages between a spool directory (a stand-in for Telegram, email, ...) and the hub. A template for real channels (see pi/skills/channels); disabled, so it never runs unless enabled."
+lifetime = "service"
+# Not deployed: `trial_run` still runs it. A channel speaks as the user: every change asks the user.
+enabled = false
+channel = true
+command = ["/app/.venv/bin/python", "-m", "example_channel"]
+
+[health]
+heartbeat = "2m"

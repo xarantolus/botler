@@ -492,3 +492,27 @@ def run_job(*, job: str) -> dict[str, Any]:
 def restart_service(*, service: str) -> dict[str, Any]:
     """Stop a service; the reconciler starts it again right away."""
     return call("restart_service", {"service": service})
+
+
+def channel_inbound(*, sender: str, text: str, files: list[Any] | None = None, reply_ref: str | None = None) -> dict[str, Any]:
+    """Channel services: a message arrived from `sender`. The hub decides whether that is the user (paired with `pair <code>`) and where it goes; unpaired senders are ignored and you send them nothing.
+
+    Args:
+        sender: The outside account, stable across messages (a Telegram chat id, an email address, ...).
+        reply_ref: The outbox item this message replies to, if the protocol says (answers that question).
+    """
+    return call("channel_inbound", {"sender": sender, "text": text, "files": files, "reply_ref": reply_ref})
+
+
+def channel_outbox(*, wait_seconds: int | None = None) -> dict[str, Any]:
+    """Channel services: what to send, waiting up to `wait_seconds` for something (a long poll; no open port needed). Send each message, then `channel_ack(id)`; unacknowledged messages come again.
+
+    Args:
+        wait_seconds: Wait up to this many seconds (at most 50) for something to send. 0: return at once.
+    """
+    return call("channel_outbox", {"wait_seconds": wait_seconds})
+
+
+def channel_ack(*, id: str) -> dict[str, Any]:
+    """Channel services: an outbox message was sent; it will not come again."""
+    return call("channel_ack", {"id": id})

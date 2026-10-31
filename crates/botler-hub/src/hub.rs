@@ -217,9 +217,12 @@ impl Hub {
             )
         };
         tracing::error!(%commit, running = %applied.commit, skipped = ?applied.skipped, "definitions do not load; starting degraded");
-        let ev = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None }), Source::Hub)?
-            .to(botler_core::FRONT_DOOR)
-            .urgent(true);
+        let ev = builtin(
+            BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None, via: None }),
+            Source::Hub,
+        )?
+        .to(botler_core::FRONT_DOOR)
+        .urgent(true);
         store.append_event(&ev).await?;
         Ok(applied)
     }

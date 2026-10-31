@@ -9,4 +9,4 @@ export type Escalation = { "kind": "protected_path", path: string, } | { "kind":
 /**
  * e.g. `your network at 0.0.0.0:8080`.
  */
-reach: string, } | { "kind": "mcp_stdio_added", agent: string, server: string, command: string, } | { "kind": "mount_defined", mount: string, } | { "kind": "mount_granted", mount: string, to: string, mode: MountMode, } | { "kind": "grant_auto", resource: string, } | { "kind": "action_changed", action: string, } | { "kind": "invalid_policy", detail: string, };
+reach: string, } | { "kind": "mcp_stdio_added", agent: string, server: string, command: string, } | { "kind": "mount_defined", mount: string, } | { "kind": "mount_granted", mount: string, to: string, mode: MountMode, } | { "kind": "grant_auto", resource: string, } | { "kind": "action_changed", action: string, } | { "kind": "channel_changed", job: string, } | { "kind": "invalid_policy", detail: string, };
