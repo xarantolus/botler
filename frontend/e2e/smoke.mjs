@@ -67,7 +67,10 @@ const PDF = Buffer.from("%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 
 const textOf = (m) => (typeof m?.content === "string" ? m.content : (m?.content ?? []).map((p) => p.text ?? "").join(""));
 
 function decide(messages) {
-  const last = messages.at(-1);
+  // The image `read` returned follows its tool message as a user message.
+  const lastCall = messages.findLast((m) => m.role === "assistant")?.tool_calls?.[0]?.function?.name;
+  const afterRead = lastCall === "read" && messages.at(-1)?.role === "user" && messages.at(-2)?.role === "tool";
+  const last = afterRead ? messages.at(-2) : messages.at(-1);
   if (last?.role === "tool") {
     const call = messages.findLast((m) => m.role === "assistant")?.tool_calls?.[0];
     if (call?.function?.name === "bash" && textOf(last).includes("e2e-commit")) {
@@ -217,7 +220,10 @@ try {
   const size = await shown.locator("[data-file=image] img").evaluate((img) => [img.naturalWidth, img.naturalHeight]);
   if (size[0] !== 64 || size[1] !== 40) throw new Error(`the picture did not load: ${size}`);
   const [tab] = await Promise.all([page.waitForEvent("popup"), pdf.click()]);
-  await tab.waitForURL(/^blob:/, { timeout: 10_000 });
+  // Headless Chromium has no PDF viewer: it downloads the blob, which aborts the navigation.
+  await tab.waitForURL(/^blob:/, { timeout: 10_000 }).catch((e) => {
+    if (!String(e).includes("ERR_ABORTED")) throw e;
+  });
   await tab.close();
   // The session view references the picture; its bytes stay in the session file.
   const view = await (await fetch(`${url}/api/v1/sessions/botler`, { headers: { authorization: `Bearer ${token}` } })).json();
@@ -268,7 +274,7 @@ try {
   if (process.env.BOTLER_E2E_KEEP) {
     console.log(`kept ${data}`);
   } else {
-    const images = execFileSync("podman", ["images", "--filter", `label=botler.data=${data}`, "--format", "{{.Repository}}:{{.Tag}}"], { encoding: "utf8" })
+    const images = execFileSync("podman", ["images", "--filter", `label=botler.data=${data}`, "--format", '{{if eq .Repository "<none>"}}{{.ID}}{{else}}{{.Repository}}:{{.Tag}}{{end}}'], { encoding: "utf8" })
       .split("\n")
       .filter(Boolean);
     if (images.length) execFileSync("podman", ["rmi", ...images], { stdio: "inherit" });

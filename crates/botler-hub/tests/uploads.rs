@@ -223,6 +223,44 @@ async fn agents_send_files_from_their_home() {
     assert_eq!(*message_text, None, "only the user's own text replaces the delivered text");
 }
 
+/// Agent to agent: a file one chat sends reaches the other's container, read-only at the path its
+/// delivery lists, also when the recipient was not running (here: not even started yet).
+#[tokio::test]
+async fn files_sent_between_agents_reach_the_recipients_container() {
+    let e = common::env().await;
+    e.hub.store.set_secret(&e.hub.secret_key, "OPENROUTER_API_KEY", "sk").await.unwrap();
+    let sender = botler_hub::router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let me = Caller {
+        principal: Principal::Agent { instance: sender.clone(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    let home = e.hub.paths.home(&sender);
+    std::fs::create_dir_all(home.join("out")).unwrap();
+    std::fs::write(home.join("out/data.csv"), b"a,b\n1,2\n").unwrap();
+    let sent = ops::call(
+        &e.hub,
+        &me,
+        "send_message",
+        json!({"to": "botler", "text": "the numbers", "files": ["out/data.csv"]}),
+    )
+    .await
+    .unwrap();
+    let path = format!("/inbox/files/{}", sent["files"][0]["file"].as_str().unwrap());
+
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    let name = agents::container_name(&e.hub, "botler");
+    let c = &e.fake.containers()[&name];
+    let inbox = e.hub.paths.inbox("botler");
+    assert!(c.spec.mounts.iter().any(|m| matches!(m,
+        Mount::Bind { src, dst, read_only: true } if dst == "/inbox/files" && *src == inbox)));
+    let prompt = e.fake.prompts(&name).join("\n");
+    assert!(prompt.contains("Attached files") && prompt.contains(&path), "{prompt}");
+    let host = inbox.join(path.strip_prefix("/inbox/files/").unwrap());
+    assert_eq!(std::fs::read(host).unwrap(), b"a,b\n1,2\n");
+}
+
 #[tokio::test]
 async fn image_input_reaches_models_json() {
     let e = common::env().await;
