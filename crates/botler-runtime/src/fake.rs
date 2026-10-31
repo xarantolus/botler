@@ -237,6 +237,13 @@ impl Containers for Fake {
         }
     }
 
+    async fn image_size(&self, tag: &str) -> Result<u64> {
+        match self.lock().images.contains_key(tag) {
+            true => Ok(1 << 20),
+            false => Err(ContainerError::NotFound(tag.into())),
+        }
+    }
+
     async fn run_detached(&self, spec: &ContainerSpec) -> Result<String> {
         Self::check_mounts(spec)?;
         let mut st = self.lock();
@@ -496,7 +503,11 @@ impl Fake {
                 let text = self.lock().last_reply.get(name).cloned().unwrap_or_else(|| "fake reply".into());
                 vec![ok(json!({"text": text}))]
             }
-            "abort" => vec![ok(Value::Null)],
+            // Like pi: aborting ends a running (held) turn; when idle it does nothing.
+            "abort" => match self.lock().busy.remove(name) {
+                true => vec![ok(Value::Null), json!({"type": "agent_settled"})],
+                false => vec![ok(Value::Null)],
+            },
             "compact" => {
                 *self.lock().compactions.entry(instance.into()).or_default() += 1;
                 vec![ok(json!({"summary": "fake summary"}))]

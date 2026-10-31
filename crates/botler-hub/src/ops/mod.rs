@@ -7,10 +7,13 @@ mod access;
 mod actions;
 mod chats;
 mod incidents;
+mod lifecycle;
 mod messages;
 mod proposals;
 mod requests;
+mod runnables;
 mod state;
+mod storage;
 mod subscriptions;
 mod timers;
 mod trial;
@@ -33,10 +36,13 @@ pub use access::*;
 pub use actions::*;
 pub use chats::*;
 pub use incidents::*;
+pub use lifecycle::*;
 pub use messages::*;
 pub use proposals::*;
 pub use requests::*;
+pub use runnables::*;
 pub use state::*;
+pub use storage::*;
 pub use subscriptions::*;
 pub use timers::*;
 pub use trial::*;
@@ -55,6 +61,9 @@ pub enum OpError {
     Forbidden(String),
     #[error("unknown operation {0}")]
     Unknown(String),
+    /// Refused because of what is happening now (e.g. the job is still running).
+    #[error("{0}")]
+    Conflict(String),
     /// The event was rejected; the message says what to fix.
     #[error("{0}")]
     InvalidEvent(String),
@@ -145,6 +154,8 @@ impl Caller {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Who {
     Everyone,
+    /// Only the user.
+    User,
     /// The user and agents, not jobs or services.
     UserAndAgents,
     /// The user and runs: the callers without a memory mount.
@@ -162,6 +173,7 @@ impl Who {
         let run = matches!(c.principal, Principal::Run { .. });
         match self {
             Self::Everyone => true,
+            Self::User => matches!(c.principal, Principal::User),
             Self::UserAndAgents => !run,
             Self::UserAndRuns => !matches!(c.principal, Principal::Agent { .. }),
             Self::Runs => run,
@@ -252,6 +264,7 @@ pub static OPS: &[OpSpec] = &[
     op::<ListRequests>(),
     op::<CancelRequest>(),
     op::<ArchiveReady>(),
+    op::<StopChat>(),
     op::<ListEventTypes>(),
     op::<Subscribe>(),
     op::<Unsubscribe>(),
@@ -275,6 +288,12 @@ pub static OPS: &[OpSpec] = &[
     op::<StateGet>(),
     op::<StateSet>(),
     op::<health::Health>(),
+    op::<StorageUsage>(),
+    op::<ClearChatCaches>(),
+    op::<DeleteChat>(),
+    op::<CollectGarbage>(),
+    op::<RunJob>(),
+    op::<RestartService>(),
 ];
 
 /// The ops `caller` may call.

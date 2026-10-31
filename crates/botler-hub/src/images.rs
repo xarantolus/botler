@@ -178,7 +178,7 @@ pub async fn ensure(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<String> 
     Ok(tag)
 }
 
-fn owner(hub: &Hub) -> String {
+pub fn owner(hub: &Hub) -> String {
     crate::config::path_str(&hub.paths.root)
 }
 

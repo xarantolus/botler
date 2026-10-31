@@ -67,6 +67,12 @@ impl LiveAgent {
         self.busy.load(Ordering::SeqCst)
     }
 
+    /// Being stopped: its container is on the way out, so nothing more is delivered to it (the
+    /// exit wakes the dispatcher, which delivers to a fresh container instead).
+    pub fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
+    }
+
     fn touch(&self) {
         *self.last_active.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Utc::now();
     }
@@ -162,7 +168,7 @@ pub async fn dispatch_pending(hub: &Arc<Hub>) -> Result<()> {
     }
     for (name, wakes) in hub.store.instances_with_pending().await? {
         // Notes alone never wake an agent; they ride along with whatever wakes it next.
-        if !wakes && hub.agents.get(&name).await.is_none() {
+        if !wakes && hub.agents.get(&name).await.is_none_or(|a| a.stopping()) {
             continue;
         }
         if let Err(e) = deliver_to(hub, &name).await {
@@ -175,11 +181,14 @@ pub async fn dispatch_pending(hub: &Arc<Hub>) -> Result<()> {
 async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
     let instance = hub.store.instance(name).await?;
     if instance.state == InstanceState::Archived {
-        hub.store.restore_instance(name).await?;
+        crate::restore::restore(hub, name, false).await?;
     }
     if let Some(b) = hub.store.breaker(&format!("instance:{name}")).await? {
         tracing::debug!(instance = %name, reason = %b.reason, "instance paused by breaker; deliveries wait");
         return Ok(());
+    }
+    if hub.agents.get(name).await.is_some_and(|a| a.stopping()) {
+        return Ok(()); // delivered to its next container once this one has exited
     }
     if let Some(agent) = hub.agents.get(name).await
         && drifted(hub, &agent).await?
@@ -479,6 +488,7 @@ pub fn home_dir(hub: &Hub, instance: &Instance, env: &Environment) -> std::path:
 }
 
 async fn prepare_home(hub: &Hub, instance: &Instance, def: &AgentDef) -> Result<()> {
+    crate::storage::unpack_home(hub, &instance.name).await?;
     let home = home_dir(hub, instance, &def.spec.env);
     tokio::fs::create_dir_all(&home).await?;
     // Before homes, `workspace = "volume"` agents had a private directory at `/workspace`. The
@@ -872,6 +882,14 @@ async fn watch_exit(
         }
     };
     let deliberate = agent.stopping.load(Ordering::SeqCst);
+    // Idle or crashed, every instance only goes to sleep: it is woken by its next message with
+    // its session and workspace intact. Ending a chat is an explicit act (archiving). Recorded
+    // while it is still listed as live (and so not woken again), so that no longer being live
+    // always means its sleep is recorded.
+    let state = InstanceState::Dormant;
+    if let Err(e) = hub.store.set_instance_state(&agent.instance, state, None).await {
+        tracing::error!(instance = %agent.instance, error = %e, "could not record agent exit");
+    }
     {
         let mut live = hub.agents.live.lock().await;
         if live.get(&agent.instance).is_some_and(|a| Arc::ptr_eq(a, &agent)) {
@@ -884,12 +902,6 @@ async fn watch_exit(
         if wakes.get(&agent.instance).is_some_and(|w| *w == agent.wake) {
             wakes.remove(&agent.instance);
         }
-    }
-    // Idle or crashed, every instance only goes to sleep: it is woken by its next message with
-    // its session and workspace intact. Ending a chat is an explicit act (archiving).
-    let state = InstanceState::Dormant;
-    if let Err(e) = hub.store.set_instance_state(&agent.instance, state, None).await {
-        tracing::error!(instance = %agent.instance, error = %e, "could not record agent exit");
     }
     // A scheduled retry or a failed turn stays visible while it sleeps.
     let status = hub.agents.phase(&agent.instance).await.map_or(AgentStatus::Dormant, AgentStatus::from);

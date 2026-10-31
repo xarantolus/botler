@@ -170,7 +170,10 @@ async fn published_ports_are_mapped_and_a_taken_port_is_an_incident() {
     assert_eq!(c.spec.ports[0].bind, "0.0.0.0");
     assert_eq!((c.spec.ports[0].host_port, c.spec.ports[0].port), (18080, 8000));
     let status = services::status(&a.hub).await.unwrap();
-    assert!(status[0].running && status[0].published[0].url.ends_with(":18080"), "{status:?}");
+    assert!(
+        status[0].state == botler_hub::wire::ServiceState::Running && status[0].published[0].url.ends_with(":18080"),
+        "{status:?}"
+    );
 
     let failed = current(&b).await;
     assert_eq!(failed.status, RunStatus::Failed);

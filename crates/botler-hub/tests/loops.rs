@@ -46,6 +46,17 @@ async fn awake_chat(e: &common::Env) -> (String, Caller) {
     (name.clone(), caller(e, &name).await)
 }
 
+/// Wait until `name`'s container has exited and the hub has seen it (stopping is asynchronous).
+async fn exited(e: &common::Env, name: &str) {
+    for _ in 0..200 {
+        if e.hub.agents.get(name).await.is_none() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("{name} did not exit");
+}
+
 async fn caller(e: &common::Env, name: &str) -> Caller {
     let wake = e.hub.agents.get(name).await.expect("awake").wake.clone();
     Caller::resolve(&e.hub, Principal::Agent { instance: name.into(), wake }).await.unwrap()
@@ -142,13 +153,7 @@ async fn acknowledgements_do_not_wake_and_ride_along_with_the_next_message() {
 
     // Sleeping recipient: the note waits; nothing starts the container.
     agents::stop_all(&e.hub).await;
-    // The exit is recorded by the agent's watcher task in its own time.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while e.hub.store.instance(&b).await.unwrap().state != InstanceState::Dormant
-        && std::time::Instant::now() < deadline
-    {
-        settle().await;
-    }
+    exited(&e, &b).await;
     assert_eq!(e.hub.store.instance(&b).await.unwrap().state, InstanceState::Dormant);
     let ca = {
         user_says(&e, &a, "wake up").await;
@@ -229,17 +234,20 @@ async fn a_turn_ending_with_a_message_to_the_parent_sends_no_notice() {
     settle().await;
     e.fake.set_last_reply(&container, "Docs written in docs/parser.md.");
     assert!(e.fake.pi_event(&container, json!({"type": "agent_settled"})));
-    // The pump records the end of the turn in its own time: poll for the notice.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let idle = loop {
-        settle().await;
-        e.route().await;
-        let q = EventQuery { kind: Some(kinds::AGENT_IDLE.into()), limit: 5, ..Default::default() };
-        let idle = e.hub.store.events(&q).await.unwrap();
-        if !idle.is_empty() || std::time::Instant::now() > deadline {
-            break idle;
+    // The end of the turn is handled asynchronously (the pump task): wait for its notice.
+    for _ in 0..200 {
+        if idle_notices(&e).await > 0 {
+            break;
         }
-    };
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    e.route().await;
+    let idle = e
+        .hub
+        .store
+        .events(&EventQuery { kind: Some(kinds::AGENT_IDLE.into()), limit: 5, ..Default::default() })
+        .await
+        .unwrap();
     assert_eq!(idle.len(), 1);
     assert_eq!(idle[0].to.as_deref(), Some(parent.as_str()));
     assert_eq!(idle[0].payload["last_reply"], "Docs written in docs/parser.md.");

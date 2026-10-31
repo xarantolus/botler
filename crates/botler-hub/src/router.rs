@@ -93,9 +93,18 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
             };
             // Messaging an archived chat restores it: archiving hides, it never locks away. A
             // note or a held message does not.
+            let mut held = held;
             if instance.state == InstanceState::Archived && !quiet && held.is_none() {
                 tracing::info!(instance = %instance.name, "restoring archived chat for a new message");
-                hub.store.restore_instance(&instance.name).await?;
+                match crate::restore::restore(hub, &instance.name, false).await {
+                    Ok(_) => {}
+                    // Held until the user restores it as a generic chat (or deletes it).
+                    Err(e @ HubError::DefinitionGone { .. }) => {
+                        tracing::warn!(error = %e, "cannot restore for a new message; holding it");
+                        held = Some(crate::restore::held_subject(&instance.name));
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             if let Some(subject) = &held {
                 tracing::info!(event = %ev.id, %subject, "holding a message on a paused pair");
@@ -200,6 +209,20 @@ pub async fn send_task(
     };
     let prompt = if event.is_some() { task } else { None };
     hub.store.enqueue_delivery(&ev.id.to_string(), name, trigger, prompt).await?;
+    hub.dispatch_notify.notify_one();
+    Ok(())
+}
+
+/// Journal a built-in event for `to` and queue it as a quiet note: added to its session without a
+/// turn, read with whatever wakes it next.
+pub async fn note(hub: &Hub, to: &str, payload: BuiltinPayload) -> Result<()> {
+    let ev = builtin(payload, Source::Hub)?.to(to);
+    hub.store.append_event(&ev).await?;
+    hub.store.mark_routed(&ev.id.to_string()).await?;
+    hub.store.enqueue_delivery_with(&ev.id.to_string(), to, None, None, true, None).await?;
+    if hub.live.send(crate::hub::Live::Event { event: ev }).is_err() {
+        tracing::trace!("no live viewers");
+    }
     hub.dispatch_notify.notify_one();
     Ok(())
 }

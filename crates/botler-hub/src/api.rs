@@ -10,11 +10,9 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, post, put};
 use axum::{Extension, Json, Router};
-use botler_core::payloads::{
-    ArchiveRequestedPayload, BuiltinPayload, DialogAnsweredPayload, MessagePayload, SecretsOutcome, SendMode,
-};
+use botler_core::payloads::{BuiltinPayload, DialogAnsweredPayload, MessagePayload, SecretsOutcome, SendMode};
 use botler_core::{Event, Source};
-use botler_store::{ArchiveRecord, DialogStatus, EventQuery, Incident, Instance, Proposal, Run};
+use botler_store::{DialogStatus, EventQuery, Incident, Instance, Proposal, Run};
 use chrono::Utc;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
@@ -68,6 +66,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/chats/{instance}/archive", post(archive_chat))
         .route("/api/v1/chats/{instance}/restore", post(restore_chat))
         .route("/api/v1/runs", get(runs))
+        .route("/api/v1/system", get(system))
         .route("/api/v1/incidents", get(incidents))
         .route("/api/v1/secrets", get(secrets))
         .route("/api/v1/secrets/{name}", put(set_secret))
@@ -138,6 +137,7 @@ impl From<OpError> for ApiError {
             OpError::BadRequest(_) => StatusCode::BAD_REQUEST,
             OpError::Forbidden(_) => StatusCode::FORBIDDEN,
             OpError::Unknown(_) => StatusCode::NOT_FOUND,
+            OpError::Conflict(_) => StatusCode::CONFLICT,
             OpError::InvalidEvent(_) => StatusCode::UNPROCESSABLE_ENTITY,
             OpError::Hub(h) => return h.into(),
         };
@@ -155,6 +155,7 @@ impl From<&HubError> for ApiError {
                 botler_store::Error::DialogClosed { .. } | botler_store::Error::AnswerNotAllowed { .. },
             ) => StatusCode::CONFLICT,
             HubError::Paused => StatusCode::SERVICE_UNAVAILABLE,
+            HubError::DefinitionGone { .. } => StatusCode::CONFLICT,
             HubError::Memory(m) => {
                 use crate::memory::MemoryError as M;
                 match m {
@@ -214,6 +215,7 @@ async fn op(
 async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
     let applied = hub.applied().await;
     let info = hub.containers.info();
+    let services = crate::services::status(&hub).await?;
     Ok(Json(HubStatus {
         version: env!("CARGO_PKG_VERSION").into(),
         commit: applied.commit.clone(),
@@ -224,7 +226,8 @@ async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
         open_dialogs: hub.store.open_dialogs().await?.len(),
         open_incidents: hub.store.open_incidents().await?.len(),
         breakers: hub.store.breakers().await?,
-        services: crate::services::status(&hub).await?,
+        attention: crate::system::attention(&hub, &services).await?,
+        services,
     }))
 }
 
@@ -593,26 +596,14 @@ async fn archive_chat(
         return Err(ApiError(StatusCode::CONFLICT, format!("{} is always on and cannot be archived", inst.name)));
     }
     if req.force {
-        let report = ArchiveRecord {
-            confirmed_by_agent: false,
-            forced: true,
-            reason: req.reason,
-            report: None,
-            handed_to: None,
-            at: Utc::now(),
-        };
-        hub.store.archive_instance(&inst.name, &report).await?;
-        crate::agents::stop_after_reply(&hub, &inst.name).await;
+        crate::storage::force_archive(&hub, &inst.name, req.reason).await?;
         return Ok(Json(ArchiveOutcome {
             instance: inst.name,
             archived: true,
             note: "Archived without the agent's handover.".into(),
         }));
     }
-    hub.store.request_archive(&inst.name).await?;
-    let ev = user_event(BuiltinPayload::ArchiveRequested(ArchiveRequestedPayload { reason: req.reason }))?
-        .to(inst.name.clone());
-    hub.emit(ev).await?;
+    crate::storage::request_archive(&hub, &inst.name, req.reason, Source::User).await?;
     Ok(Json(ArchiveOutcome {
         instance: inst.name,
         archived: false,
@@ -620,19 +611,37 @@ async fn archive_chat(
     }))
 }
 
+#[derive(Deserialize, Default, ts_rs::TS)]
+pub struct RestoreRequest {
+    /// When its agent definition is gone: restore it as a generic `chat` agent.
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    as_generic: bool,
+}
+
 async fn restore_chat(
     State(hub): State<AppState>,
     Extension(p): Extension<Principal>,
     Path(instance): Path<String>,
+    body: Option<Json<RestoreRequest>>,
 ) -> ApiResult<Json<ChatRestored>> {
     user_only(&p)?;
+    let req = body.map(|Json(b)| b).unwrap_or_default();
     let inst = hub
         .store
         .resolve_instance(&instance)
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no chat {instance}")))?;
-    hub.store.restore_instance(&inst.name).await?;
-    Ok(Json(ChatRestored { restored: inst.name }))
+    match crate::restore::restore(&hub, &inst.name, req.as_generic).await {
+        Ok(changes) => {
+            hub.dispatch_notify.notify_one();
+            Ok(Json(ChatRestored { restored: inst.name, changes, definition_gone: None }))
+        }
+        Err(HubError::DefinitionGone { instance, definition }) => {
+            Ok(Json(ChatRestored { restored: instance, changes: vec![], definition_gone: Some(definition) }))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 async fn instances(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Instance>>> {
@@ -640,9 +649,32 @@ async fn instances(State(hub): State<AppState>, Extension(p): Extension<Principa
     Ok(Json(hub.store.all_instances(200).await?))
 }
 
-async fn runs(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Run>>> {
+#[derive(Deserialize, ts_rs::TS)]
+#[ts(optional_fields)]
+pub struct RunsQuery {
+    /// Only the runs of this job, service or agent.
+    runnable: Option<String>,
+}
+
+async fn runs(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Query(q): Query<RunsQuery>,
+) -> ApiResult<Json<Vec<Run>>> {
     user_only(&p)?;
-    Ok(Json(hub.store.recent_runs(100).await?))
+    Ok(Json(match q.runnable {
+        Some(r) => hub.store.runs_for(&r, 100).await?,
+        None => hub.store.recent_runs(100).await?,
+    }))
+}
+
+/// Everything defined, what happens next, and how it went.
+async fn system(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<crate::system::SystemView>> {
+    user_only(&p)?;
+    Ok(Json(crate::system::view(&hub).await?))
 }
 
 async fn incidents(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Incident>>> {
@@ -677,7 +709,7 @@ async fn secrets(
     }
     let mut holders: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
     for g in hub.store.all_live_grants().await? {
-        if g.kind == botler_core::defs::ResourceKind::Secret {
+        if g.kind == botler_core::defs::ResourceKind::Secret && g.stale.is_none() {
             holders.entry(g.resource).or_default().push(g.holder);
         }
     }

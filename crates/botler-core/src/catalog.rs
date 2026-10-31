@@ -268,6 +268,13 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         guidance: "Do what the timer was set for.",
     },
     BuiltinEvent {
+        kind: kinds::MANUAL,
+        summary: "The user started a job by hand (Run now).",
+        fields: &[("runnable", "the job")],
+        follow_up: &[],
+        guidance: "Nothing to do: it only starts the job.",
+    },
+    BuiltinEvent {
         kind: kinds::ACCESS_CHANGED,
         summary: "Something this chat may use changed: a grant was given without asking (policy `auto`) or revoked.",
         fields: &[
@@ -285,11 +292,37 @@ pub const BUILTIN: &[BuiltinEvent] = &[
                    on. Carry on with what needed it, or stop using it.",
     },
     BuiltinEvent {
+        kind: kinds::CHAT_RESTORED,
+        summary: "This chat was archived and has been restored; the world may have changed meanwhile.",
+        fields: &[("archived_at", "when it was archived"), ("changes", "what no longer applies, one line each")],
+        follow_up: &[FollowUp {
+            tool: "list_connections",
+            args: &[],
+            why: "what this chat holds and is subscribed to now (stale edges are marked)",
+        }],
+        guidance: "Do not assume the access you had before archiving. If you still need something listed as \
+                   changed, ask again with `request_access` or `subscribe`; otherwise work without it.",
+    },
+    BuiltinEvent {
         kind: kinds::ENVIRONMENT_UPDATED,
         summary: "Your container was restarted with a changed environment (e.g. a merged change); this conversation goes on.",
         fields: &[("changes", "what changed: tools, image, instructions, pi resources, secrets, services")],
         follow_up: &[],
         guidance: "Use what is new from now on (new tools are in your tool list). Nothing to answer.",
+    },
+    BuiltinEvent {
+        kind: kinds::CHAT_STOPPED,
+        summary: "The user stopped a chat: its turn was aborted and what was queued for it cancelled.",
+        fields: &[
+            ("chat", "the stopped chat (you, or a chat you started)"),
+            ("reason", "why, if the user said"),
+            ("aborted", "whether a turn was running"),
+            ("cancelled", "how many queued messages and events were cancelled"),
+            ("with", "the ancestor it was stopped along with, if any"),
+        ],
+        follow_up: &[],
+        guidance: "Do not resume the stopped work on your own. If it was you, wait for the user's next message; \
+                   if it was a chat you started, do not message it to continue unless the user asks.",
     },
 ];
 
@@ -416,7 +449,9 @@ mod tests {
             kinds::AGENT_TURN_FAILED,
             kinds::REPLY_OVERDUE,
             kinds::ACCESS_CHANGED,
+            kinds::CHAT_RESTORED,
             kinds::ENVIRONMENT_UPDATED,
+            kinds::CHAT_STOPPED,
         ] {
             assert!(builtin(k).is_some(), "{k} missing from catalog");
         }

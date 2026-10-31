@@ -836,8 +836,10 @@ fn is_builtin_event(kind: &str) -> bool {
         ARCHIVE_REQUESTED,
         AGENT_IDLE,
         ACCESS_CHANGED,
+        CHAT_RESTORED,
         ENVIRONMENT_UPDATED,
         TRIAL_FINISHED,
+        CHAT_STOPPED,
     ]
     .contains(&kind)
 }

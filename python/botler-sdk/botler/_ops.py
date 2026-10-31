@@ -182,6 +182,17 @@ def archive_ready(*, summary: str, handoff: Any = None, outstanding: list[str] |
     return call("archive_ready", {"summary": summary, "handoff": handoff, "outstanding": outstanding, "state": state})
 
 
+def stop_chat(*, chat: str, cascade: bool | None = None, reason: str | None = None) -> dict[str, Any]:
+    """Stop a chat: abort its running turn and cancel what is queued for it; with `cascade`, also every chat it started (recursively). The chat and its parent are told with a `chat.stopped` note.
+
+    Args:
+        chat: The chat (name or slug).
+        cascade: Also stop every chat it started, and theirs.
+        reason: Why; the chat reads it when it next wakes.
+    """
+    return call("stop_chat", {"chat": chat, "cascade": cascade, "reason": reason})
+
+
 def list_event_types(*, query: str | None = None) -> dict[str, Any]:
     """Event types (built-in and declared) with their description, payload schema, producers and current subscribers; `query` narrows by words or a glob. `emit_event` validates payloads against these; `subscribe` takes their names.
 
@@ -375,3 +386,45 @@ def health(*, ok: bool, reason: str | None = None) -> dict[str, Any]:
         reason: Why it is unhealthy (with `ok = false`).
     """
     return call("health", {"ok": ok, "reason": reason})
+
+
+def storage_usage(*, refresh: bool | None = None) -> dict[str, Any]:
+    """Disk use of the data directory by chat (home, workspace, session) and by kind (shared homes, images, exports, logs, search index, memory), largest first.
+
+    Args:
+        refresh: Measure again instead of returning the last overview.
+    """
+    return call("storage_usage", {"refresh": refresh})
+
+
+def clear_chat_caches(*, chat: str) -> dict[str, Any]:
+    """Delete a sleeping chat's rebuildable files: gitignored files in its git checkouts and `~/.cache`."""
+    return call("clear_chat_caches", {"chat": chat})
+
+
+def delete_chat(*, chat: str) -> dict[str, Any]:
+    """Delete an archived chat for good: its home, workspace, session and pending timers and deliveries. Its events stay in the journal.
+
+    Args:
+        chat: An archived chat.
+    """
+    return call("delete_chat", {"chat": chat})
+
+
+def collect_garbage(*, logs_older_than: str | None = None) -> dict[str, Any]:
+    """Remove unused images and exports now, and run logs older than `logs_older_than` (default 30d).
+
+    Args:
+        logs_older_than: Delete run logs older than this (default `30d`).
+    """
+    return call("collect_garbage", {"logs_older_than": logs_older_than})
+
+
+def run_job(*, job: str) -> dict[str, Any]:
+    """Start a oneshot job now, with a `manual` event. Honours pause and the overlap policy of the job's trigger (skip by default)."""
+    return call("run_job", {"job": job})
+
+
+def restart_service(*, service: str) -> dict[str, Any]:
+    """Stop a service; the reconciler starts it again right away."""
+    return call("restart_service", {"service": service})

@@ -259,6 +259,13 @@ pub struct SchedulePayload {
     pub skipped: u32,
 }
 
+/// The user started a job by hand ("Run now" in the web app).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct ManualPayload {
+    /// The job.
+    pub runnable: String,
+}
+
 /// `access.changed`: a grant of this chat was added without a request dialog (an `auto`
 /// policy) or revoked. Its container changes on the next wake.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -272,12 +279,43 @@ pub struct AccessChangedPayload {
     pub note: String,
 }
 
+/// `chat.restored`: this chat was archived and is back. Lists what changed meanwhile; a quiet
+/// note that rides along with the delivery that restored it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct ChatRestoredPayload {
+    /// When it was archived.
+    pub archived_at: Option<DateTime<Utc>>,
+    /// What changed, one line each (grants and subscriptions that no longer apply, a definition
+    /// that is gone).
+    pub changes: Vec<String>,
+}
+
 /// `environment.updated`: this chat was restarted (or woke) with a changed container, e.g. after
 /// a merge. Delivered as a quiet note ahead of whatever is delivered next.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct EnvironmentUpdatedPayload {
     /// What changed, in words (`new tools: weather.forecast`).
     pub changes: Vec<String>,
+}
+
+/// `chat.stopped`: the user stopped a chat: its running turn was aborted and what was queued for
+/// it cancelled. Sent to the chat (read when it next wakes) and to its parent, as notes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct ChatStoppedPayload {
+    /// The stopped chat.
+    pub chat: String,
+    /// Why, if the user said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+    /// Whether a turn was running and aborted.
+    pub aborted: bool,
+    /// Queued deliveries that were cancelled instead of delivered.
+    pub cancelled: u64,
+    /// When stopped along with an ancestor (`cascade`): that ancestor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub with: Option<String>,
 }
 
 /// What the hub sends pi for one delivery (`botler:delivery <json>`); the botler pi extension
@@ -341,10 +379,16 @@ pub enum BuiltinPayload {
     Timer(TimerPayload),
     #[serde(rename = "schedule")]
     Schedule(SchedulePayload),
+    #[serde(rename = "manual")]
+    Manual(ManualPayload),
     #[serde(rename = "access.changed")]
     AccessChanged(AccessChangedPayload),
+    #[serde(rename = "chat.restored")]
+    ChatRestored(ChatRestoredPayload),
     #[serde(rename = "environment.updated")]
     EnvironmentUpdated(EnvironmentUpdatedPayload),
+    #[serde(rename = "chat.stopped")]
+    ChatStopped(ChatStoppedPayload),
 }
 
 impl BuiltinPayload {
@@ -366,8 +410,11 @@ impl BuiltinPayload {
             Self::ReplyOverdue(_) => kinds::REPLY_OVERDUE,
             Self::Timer(_) => kinds::TIMER,
             Self::Schedule(_) => kinds::SCHEDULE,
+            Self::Manual(_) => kinds::MANUAL,
             Self::AccessChanged(_) => kinds::ACCESS_CHANGED,
+            Self::ChatRestored(_) => kinds::CHAT_RESTORED,
             Self::EnvironmentUpdated(_) => kinds::ENVIRONMENT_UPDATED,
+            Self::ChatStopped(_) => kinds::CHAT_STOPPED,
         }
     }
 
@@ -388,8 +435,11 @@ impl BuiltinPayload {
             Self::ReplyOverdue(p) => serde_json::to_value(p),
             Self::Timer(p) => serde_json::to_value(p),
             Self::Schedule(p) => serde_json::to_value(p),
+            Self::Manual(p) => serde_json::to_value(p),
             Self::AccessChanged(p) => serde_json::to_value(p),
+            Self::ChatRestored(p) => serde_json::to_value(p),
             Self::EnvironmentUpdated(p) => serde_json::to_value(p),
+            Self::ChatStopped(p) => serde_json::to_value(p),
         }
     }
 
@@ -420,9 +470,12 @@ pub fn builtin_schema(kind: &str) -> Option<serde_json::Value> {
         kinds::REPLY_OVERDUE => s::<ReplyOverduePayload>(),
         kinds::TIMER => s::<TimerPayload>(),
         kinds::SCHEDULE => s::<SchedulePayload>(),
+        kinds::MANUAL => s::<ManualPayload>(),
         kinds::TRIAL_FINISHED => s::<TrialFinishedPayload>(),
         kinds::ACCESS_CHANGED => s::<AccessChangedPayload>(),
+        kinds::CHAT_RESTORED => s::<ChatRestoredPayload>(),
         kinds::ENVIRONMENT_UPDATED => s::<EnvironmentUpdatedPayload>(),
+        kinds::CHAT_STOPPED => s::<ChatStoppedPayload>(),
         _ => None,
     }
 }
@@ -471,8 +524,11 @@ mod tests {
             (kinds::REPLY_OVERDUE, fields::<ReplyOverduePayload>()),
             (kinds::TIMER, fields::<TimerPayload>()),
             (kinds::SCHEDULE, fields::<SchedulePayload>()),
+            (kinds::MANUAL, fields::<ManualPayload>()),
             (kinds::ACCESS_CHANGED, fields::<AccessChangedPayload>()),
+            (kinds::CHAT_RESTORED, fields::<ChatRestoredPayload>()),
             (kinds::ENVIRONMENT_UPDATED, fields::<EnvironmentUpdatedPayload>()),
+            (kinds::CHAT_STOPPED, fields::<ChatStoppedPayload>()),
         ];
         for b in BUILTIN {
             assert!(builtin_schema(b.kind).is_some(), "{} has no schema", b.kind);

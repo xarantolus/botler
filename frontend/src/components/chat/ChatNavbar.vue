@@ -47,13 +47,39 @@ async function archive(force: boolean) {
   }
 }
 
-async function restore() {
+async function restore(asGeneric = false): Promise<void> {
   try {
-    await call("restore_chat", { params: { instance: props.name } });
-    notifySuccess("Restored", title.value);
+    const r = await call("restore_chat", { params: { instance: props.name }, body: { as_generic: asGeneric } });
+    if (r.definition_gone) return await definitionGone(r.definition_gone);
+    notifySuccess("Restored", r.changes.length ? `Changed while archived: ${r.changes.join("; ")}` : title.value);
     await Promise.all([refreshSession(props.name), refreshInstances()]);
   } catch (e) {
     notifyError("Could not restore", e);
+  }
+}
+
+/** Its agent definition is gone: restore it as a generic chat, or delete it. */
+async function definitionGone(definition: string): Promise<void> {
+  const generic = await confirm({
+    title: "Restore as a generic chat?",
+    description: `Its agent definition "${definition}" no longer exists. It can come back as a generic chat agent with its history, home and workspace, or be deleted.`,
+    confirmLabel: "Restore as chat",
+  });
+  if (generic) return await restore(true);
+  const del = await confirm({
+    title: "Delete it instead?",
+    description: "Its home, workspace and session are deleted for good. Its events stay in the journal.",
+    confirmLabel: "Delete permanently",
+    color: "error",
+  });
+  if (!del) return;
+  try {
+    await call("delete_chat", { body: { chat: props.name } });
+    notifySuccess("Deleted", props.name);
+    await refreshInstances();
+    await router.push("/");
+  } catch (e) {
+    notifyError("Could not delete", e);
   }
 }
 
@@ -132,7 +158,7 @@ const menu = computed((): DropdownMenuItem[][] => {
         variant="outline"
         size="sm"
         class="hidden sm:inline-flex"
-        @click="restore"
+        @click="restore()"
       />
       <UTooltip text="Connections: access, subscriptions, related chats">
         <UButton icon="i-lucide-waypoints" color="neutral" variant="ghost" aria-label="Connections" @click="connections = true" />
