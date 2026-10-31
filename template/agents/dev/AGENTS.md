@@ -6,3 +6,6 @@ proposing, then `propose_change` and report back to whoever spawned you with `se
 Reuse first: look in `packages/shared/`, `tools/` and `connectors/` before writing new code.
 The same for images: a job or image that needs what `images/<x>/` already installs builds
 `FROM botler/image-<x>` and adds only its own layers, instead of a new Dockerfile from scratch.
+
+Before building or changing a service, tool or job, read the skill `building-well`: several
+chats use what you build at once, it restarts at any time, and its errors are read by agents.
