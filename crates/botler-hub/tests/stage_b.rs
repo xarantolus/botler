@@ -573,6 +573,24 @@ async fn secret_requests_are_async_and_declare_on_submit() {
     let text = answered[0].payload.to_string();
     assert!(text.contains("GITLAB_SSH_KEY") && !text.contains("glpat") && !text.contains("\"KEY\""), "{text}");
 
+    // A request answered on the Secrets page instead closes once every field it asks for has a
+    // new value; the old value does not count.
+    let fill = ops::call(
+        &e.hub,
+        &front,
+        "request_secrets",
+        json!({"group": "gitlab", "reason": "rotate the token", "fill": ["GITLAB_TOKEN_STATION"]}),
+    )
+    .await
+    .unwrap();
+    let fill = fill["request_id"].as_str().unwrap().to_string();
+    botler_hub::secret_requests::resolve_satisfied(&e.hub).await.unwrap();
+    assert_eq!(e.hub.store.dialog(&fill).await.unwrap().status, botler_store::DialogStatus::Open);
+    e.hub.store.set_secret(&e.hub.secret_key, "GITLAB_TOKEN_STATION", "glpat2").await.unwrap();
+    botler_hub::secret_requests::resolve_satisfied(&e.hub).await.unwrap();
+    let closed = e.hub.store.dialog(&fill).await.unwrap();
+    assert_eq!((closed.status, closed.answer.as_deref()), (botler_store::DialogStatus::Answered, Some("provided")));
+
     // Remove one field later; cancel works and blocks late answers.
     let r2 = ops::call(
         &e.hub,

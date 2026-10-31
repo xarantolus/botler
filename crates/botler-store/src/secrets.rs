@@ -5,7 +5,7 @@ use std::path::Path;
 
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rand::RngCore;
 use sqlx::Row;
 
@@ -118,6 +118,15 @@ impl Store {
     /// Names that have a stored value (never the values).
     pub async fn secret_names(&self) -> Result<Vec<String>> {
         let rows = sqlx::query("SELECT name FROM secrets ORDER BY name").fetch_all(&self.pool).await?;
+        Ok(rows.iter().map(|r| r.get("name")).collect())
+    }
+
+    /// Names whose value was stored at or after `since`.
+    pub async fn secret_names_set_since(&self, since: DateTime<Utc>) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT name FROM secrets WHERE updated_at >= ? ORDER BY name")
+            .bind(ts(since))
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows.iter().map(|r| r.get("name")).collect())
     }
 

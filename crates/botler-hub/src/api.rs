@@ -798,6 +798,7 @@ async fn set_secret(
     let bytes =
         v.value.decode(&name, decl.file.is_some()).map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
     hub.store.set_secret_bytes(&hub.secret_key, &name, &bytes).await?;
+    crate::secret_requests::resolve_satisfied(&hub).await?;
     // Deliveries waiting on a missing secret can proceed now.
     hub.dispatch_notify.notify_one();
     Ok(Json(Saved { ok: true }))

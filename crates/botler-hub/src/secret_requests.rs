@@ -372,6 +372,37 @@ pub async fn submit(hub: &Hub, dialog_id: &str, sub: Submission) -> Result<Secre
     Ok(outcome)
 }
 
+/// Close the credentials requests that values entered elsewhere (the Secrets page) now satisfy:
+/// each one that only fills fields, all of which got a value after it was asked. Its agent hears
+/// it as if the user had submitted the form.
+pub async fn resolve_satisfied(hub: &Hub) -> Result<(), HubError> {
+    for d in hub.store.open_dialogs().await? {
+        if d.kind != DialogKind::Credentials {
+            continue;
+        }
+        let set = hub.store.secret_names_set_since(d.created_at).await?;
+        let req: SecretRequest = match serde_json::from_value(d.spec.clone().unwrap_or_default()) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(dialog = %d.id, error = %e, "stored credentials request is unreadable");
+                continue;
+            }
+        };
+        if req.changes_declarations() || !req.fill.iter().all(|n| set.contains(n)) {
+            continue;
+        }
+        match hub.store.answer_dialog(&d.id, "provided").await {
+            Ok(_) => {}
+            // Answered or aborted meanwhile: whoever closed it told the agent.
+            Err(botler_store::Error::DialogClosed { .. }) => continue,
+            Err(e) => return Err(e.into()),
+        }
+        let outcome = SecretsOutcome { declined: false, added: vec![], filled: req.fill.clone(), removed: vec![] };
+        emit_answer(hub, &d, &req, outcome).await?;
+    }
+    Ok(())
+}
+
 /// Commit the declaration change on main and apply it. Retries once if main moved.
 async fn declare(hub: &Hub, req: &SecretRequest, instance: &str) -> Result<(), RequestError> {
     for attempt in 0..2 {
