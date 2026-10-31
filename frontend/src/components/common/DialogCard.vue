@@ -8,7 +8,7 @@ import { confirmDecision } from "../../confirm";
 import type { Dialog, DialogView, SecretInput } from "../../generated";
 import { dialogStatusColor } from "../../lib/runs";
 import { notifyError, notifySuccess } from "../../notify";
-import { refreshDialogs, refreshStatus } from "../../store";
+import { refreshDialogs, refreshStatus, state } from "../../store";
 import ChangeSummary from "./ChangeSummary.vue";
 import MarkdownText from "./MarkdownText.vue";
 import SecretValueInput from "./SecretValueInput.vue";
@@ -31,6 +31,12 @@ const KIND = {
   visit: { label: "Visit", icon: "i-lucide-external-link", color: "info" },
 } as const satisfies Record<DialogView["kind"], unknown>;
 const kind = computed(() => KIND[d.value.kind]);
+/** An approval to run an action (its arguments and code version), not a change to merge. */
+const isAction = computed(
+  () =>
+    d.value.kind === "approval" &&
+    (state.proposals?.find((p) => p.id === d.value.proposal_id)?.kind === "action" || /^Run action `/.test(d.value.question)),
+);
 
 async function done() {
   await Promise.all([refreshDialogs(), refreshStatus()]);
@@ -131,7 +137,7 @@ function onFreeKey(e: KeyboardEvent) {
 
     <div class="flex flex-col gap-3">
       <template v-if="d.detail">
-        <ChangeSummary v-if="d.kind === 'approval'" :markdown="d.detail" />
+        <ChangeSummary v-if="d.kind === 'approval' && !isAction" :markdown="d.detail" />
         <MarkdownText v-else :source="d.detail" class="text-sm" />
       </template>
 
@@ -218,8 +224,8 @@ function onFreeKey(e: KeyboardEvent) {
         <UButton
           v-if="d.proposal_id"
           :to="`/proposals/${d.proposal_id}`"
-          icon="i-lucide-file-diff"
-          label="Review changes"
+          :icon="isAction ? 'i-lucide-zap' : 'i-lucide-file-diff'"
+          :label="isAction ? 'Details' : 'Review changes'"
           color="neutral"
           variant="outline"
           class="me-auto"

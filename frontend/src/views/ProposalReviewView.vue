@@ -46,14 +46,21 @@ async function loadDiff() {
   }
 }
 
-onMounted(() => void Promise.all([loadView(), loadDiff()]));
+/** The view, then the diff (an action request has none: it runs code, it changes nothing). */
+async function loadAll() {
+  await loadView();
+  if (view.value?.proposal.kind !== "action") await loadDiff();
+}
+onMounted(() => void loadAll());
 watch(
   () => props.id,
   () => {
     view.value = diff.value = null;
-    void Promise.all([loadView(), loadDiff()]);
+    void loadAll();
   },
 );
+const isAction = computed(() => p.value?.kind === "action");
+const actionArgs = computed(() => (p.value?.args === null || p.value?.args === undefined ? "" : JSON.stringify(p.value.args, null, 2)));
 
 // Live: the proposal moved. The diff changes only when the head does (a rebase).
 const live = computed(() => state.proposals?.find((x) => x.id === props.id) ?? null);
@@ -170,7 +177,7 @@ const fileId = (path: string) => `file-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
 
       <!-- Progress -->
       <UStepper
-        v-if="steps"
+        v-if="steps && !isAction"
         :items="steps.steps"
         :model-value="steps.current"
         :color="stepColor"
@@ -220,8 +227,23 @@ const fileId = (path: string) => `file-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
         </template>
       </UCollapsible>
 
+      <!-- An action request: what runs, with which arguments, on which code. -->
+      <section v-if="isAction" class="space-y-3">
+        <div class="flex flex-wrap items-center gap-2 text-sm">
+          <UIcon name="i-lucide-zap" class="size-4 text-primary" />
+          <span>Action <code class="font-mono text-highlighted">{{ p.action }}</code></span>
+          <UBadge v-if="p.code_version" color="neutral" variant="outline" size="sm" icon="i-lucide-git-commit-horizontal">
+            code <code class="font-mono">{{ p.code_version.slice(0, 12) }}</code>
+          </UBadge>
+        </div>
+        <p class="text-sm text-muted">
+          It runs with exactly these arguments and this code version; if its code changes before you approve, it does not run.
+        </p>
+        <CodeBlock label="Arguments" :text="actionArgs || '{}'" language="json" max-height="24rem" />
+      </section>
+
       <!-- Diff -->
-      <section class="space-y-3">
+      <section v-else class="space-y-3">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-sm font-semibold text-highlighted">Changes</h2>
           <span v-if="diff" class="font-mono text-xs text-muted">

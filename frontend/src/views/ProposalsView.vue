@@ -93,7 +93,7 @@ function onSelect(_e: Event, row: TableRow<Proposal>) {
         />
       </template>
       <template #empty>
-        <UEmpty
+        <UEmpty class="sticky start-0 max-w-[calc(100vw-2rem)]"
           icon="i-lucide-git-pull-request-arrow"
           title="No proposals yet"
           description="When an agent proposes a change to the monorepo, it shows up here for review."

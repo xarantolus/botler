@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // A delivered event (not the user typing): what kind, who sent it, how far it is trusted, when.
 import { computed } from "vue";
-import { prettyJsonBody, type Envelope } from "../../lib/envelope";
+import { payloadOf, prettyJsonBody, type Envelope } from "../../lib/envelope";
 import { eventIcon } from "../../lib/events";
 import { provenanceColor } from "../../lib/runs";
 import BreakerNotice from "./BreakerNotice.vue";
@@ -12,6 +12,15 @@ import TimeAgo from "./TimeAgo.vue";
 const props = defineProps<{ env: Envelope; at: string | null }>();
 const json = computed(() => prettyJsonBody(props.env.body));
 const body = computed(() => props.env.body.trim());
+/** An action's outcome, shown as itself (not the agent-facing text). */
+const action = computed(() => {
+  if (props.env.kind !== "action.result") return null;
+  const p = payloadOf(props.env.body);
+  if (!p || typeof p.action !== "string") return null;
+  const r = p.result;
+  const declined = r && typeof r === "object" && "declined" in r ? String((r as { declined: unknown }).declined) : null;
+  return { name: p.action, ok: p.ok === true, declined, result: declined === null ? JSON.stringify(r, null, 2) : null };
+});
 </script>
 
 <template>
@@ -44,7 +53,20 @@ const body = computed(() => props.env.body.trim());
       />
     </div>
     <BreakerNotice v-if="env.kind === 'breaker.tripped' && env.event" :event-id="env.event" />
-    <CodeBlock v-if="json" :text="json" max-height="16rem" />
+    <template v-if="action">
+      <div class="flex flex-wrap items-center gap-2 text-sm">
+        <span>Action <code class="font-mono text-highlighted">{{ action.name }}</code></span>
+        <UBadge
+          :color="action.declined !== null ? 'neutral' : action.ok ? 'success' : 'error'"
+          variant="subtle"
+          size="sm"
+          :label="action.declined !== null ? 'declined' : action.ok ? 'succeeded' : 'failed'"
+        />
+      </div>
+      <p v-if="action.declined !== null" class="text-sm text-muted">Your reason: {{ action.declined }}</p>
+      <CodeBlock v-else-if="action.result" :label="action.ok ? 'Result' : 'Error'" :text="action.result" language="json" max-height="16rem" />
+    </template>
+    <CodeBlock v-else-if="json" :text="json" max-height="16rem" />
     <MarkdownText v-else-if="body" :source="body" class="text-sm" />
   </UCard>
 </template>

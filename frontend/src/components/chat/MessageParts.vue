@@ -8,6 +8,7 @@ import DialogCard from "../common/DialogCard.vue";
 import EnvelopeCard from "../common/EnvelopeCard.vue";
 import MarkdownText from "../common/MarkdownText.vue";
 import { shell } from "../../shell";
+import MessageFiles from "./MessageFiles.vue";
 import NotePart from "./NotePart.vue";
 import ToolCall from "./ToolCall.vue";
 
@@ -96,5 +97,6 @@ function onReasoningClick(e: MouseEvent, id: string) {
         :description="part.data.text"
       />
     </template>
+    <MessageFiles v-if="message.metadata?.files?.length" :files="message.metadata.files" />
   </div>
 </template>

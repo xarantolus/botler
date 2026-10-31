@@ -9,6 +9,8 @@ export const shell = reactive({
   sidebar: false,
   /** The session tree of the chat on screen is open. */
   sessionTree: false,
+  /** Text for a chat's composer (the share target fills it): taken by that chat's composer. */
+  draft: null as { to: string; text: string } | null,
   /** The command palette is open. */
   palette: false,
   /** What is typed in the command palette. */

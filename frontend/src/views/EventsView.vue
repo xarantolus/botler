@@ -152,7 +152,7 @@ function onSelect(_e: Event, row: TableRow<BotlerEvent>) {
         <span class="line-clamp-2 min-w-48 max-w-xl text-muted">{{ eventSummary(row.original) }}</span>
       </template>
       <template #empty>
-        <UEmpty icon="i-lucide-activity" title="No events" description="Nothing matches these filters yet." variant="naked" />
+        <UEmpty class="sticky start-0 max-w-[calc(100vw-2rem)]" icon="i-lucide-activity" title="No events" description="Nothing matches these filters yet." variant="naked" />
       </template>
     </UTable>
 

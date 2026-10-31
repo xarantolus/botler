@@ -115,3 +115,16 @@ export function prettyJsonBody(body: string): string | null {
     return null;
   }
 }
+
+/** The JSON payload a hub event's body carries (its first ```json block), if any. */
+export function payloadOf(body: string): Record<string, unknown> | null {
+  const m = /```json\n([\s\S]*?)\n```/.exec(body);
+  if (!m) return null;
+  try {
+    const v: unknown = JSON.parse(m[1]!);
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    // Not JSON: the body renders as Markdown.
+    return null;
+  }
+}

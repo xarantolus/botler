@@ -1,7 +1,7 @@
 // The typed API client. Routes, parameters, bodies and responses all come from the generated
 // route table (src/generated/routes.ts), which is generated from the hub's Rust types.
 
-import { ROUTES, type ApiErrorBody, type Routes } from "../generated";
+import { ROUTES, type ApiErrorBody, type Routes, type Uploaded } from "../generated";
 
 const TOKEN_KEY = "botler.token";
 
@@ -108,6 +108,42 @@ export async function call<K extends keyof Routes>(name: K, args: Args<K>): Prom
   }
   if (!res.ok) throw new ApiError(res.status, errorText(parsed, text) || res.statusText, errorBody(parsed));
   return parsed as Routes[K]["response"];
+}
+
+/** Upload a file's raw bytes (`PUT /api/v1/uploads?name=`), reporting progress (0..1). XHR:
+ * fetch cannot report upload progress. */
+export function upload(file: File, onProgress: (done: number) => void): Promise<Uploaded> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", ROUTES.upload.path + buildQuery({ name: file.name }));
+    xhr.setRequestHeader("authorization", `Bearer ${token ?? ""}`);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onerror = () => reject(new ApiError(0, "the hub is unreachable"));
+    xhr.onload = () => {
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(xhr.responseText);
+      } catch {
+        // Not JSON: reported with the raw text below.
+        parsed = null;
+      }
+      if (xhr.status === 401) {
+        setToken(null);
+        for (const f of unauthorizedHandlers) f();
+        reject(new Unauthorized(401, "your token is invalid or expired"));
+      } else if (xhr.status >= 200 && xhr.status < 300 && parsed) resolve(parsed as Uploaded);
+      else reject(new ApiError(xhr.status, errorText(parsed, xhr.responseText) || xhr.statusText, errorBody(parsed)));
+    };
+    xhr.send(file);
+  });
+}
+
+/** An upload's bytes (`GET /api/v1/uploads/<id>/<name>`), for a thumbnail or a download. */
+export async function fetchUpload(file: string): Promise<Blob> {
+  const path = `/api/v1/uploads/${file.split("/").map(encodeURIComponent).join("/")}`;
+  const res = await fetch(path, { headers: { authorization: `Bearer ${token ?? ""}` } });
+  if (!res.ok) throw new ApiError(res.status, (await res.text()).slice(0, 300) || res.statusText);
+  return res.blob();
 }
 
 function errorBody(parsed: unknown): ApiErrorBody | null {

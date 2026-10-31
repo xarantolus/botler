@@ -101,6 +101,8 @@ const menu = computed((): DropdownMenuItem[][] => {
     ...(i ? [{ type: "label" as const, label: `definition ${i.definition}`, icon: "i-lucide-file-code-2" }] : []),
   ];
   const go: DropdownMenuItem[] = [
+    { label: "Connections", icon: "i-lucide-waypoints", class: "sm:hidden", onSelect: () => (connections.value = true) },
+    { label: "Session tree", icon: "i-lucide-git-branch", class: "sm:hidden", onSelect: () => (shell.sessionTree = true) },
     {
       label: "Events of this chat",
       icon: "i-lucide-activity",
@@ -175,14 +177,16 @@ const menu = computed((): DropdownMenuItem[][] => {
         @click="restore()"
       />
       <UTooltip v-if="stoppable" text="Stop: abort the turn and cancel what is queued">
-        <UButton icon="i-lucide-octagon-x" color="error" variant="soft" size="sm" label="Stop" @click="stopChat(name)" />
+        <UButton icon="i-lucide-octagon-x" color="error" variant="soft" size="sm" aria-label="Stop" @click="stopChat(name)">
+          <span class="hidden sm:inline">Stop</span>
+        </UButton>
       </UTooltip>
       <UTooltip text="Connections: access, subscriptions, related chats">
-        <UButton icon="i-lucide-waypoints" color="neutral" variant="ghost" aria-label="Connections" @click="connections = true" />
+        <UButton icon="i-lucide-waypoints" color="neutral" variant="ghost" aria-label="Connections" class="hidden sm:inline-flex" @click="connections = true" />
       </UTooltip>
       <ConnectionsSlideover v-model:open="connections" :name="name" />
       <UTooltip text="Session tree: branches, continue from an earlier point, fork">
-        <UButton icon="i-lucide-git-branch" color="neutral" variant="ghost" aria-label="Session tree" @click="shell.sessionTree = true" />
+        <UButton icon="i-lucide-git-branch" color="neutral" variant="ghost" aria-label="Session tree" class="hidden sm:inline-flex" @click="shell.sessionTree = true" />
       </UTooltip>
       <SessionTreeSlideover v-model:open="shell.sessionTree" :name="name" />
       <UDropdownMenu :items="menu" :content="{ align: 'end' }">

@@ -68,7 +68,7 @@ const columns: TableColumn<Incident>[] = [
         />
       </template>
       <template #empty>
-        <UEmpty icon="i-lucide-shield-check" title="No incidents" description="Nothing keeps failing." variant="naked" />
+        <UEmpty class="sticky start-0 max-w-[calc(100vw-2rem)]" icon="i-lucide-shield-check" title="No incidents" description="Nothing keeps failing." variant="naked" />
       </template>
     </UTable>
     <RunLogsModal v-model="logsOf" />

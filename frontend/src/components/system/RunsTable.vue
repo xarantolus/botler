@@ -59,7 +59,7 @@ const columns: TableColumn<Run>[] = [
         <UButton size="xs" color="neutral" variant="outline" icon="i-lucide-scroll-text" label="Logs" @click="logsOf = row.original.id" />
       </template>
       <template #empty>
-        <UEmpty icon="i-lucide-play" title="No runs yet" :description="runnable ? 'It has not run yet.' : 'Jobs, services and agent containers appear here once they start.'" variant="naked" />
+        <UEmpty class="sticky start-0 max-w-[calc(100vw-2rem)]" icon="i-lucide-play" title="No runs yet" :description="runnable ? 'It has not run yet.' : 'Jobs, services and agent containers appear here once they start.'" variant="naked" />
       </template>
     </UTable>
     <RunLogsModal v-model="logsOf" />

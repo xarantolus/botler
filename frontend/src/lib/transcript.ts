@@ -40,6 +40,8 @@ export interface MessageMeta {
   queued?: boolean;
   /** Still being written (the live tail). */
   live?: boolean;
+  /** Uploads sent with a user's message (`<id>/<name>`). */
+  files?: string[];
   /** Stable render key: an agent turn is keyed by the message before it. */
   key?: string;
 }
@@ -190,6 +192,7 @@ export function buildTranscript(input: TranscriptInput): Transcript {
               delivery: it.delivery ?? env?.delivery ?? null,
               localTime: it.local_time ?? env?.localTime ?? null,
               gap: it.gap ?? env?.gap ?? null,
+              ...(it.files.length ? { files: it.files } : {}),
             },
           });
         }

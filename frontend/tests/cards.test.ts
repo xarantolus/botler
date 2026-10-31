@@ -148,6 +148,18 @@ describe("DialogCard", () => {
     expect(w.findAll("button").map((b) => b.text())).toEqual(expect.arrayContaining(["approve", "reject"]));
   });
 
+  it("shows an action request with its arguments and code version, not as a change", async () => {
+    const detail =
+      "Send a newsletter.\n\n**Arguments** (it runs with exactly these)\n```json\n{\n  \"to\": \"all\"\n}\n```\n\n**Secret groups it uses:** `mail`\n\n**Code version** `abc123` (it runs with exactly this code), unchanged";
+    const w = await mountInApp(DialogCard, {
+      dialog: dialog({ kind: "approval", question: "Run action `newsletter` for Botler?", ctas: ["approve", "reject"], detail, proposal_id: "p9" }),
+    });
+    expect(w.find("pre code").text()).toContain('"to": "all"');
+    expect(w.find("[data-language=json]").exists()).toBe(true);
+    expect(w.text()).toContain("Secret groups it uses");
+    expect(w.findAll("a").map((a) => a.text())).toContain("Details");
+  });
+
   it("rejects an approval only with a reason, which reaches the hub", async () => {
     const w = await mountInApp(DialogCard, {
       dialog: dialog({ kind: "approval", ctas: ["approve", "reject"], proposal_id: "p1", detail: null }),
@@ -200,6 +212,34 @@ describe("EnvelopeCard", () => {
     expect(text).toContain("first message in 3 days");
     expect(w.find("pre").text()).toBe('{\n  "subject": "hi"\n}');
     expect(w.find("a[href*='event=ev1']").exists()).toBe(true);
+  });
+});
+
+describe("EnvelopeCard action.result", () => {
+  const env = (payload: unknown) => ({
+    from: "hub",
+    provenance: "trusted",
+    kind: "action.result",
+    delivery: "dl",
+    event: "ev2",
+    localTime: null,
+    gap: null,
+    body: `Event \`action.result\`: An approval-gated action you requested ran.\n\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\`\n\nContinue with the result.`,
+    malformed: false,
+  });
+
+  it("shows the action, whether it succeeded, and its result", async () => {
+    const w = await mountInApp(EnvelopeCard, { env: env({ proposal_id: "p", action: "newsletter", ok: true, result: { sent: 12 } }), at: null });
+    expect(w.text()).toContain("newsletter");
+    expect(w.text()).toContain("succeeded");
+    expect(w.find("pre").text()).toContain('"sent": 12');
+    expect(w.text()).not.toContain("Continue with the result");
+  });
+
+  it("shows a declined action with the user's reason", async () => {
+    const w = await mountInApp(EnvelopeCard, { env: env({ proposal_id: "p", action: "newsletter", ok: false, result: { declined: "not today" } }), at: null });
+    expect(w.text()).toContain("declined");
+    expect(w.text()).toContain("Your reason: not today");
   });
 });
 
