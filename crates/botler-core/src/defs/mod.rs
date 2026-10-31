@@ -22,6 +22,16 @@ pub use tree::{FsTree, MemTree, Tree, TreeEntry};
 
 use crate::trigger::ScheduleSpec;
 
+/// The uv workspace's shared code and lock: what tools, connectors and packages are built from.
+pub const SHARED_INPUTS: [&str; 5] = ["pyproject.toml", "uv.lock", "packages", "tools", "connectors"];
+
+/// Repo paths a job's image is built from (its build context): its directory and the shared code.
+pub fn job_inputs(job: &str) -> Vec<String> {
+    let mut inputs = vec![format!("jobs/{job}")];
+    inputs.extend(SHARED_INPUTS.map(String::from));
+    inputs
+}
+
 /// A trigger with its owner and target resolved.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ResolvedTrigger {
@@ -449,6 +459,21 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
         if spec.lifetime == Lifetime::Service && !spec.triggers.is_empty() {
             l.err(&path, "a service runs forever and cannot have triggers; use a oneshot job instead");
         }
+        match (spec.lifetime, &spec.args) {
+            (Lifetime::Action, None) => {
+                l.err(&path, "an action needs `args`: the JSON Schema of the arguments it is invoked with");
+            }
+            (Lifetime::Action, Some(schema)) => {
+                if let Err(e) = crate::event_check::compile(schema) {
+                    l.err(&path, format!("`args` is not a valid JSON Schema: {e}"));
+                }
+                if !spec.triggers.is_empty() {
+                    l.err(&path, "an action runs only when invoked and approved; it cannot have triggers");
+                }
+            }
+            (_, Some(_)) => l.err(&path, "`args` only applies to actions (lifetime = \"action\")"),
+            (_, None) => {}
+        }
         if spec.lifetime == Lifetime::Oneshot && spec.health.is_some() {
             l.warn(&path, "health heartbeats only apply to services; ignored for oneshot jobs");
         }
@@ -567,6 +592,14 @@ fn validate_models(l: &mut Loader<'_>, defs: &Definitions) {
             check_route_secret(l, defs, "botler.toml", s);
         }
     }
+    if let Some(p) = &defs.instance.push {
+        if !(p.ntfy_url.starts_with("https://") || p.ntfy_url.starts_with("http://")) {
+            l.err("botler.toml", format!("push.ntfy_url {:?} must be an http(s) URL", p.ntfy_url));
+        }
+        if !defs.secrets.contains_key(&p.topic_secret) {
+            l.err("botler.toml", format!("push.topic_secret {} is not declared in secrets.toml", p.topic_secret));
+        }
+    }
 }
 
 /// A grant of a secret group to a container.
@@ -676,14 +709,15 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
             check_container_group(l, defs, &path, g);
         }
         check_mounts(l, defs, &path, &a.spec.env);
-        for m in &a.spec.env.mcp {
+        let listed = a.spec.env.mcp.iter().map(|m| ("mcp", m));
+        for (field, m) in listed.chain(a.spec.env.services.iter().map(|s| ("services", s))) {
             match defs.jobs.get(m) {
                 Some(j) if j.spec.lifetime == Lifetime::Service && j.spec.env.port.is_none() => {
-                    l.err(&path, format!("mcp {m:?}: the service declares no `port` to reach it on"))
+                    l.err(&path, format!("{field} {m:?}: the service declares no `port` to reach it on"))
                 }
                 Some(j) if j.spec.lifetime == Lifetime::Service => {}
-                Some(_) => l.err(&path, format!("mcp {m:?} is a oneshot job, not a service")),
-                None => l.err(&path, format!("mcp {m:?} is not a job in jobs/")),
+                Some(_) => l.err(&path, format!("{field} {m:?} is a oneshot job or action, not a service")),
+                None => l.err(&path, format!("{field} {m:?} is not a job in jobs/")),
             }
         }
         // Every model route is reached over the network today (even a local `base_url` lies
@@ -700,10 +734,10 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
                 ),
             );
         }
-        if !a.spec.env.mcp.is_empty() && a.spec.env.network() == Network::None {
+        if !a.spec.env.reached().is_empty() && a.spec.env.network() == Network::None {
             l.err(
                 &path,
-                "`mcp` services are reached over the network; an agent with network = \"none\" cannot use them",
+                "`mcp` and `services` are reached over the network; an agent with network = \"none\" cannot use them",
             );
         }
         for (name, s) in &a.spec.env.mcp_stdio {
@@ -742,7 +776,7 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
         for key in j.spec.env.foreign_keys(false) {
             l.err(&path, format!("`{key}` only applies to agents"));
         }
-        if j.spec.lifetime == Lifetime::Oneshot && (j.spec.env.port.is_some() || !j.spec.env.publish.is_empty()) {
+        if j.spec.lifetime != Lifetime::Service && (j.spec.env.port.is_some() || !j.spec.env.publish.is_empty()) {
             l.err(&path, "`port` and `publish` only apply to services (lifetime = \"service\")");
         }
         for p in &j.spec.env.publish {
@@ -767,6 +801,11 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
             }
         }
         for g in &j.spec.env.secrets {
+            // Actions run only after the user approved their arguments: the one place hub-class
+            // secrets may be used.
+            if j.spec.lifetime == Lifetime::Action && defs.secret_groups.contains_key(g) {
+                continue;
+            }
             check_container_group(l, defs, &path, g);
         }
         check_mounts(l, defs, &path, &j.spec.env);
@@ -792,7 +831,7 @@ fn check_target(l: &mut Loader<'_>, defs: &Definitions, path: &str, target: &Tar
         Target::Spawn(n) => (!defs.agents.contains_key(n)).then(|| format!("spawn target agent {n:?} does not exist")),
         Target::Run(n) => match defs.jobs.get(n) {
             Some(j) if j.spec.lifetime == Lifetime::Oneshot => None,
-            Some(_) => Some(format!("run target {n:?} is a service; services cannot be triggered")),
+            Some(_) => Some(format!("run target {n:?} is a service or action; only oneshot jobs are triggered")),
             None => Some(format!("run target job {n:?} does not exist")),
         },
     };

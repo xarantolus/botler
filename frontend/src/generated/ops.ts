@@ -2,6 +2,7 @@
 
 import type { AccessRequested } from "./AccessRequested";
 import type { AccessRevoked } from "./AccessRevoked";
+import type { ActionRequested } from "./ActionRequested";
 import type { AgentSpawned } from "./AgentSpawned";
 import type { AskUser } from "./AskUser";
 import type { Asked } from "./Asked";
@@ -38,6 +39,7 @@ import type { Health } from "./Health";
 import type { HealthRecorded } from "./HealthRecorded";
 import type { Incident } from "./Incident";
 import type { IncidentResolved } from "./IncidentResolved";
+import type { InvokeAction } from "./InvokeAction";
 import type { JobStarted } from "./JobStarted";
 import type { LabelEntry } from "./LabelEntry";
 import type { ListChats } from "./ListChats";
@@ -63,6 +65,7 @@ import type { ProposalDetail } from "./ProposalDetail";
 import type { ProposeChange } from "./ProposeChange";
 import type { Proposed } from "./Proposed";
 import type { ReadSession } from "./ReadSession";
+import type { ReplayEvent } from "./ReplayEvent";
 import type { RequestAccess } from "./RequestAccess";
 import type { RequestCancelled } from "./RequestCancelled";
 import type { RequestOpened } from "./RequestOpened";
@@ -116,6 +119,7 @@ export interface Ops {
   propose_change: { input: ProposeChange; output: Proposed };
   preview_change: { input: PreviewChange; output: ChangePreview };
   trial_run: { input: TrialRun; output: TrialStarted };
+  replay_event: { input: ReplayEvent; output: TrialStarted };
   get_proposal: { input: GetProposal; output: ProposalDetail };
   submit_review: { input: SubmitReview; output: ReviewRecorded };
   request_secrets: { input: SecretRequest; output: RequestOpened };
@@ -146,6 +150,7 @@ export interface Ops {
   get_events: { input: GetEvents; output: Array<BotlerEvent> };
   ask_user: { input: AskUser; output: Asked };
   request_visit: { input: RequestVisit; output: Asked };
+  invoke_action: { input: InvokeAction; output: ActionRequested };
   get_run_logs: { input: GetRunLogs; output: RunLogs };
   get_incident: { input: GetIncident; output: Incident };
   get_incident_history: { input: GetIncidentHistory; output: Array<Incident> };

@@ -65,7 +65,8 @@ fn spec(e: &Env, instance: &str) -> botler_runtime::ContainerSpec {
 /// The FUSE device, capability, entrypoint and share variables a container got.
 fn shares(s: &botler_runtime::ContainerSpec) -> (bool, Option<String>) {
     let fuse = s.devices == ["/dev/fuse"] && s.caps == ["SYS_ADMIN"];
-    let wrapped = s.command[..4] == ["sh", "/opt/botler/botler-mounts", "up", "--"] && s.command[4] == "pi";
+    let wrapped = s.command[..4] == ["sh", "/opt/botler/botler-mounts", "up", "--"]
+        && s.command[4..7] == ["node", agents::FORWARDER, "pi"];
     assert_eq!(fuse, wrapped, "FUSE and the entrypoint come together: {s:?}");
     (fuse, s.env.get("RCLONE_CONFIG_NAS_PHOTOS_PASS").cloned())
 }

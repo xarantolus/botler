@@ -7,6 +7,10 @@ import type { JsonValue } from "./serde_json/JsonValue";
 
 export type Proposal = { id: string, kind: ProposalKind, instance: string, title: string, branch: string | null, base_commit: string | null, head_commit: string | null, action: string | null, args: JsonValue | null, args_hash: string | null, 
 /**
+ * Actions: the action's code version (image tag) when it was invoked; only that code runs.
+ */
+code_version: string | null, 
+/**
  * The deployment summary, once the change validated.
  */
 summary: ChangeSummary | null, gate_report: string | null, verdict: string | null, review_notes: string | null, status: ProposalStatus, merged_commit: string | null, reviewer: string | null, attempts: number, 

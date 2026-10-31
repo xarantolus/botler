@@ -62,8 +62,21 @@ impl Paths {
     pub fn shared_home(&self, name: &str) -> PathBuf {
         self.root.join("shared-homes").join(name)
     }
+    /// The hub's Unix socket lives here. The directory (not the socket) is mounted into every
+    /// container that talks to the hub, at [`CONTAINER_RUN_DIR`], so a restarted hub's new
+    /// socket is visible to containers that outlive it.
+    pub fn run_dir(&self) -> PathBuf {
+        self.root.join("run")
+    }
+    pub fn socket(&self) -> PathBuf {
+        self.run_dir().join(SOCKET_NAME)
+    }
     pub fn uploads(&self) -> PathBuf {
         self.root.join("uploads")
+    }
+    /// Uploads attached to messages to `instance` (hard links), mounted at `/inbox/files`.
+    pub fn inbox(&self, instance: &str) -> PathBuf {
+        self.root.join("inbox").join(instance)
     }
     /// Full logs of finished runs.
     pub fn run_log(&self, run_id: &str) -> PathBuf {
@@ -75,9 +88,19 @@ impl Paths {
     }
 
     pub fn ensure(&self) -> std::io::Result<()> {
-        for d in
-            ["sessions", "workspaces", "homes", "shared-homes", "agent-dirs", "uploads", "logs", "exports", "worktrees"]
-        {
+        for d in [
+            "sessions",
+            "workspaces",
+            "homes",
+            "shared-homes",
+            "agent-dirs",
+            "uploads",
+            "logs",
+            "exports",
+            "worktrees",
+            "run",
+            "inbox",
+        ] {
             std::fs::create_dir_all(self.root.join(d))?;
         }
         Ok(())
@@ -88,7 +111,8 @@ impl Paths {
 #[derive(Clone, Debug)]
 pub struct HubConfig {
     pub listen: SocketAddr,
-    /// Base URL containers use to reach the hub (`BOTLER_URL`).
+    /// Base URL agents use to reach the hub (`BOTLER_URL`, MCP, git): the forwarder inside the
+    /// agent container, which relays to the hub's socket. Jobs use the socket directly.
     pub container_url: String,
     /// `podman` or `docker`; auto-detected when `None`.
     pub runtime: Option<String>,
@@ -100,13 +124,18 @@ impl HubConfig {
     pub fn new(listen: SocketAddr) -> Self {
         Self {
             listen,
-            // Rootless podman and docker both resolve this name to the host.
-            container_url: format!("http://host.containers.internal:{}", listen.port()),
+            container_url: FORWARD_URL.into(),
             runtime: None,
             pi_timeout: std::time::Duration::from_secs(60),
         }
     }
 }
+
+/// Where containers find the hub's socket directory, and the socket in it.
+pub const CONTAINER_RUN_DIR: &str = "/run/botler";
+pub const SOCKET_NAME: &str = "hub.sock";
+/// The forwarder in agent containers listens here and relays to the socket.
+pub const FORWARD_URL: &str = "http://127.0.0.1:7420";
 
 pub fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()

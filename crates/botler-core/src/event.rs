@@ -146,6 +146,7 @@ pub mod kinds {
     pub const CHAT_RESTORED: &str = "chat.restored";
     pub const ENVIRONMENT_UPDATED: &str = "environment.updated";
     pub const CHAT_STOPPED: &str = "chat.stopped";
+    pub const WEBHOOK_RECEIVED: &str = "webhook.received";
     pub const HANDOVER_REQUESTED: &str = "handover.requested";
     pub const SESSION_STARTED: &str = "session.started";
 }

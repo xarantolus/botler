@@ -44,6 +44,8 @@ pub fn default_limit(operation: &str) -> RateLimit {
         "trial_run" => RateLimit::new(10, 3600),
         "invoke_action" => RateLimit::new(10, 600),
         "replay_event" => RateLimit::new(10, 600),
+        // Per webhook, for callers from outside.
+        "webhook" => RateLimit::new(60, 60),
         "wake" => RateLimit::new(30, 3600),
         _ => RateLimit::new(120, 60),
     }

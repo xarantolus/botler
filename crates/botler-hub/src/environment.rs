@@ -12,6 +12,7 @@ use chrono::{Duration, Utc};
 
 use crate::agents::{HOME, MONOREPO};
 use crate::auth::Principal;
+use crate::config::{CONTAINER_RUN_DIR, SOCKET_NAME};
 use crate::hub::{Hub, HubError, Result};
 use crate::jobs::{RUN_LABEL, RUNNABLE_LABEL};
 
@@ -48,6 +49,9 @@ pub async fn container_spec(
     let mut mounts = vec![Mount::Bind { src: hub.paths.assets().join("sdk"), dst: SDK_DIR.into(), read_only: true }];
     let mut spec = ContainerSpec { image, command, ..Default::default() };
     let mut service = false;
+    // Action runs exist only once the user approved their arguments (`actions.rs`): the one
+    // place hub-class secrets enter a container.
+    let hub_class = matches!(what, Runnable::Run { run, .. } if run.kind == RunKind::Action);
     let mut agent_home = None;
     let mut style = None;
     let token = match what {
@@ -109,9 +113,13 @@ pub async fn container_spec(
         }
     };
     if let Some((who, ttl, secret_dir)) = token {
+        // The hub's socket works without any network; agents also get a forwarder to it at
+        // `BOTLER_URL`, the SDK talks to the socket directly.
+        mounts.push(Mount::Bind { src: hub.paths.run_dir(), dst: CONTAINER_RUN_DIR.into(), read_only: true });
+        vars.insert("BOTLER_SOCKET".into(), format!("{CONTAINER_RUN_DIR}/{SOCKET_NAME}"));
         vars.insert("BOTLER_URL".into(), hub.config.container_url.clone());
         vars.insert("BOTLER_TOKEN".into(), hub.tokens.issue(&who, ttl, Utc::now()));
-        secrets(hub, env, extra_secrets, &secret_dir, &mut vars, &mut mounts).await?;
+        secrets(hub, env, extra_secrets, hub_class, &secret_dir, &mut vars, &mut mounts).await?;
     }
     if let Some(home) = agent_home {
         ssh_dir(&home, &mounts).await?;
@@ -123,7 +131,7 @@ pub async fn container_spec(
     spec.network = match env.network() {
         Network::None => NetworkMode::None,
         // Services and the agents granted them meet on the services network.
-        Network::Default if service || !env.mcp.is_empty() => {
+        Network::Default if service || !env.reached().is_empty() => {
             hub.containers.ensure_network(&hub.network()).await?;
             NetworkMode::Named(hub.network())
         }
@@ -149,6 +157,7 @@ async fn secrets(
     hub: &Hub,
     env: &Environment,
     extra: &[String],
+    hub_class: bool,
     secret_dir: &Path,
     vars: &mut BTreeMap<String, String>,
     mounts: &mut Vec<Mount>,
@@ -168,7 +177,7 @@ async fn secrets(
         let name = &decl.name;
         // Definitions validation already forbids this; checked again because it is the line
         // that keeps the approval guarantee.
-        if decl.class != SecretClass::Container {
+        if decl.class != SecretClass::Container && !hub_class {
             return Err(HubError::Forbidden(format!("hub-class secret {name} cannot enter a container")));
         }
         let missing = || HubError::MissingSecret(name.clone());

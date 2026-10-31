@@ -23,12 +23,14 @@ model = "qwen/qwen3.8-flash"
 api_key_secret = "OPENROUTER_API_KEY"
 max_tokens = 8192
 
-# Expensive; only for agents that name it.
+# Expensive; only for agents that name it. Sees images (attachments, `read` of a picture):
+# routes only get images when `input` includes "image".
 [models.routes.smart]
 provider = "openrouter"
 model = "anthropic/claude-sonnet-latest"
 api_key_secret = "OPENROUTER_API_KEY"
 max_tokens = 16384
+input = ["text", "image"]
 
 [defaults]
 idle_timeout = "15m"
@@ -39,3 +41,10 @@ reply_within = "20m"
 
 [defaults.budget]
 usd_per_day = 1.0
+
+# Push blocking requests to your phone with ntfy (https://ntfy.sh or self-hosted). The topic is a
+# secret (declare it in secrets.toml, e.g. a hub-class group); the push text is fixed, never what
+# an agent wrote.
+# [push]
+# ntfy_url = "https://ntfy.sh"
+# topic_secret = "NTFY_TOPIC"

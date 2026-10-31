@@ -129,7 +129,8 @@ pub fn environment_of<'a>(held: impl IntoIterator<Item = (&'a Resource, Option<M
     for (r, mode) in held {
         match r.kind {
             ResourceKind::Secret => env.secrets.push(r.name.clone()),
-            ResourceKind::Service => env.mcp.push(r.name.clone()),
+            // A grant reaches the service; it is no MCP server unless the definition says so.
+            ResourceKind::Service => env.services.push(r.name.clone()),
             ResourceKind::Mount => {
                 let m = env.mounts.entry(r.name.clone()).or_default();
                 *m = (*m).max(mode.unwrap_or_default());
@@ -144,7 +145,7 @@ pub fn environment_of<'a>(held: impl IntoIterator<Item = (&'a Resource, Option<M
 pub fn env_gives(env: &Environment, r: &Resource, mode: Option<MountMode>) -> bool {
     match r.kind {
         ResourceKind::Secret => env.secrets.contains(&r.name),
-        ResourceKind::Service => env.mcp.contains(&r.name),
+        ResourceKind::Service => env.reached().contains(&r.name),
         ResourceKind::Mount => env.mounts.get(&r.name).is_some_and(|m| *m >= mode.unwrap_or_default()),
         ResourceKind::Event => false,
     }
@@ -174,7 +175,7 @@ mod tests {
         let ro = Some(MountMode::ReadOnly);
         let env = environment_of(held.iter().map(|r| (r, ro)));
         assert_eq!(env.secrets, ["a"]);
-        assert_eq!(env.mcp, ["notes"]);
+        assert_eq!((env.mcp.len(), env.services.clone()), (0, vec!["notes".to_string()]), "a grant is no MCP server");
         assert_eq!(env.mounts, BTreeMap::from([("nas".to_string(), MountMode::ReadOnly)]));
         assert!(env_gives(&env, &held[0], None) && env_gives(&env, &held[2], None));
         assert!(!env_gives(&env, &held[2], Some(MountMode::ReadWrite)) && !env_gives(&env, &held[3], None));

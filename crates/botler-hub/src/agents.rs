@@ -26,6 +26,8 @@ use crate::hub::{Hub, HubError, Live, Result, builtin};
 use crate::phase::{AgentStatus, WakePhase, WakeStep};
 use crate::{images, ops, prompt};
 
+/// The forwarder (`images/agent-base/forward.mjs`, shipped with the hub and mounted).
+pub const FORWARDER: &str = "/botler/forward/forward.mjs";
 /// Attempts before a delivery pi keeps rejecting is dropped.
 const MAX_ATTEMPTS: i64 = 5;
 /// Every agent's persistent home: `$HOME` and the working directory.
@@ -145,6 +147,11 @@ impl Agents {
     /// The current wake phase or last wake error of an instance, if any.
     pub async fn phase(&self, instance: &str) -> Option<WakePhase> {
         self.phases.lock().await.get(instance).cloned()
+    }
+
+    /// Make `wake` the current session of `instance`: tokens of any other wake stop working.
+    pub async fn begin_wake(&self, instance: &str, wake: &str) {
+        self.wakes.lock().await.insert(instance.to_string(), wake.to_string());
     }
 
     /// Whether `wake` is the current session of `instance`.
@@ -374,7 +381,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     let env = agent_env.env.clone();
     let spec = container_spec(hub, instance, def, &env, &applied, image, branch.as_deref(), &wake).await?;
     tracing::info!(instance = %instance.name, %wake, "waking agent");
-    hub.agents.wakes.lock().await.insert(instance.name.clone(), wake.clone());
+    hub.agents.begin_wake(&instance.name, &wake).await;
     let attached = match hub.containers.run_attached(&spec).await {
         Ok(a) => a,
         Err(e) => {
@@ -577,8 +584,11 @@ async fn container_spec(
         .route_for(&def.spec)
         .ok_or_else(|| HubError::Undefined { kind: "model route", name: def.name.clone() })?;
 
+    // The forwarder relays 127.0.0.1:7420 to the hub's socket, then runs pi.
     let mut command = vec![
-        "pi".to_string(),
+        "node".to_string(),
+        FORWARDER.into(),
+        "pi".into(),
         "--mode".into(),
         "rpc".into(),
         "--no-approve".into(),
@@ -625,9 +635,12 @@ async fn container_spec(
         vars.insert(key.into(), value.clone());
     }
     // Lets git in the workspace push to the hub without storing the token in .git/config.
-    vars.insert("GIT_CONFIG_COUNT".into(), "1".into());
+    vars.insert("GIT_CONFIG_COUNT".into(), "2".into());
     vars.insert("GIT_CONFIG_KEY_0".into(), format!("http.{}/git/.extraHeader", hub.config.container_url));
     vars.insert("GIT_CONFIG_VALUE_0".into(), format!("Authorization: Bearer {}", vars["BOTLER_TOKEN"]));
+    // Clones made before the hub moved behind the socket have the old TCP origin.
+    vars.insert("GIT_CONFIG_KEY_1".into(), format!("url.{}/.insteadOf", hub.config.container_url));
+    vars.insert("GIT_CONFIG_VALUE_1".into(), format!("http://host.containers.internal:{}/", hub.config.listen.port()));
 
     // Rendered pi config: a tmpfs agent dir with read-only files on top (pi needs to write locks).
     let dir = hub.paths.agent_dir(&instance.name);
@@ -641,7 +654,11 @@ async fn container_spec(
     if let Some(u) = &route.base_url {
         provider.insert("baseUrl".into(), json!(u));
     }
-    provider.insert("modelOverrides".into(), json!({ route.model.clone(): { "maxTokens": route.max_tokens } }));
+    let mut model = json!({ "maxTokens": route.max_tokens });
+    if let Some(input) = &route.input {
+        model["input"] = json!(input);
+    }
+    provider.insert("modelOverrides".into(), json!({ route.model.clone(): model }));
     let models = json!({ "providers": { route.provider.clone(): provider } });
     let mut servers = serde_json::Map::new();
     servers.insert(
@@ -665,6 +682,7 @@ async fn container_spec(
         ("tools.json", to_json(&json!(tools))?),
         ("turn-tools.json", to_json(&ops::turn_ending_tools(&caller))?),
         ("mcp.json", to_json(&json!({ "mcpServers": servers }))?),
+        ("services.json", to_json(&json!(service_addresses(hub, applied, env).await?))?),
         // Memory indexes are read once per wake, so the prompt stays stable within a session.
         ("botler.md", prompt::render(instance, def, branch) + &crate::memory::index_section(hub, def).await?),
         ("AGENTS.md", def.prompt.clone().unwrap_or_default()),
@@ -685,6 +703,14 @@ async fn container_spec(
         dst: "/botler/extension".into(),
         read_only: true,
     });
+    let inbox = hub.paths.inbox(&instance.name);
+    tokio::fs::create_dir_all(&inbox).await?;
+    mounts.push(Mount::Bind { src: inbox, dst: crate::uploads::INBOX.into(), read_only: true });
+    mounts.push(Mount::Bind {
+        src: hub.paths.assets().join("forward"),
+        dst: "/botler/forward".into(),
+        read_only: true,
+    });
     if let Some(src) = pi_res {
         mounts.push(Mount::Bind { src, dst: "/botler/pi".into(), read_only: true });
     }
@@ -693,6 +719,31 @@ async fn container_spec(
 
 /// `mcp.json` entries besides the hub: granted services, reached directly on the services network
 /// (they get no botler token), and stdio servers pi starts inside the container.
+/// Where a service this agent may reach is (`/botler/agent-dir/services.json`).
+#[derive(serde::Serialize)]
+struct ServiceAddress {
+    name: String,
+    /// Its name on the services network (`http://<host>:<port>`).
+    host: String,
+    /// Its current IP there, for clients that reject host names (Chrome DevTools checks the
+    /// `Host` header). `null` while the service is not running; it may change when the service
+    /// restarts, and is refreshed when this agent wakes.
+    ip: Option<String>,
+    port: u16,
+}
+
+async fn service_addresses(hub: &Hub, applied: &crate::hub::Applied, env: &Environment) -> Result<Vec<ServiceAddress>> {
+    let mut out = Vec::new();
+    for svc in env.reached() {
+        // Validation guarantees a service with a port.
+        let Some(port) = applied.defs.jobs.get(&svc).and_then(|j| j.spec.env.port) else { continue };
+        let info = hub.containers.inspect(&crate::services::container_name(hub, &svc)).await?;
+        let ip = info.filter(|c| c.running).and_then(|c| c.ips.get(&hub.network()).cloned());
+        out.push(ServiceAddress { host: svc.clone(), name: svc, ip, port });
+    }
+    Ok(out)
+}
+
 fn mcp_servers(applied: &crate::hub::Applied, env: &Environment) -> serde_json::Map<String, serde_json::Value> {
     let mut servers = serde_json::Map::new();
     for svc in &env.mcp {

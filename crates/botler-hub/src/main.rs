@@ -27,9 +27,11 @@ enum Command {
     Init,
     /// Run the hub.
     Serve {
-        #[arg(long, env = "BOTLER_LISTEN", default_value = "0.0.0.0:7420")]
+        /// TCP address for the web app and API. Containers use the hub's Unix socket instead, so
+        /// localhost is enough; reach it from other devices through a proxy (Tailscale serve).
+        #[arg(long, env = "BOTLER_LISTEN", default_value = "127.0.0.1:7420")]
         listen: SocketAddr,
-        /// URL containers use to reach the hub (default: host.containers.internal:<port>).
+        /// URL agents use to reach the hub (default: their forwarder, http://127.0.0.1:7420).
         #[arg(long, env = "BOTLER_CONTAINER_URL")]
         container_url: Option<String>,
         /// `podman` or `docker` (default: auto-detect).
@@ -298,7 +300,8 @@ async fn template_status(paths: Paths) -> anyhow::Result<()> {
 
 /// Data directory entries that are facts. Everything else (exports, worktrees, logs, agent-dirs,
 /// assets, images, the search index `search.db`) is derived and rebuilt by the hub.
-const BACKUP_DIRS: &[&str] = &["repo.git", "memory", "sessions", "workspaces", "homes", "shared-homes", "uploads"];
+const BACKUP_DIRS: &[&str] =
+    &["repo.git", "memory", "sessions", "workspaces", "homes", "shared-homes", "uploads", "inbox"];
 
 async fn backup(paths: &Paths, dest: &std::path::Path, with_key: bool, full: bool) -> anyhow::Result<()> {
     if !paths.db().exists() {

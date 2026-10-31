@@ -12,7 +12,9 @@ Services: an exit is a failure, restarted with exponential backoff (`[restart]`)
 `crashloop_window` stop it until its incident is resolved. With `[health] heartbeat = "1m"` the
 service must call `botler.health.ok()` that often (`health.fail(reason)` restarts it). A change to
 its image inputs restarts it; other merges do not. `port = 8000` lets agents that list the service
-in `mcp = [...]` reach its MCP server at `http://<name>:8000/mcp` on the hub's container network.
+in `mcp = [...]` reach its MCP server at `http://<name>:8000/mcp` on the hub's container network;
+`services = [...]` (or a `service:<name>` grant) reaches anything else it serves there (HTTP,
+CDP), listed with its IP in the agent's `/botler/agent-dir/services.json`.
 `[[publish]] port = 8000, host_port = 8080` (optional `bind = "127.0.0.1"`, default `0.0.0.0`)
 makes it reachable from the user's network at `<host>:8080`; that needs the user's approval, and
 host ports must be 1024 or above. Agents can also run stdio MCP servers in their own container:

@@ -144,6 +144,15 @@ pub(crate) async fn launch_job(
     tokio::fs::write(&event_file, event_json).await?;
     spec.mounts.push(Mount::Bind { src: event_file, dst: "/botler/event.json".into(), read_only: true });
     spec.env.insert("BOTLER_EVENT_FILE".into(), "/botler/event.json".into());
+    if run.kind == RunKind::Action {
+        // Exactly the arguments the user approved.
+        let p = crate::actions::proposal_of(hub, run).await?;
+        let args = serde_json::to_vec_pretty(&p.args).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+        let args_file = run_dir.join("args.json");
+        tokio::fs::write(&args_file, args).await?;
+        spec.mounts.push(Mount::Bind { src: args_file, dst: crate::actions::ARGS_FILE.into(), read_only: true });
+        spec.env.insert("BOTLER_ACTION_ARGS".into(), crate::actions::ARGS_FILE.into());
+    }
     // The name is stable: clear the leftover of a run the hub could not finalize.
     if service
         && let Some(c) = hub.containers.inspect(&spec.name).await?
@@ -174,7 +183,7 @@ pub async fn sweep_timeouts(hub: &Hub, now: chrono::DateTime<Utc>) -> Result<()>
             crate::trials::sweep(hub, &run, now).await?;
             continue;
         }
-        if run.kind != RunKind::Oneshot || run.status != RunStatus::Running {
+        if !matches!(run.kind, RunKind::Oneshot | RunKind::Action) || run.status != RunStatus::Running {
             continue;
         }
         let Some(started) = run.started_at else { continue };
@@ -203,6 +212,9 @@ async fn on_timeout(hub: &Hub, run_id: &str) -> Result<()> {
         Err(e) => tracing::error!(container = %name, error = %e, "could not stop timed-out job"),
     }
     finalize_container(hub, &run).await;
+    if run.kind == RunKind::Action {
+        return crate::actions::finished(hub, &run, false, &logs, Some("timed out")).await;
+    }
     failures::report(hub, failure(&run, "timeout", None, failures::tail(&logs, 40))).await?;
     start_queued(hub, &run.runnable).await
 }
@@ -235,6 +247,10 @@ pub async fn on_exit(hub: &Hub, run_id: &str, exit_code: Option<i64>, oom: bool)
     finalize_container(hub, &run).await;
     if !transitioned {
         return Ok(()); // timeout already handled it
+    }
+    if run.kind == RunKind::Action {
+        // The invoking chat hears the result either way; a failed action is no incident.
+        return crate::actions::finished(hub, &run, ok, &logs, reason.as_deref()).await;
     }
     if ok {
         let output = logs.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();

@@ -147,7 +147,7 @@ impl Op for ListConnections {
         let def_env = applied.defs.agents.get(&inst.definition).map(|d| d.spec.env.clone()).unwrap_or_default();
         let grants = hub.store.live_grants(&inst.name).await?;
         let (granted, _) = grants::environment(hub, &inst.name).await?;
-        let services = def_env.extend(&granted).0.mcp;
+        let services = def_env.extend(&granted).0.reached();
         let me = format!("agent:{}", inst.name);
         let timers = hub
             .store

@@ -62,6 +62,8 @@ pub struct Proposal {
     pub action: Option<String>,
     pub args: Option<serde_json::Value>,
     pub args_hash: Option<String>,
+    /// Actions: the action's code version (image tag) when it was invoked; only that code runs.
+    pub code_version: Option<String>,
     /// The deployment summary, once the change validated.
     pub summary: Option<botler_core::change::ChangeSummary>,
     pub gate_report: Option<String>,
@@ -94,6 +96,7 @@ pub struct NewProposal {
     pub action: Option<String>,
     pub args: Option<serde_json::Value>,
     pub args_hash: Option<String>,
+    pub code_version: Option<String>,
 }
 
 fn row(r: &SqliteRow) -> Result<Proposal> {
@@ -114,6 +117,7 @@ fn row(r: &SqliteRow) -> Result<Proposal> {
         action: r.get("action"),
         args: json(r, "args")?,
         args_hash: r.get("args_hash"),
+        code_version: r.get("code_version"),
         summary: json(r, "summary")?,
         gate_report: r.get("gate_report"),
         verdict: r.get("verdict"),
@@ -145,8 +149,8 @@ impl Store {
         let id = new_id();
         let now = ts(Utc::now());
         sqlx::query(
-            "INSERT INTO proposals (id, kind, instance, title, branch, base_commit, head_commit, action, args, args_hash, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO proposals (id, kind, instance, title, branch, base_commit, head_commit, action, args, args_hash, code_version, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(kind.as_str())
@@ -158,6 +162,7 @@ impl Store {
         .bind(&p.action)
         .bind(p.args.as_ref().map(ToString::to_string))
         .bind(&p.args_hash)
+        .bind(&p.code_version)
         .bind(status.as_str())
         .bind(&now)
         .bind(&now)

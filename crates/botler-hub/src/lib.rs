@@ -1,5 +1,6 @@
 //! The botler hub.
 
+pub mod actions;
 pub mod agent_env;
 pub mod agents;
 pub mod api;
@@ -45,7 +46,9 @@ pub mod template;
 pub mod transactions;
 pub mod trials;
 pub mod turns;
+pub mod uploads;
 pub mod web;
+pub mod webhooks;
 pub mod wire;
 
 pub use hub::{Hub, HubError};

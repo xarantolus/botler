@@ -52,6 +52,7 @@ const proposal = (extra: Partial<Proposal>): Proposal => ({
   action: null,
   args: null,
   args_hash: null,
+  code_version: null,
   summary: null,
   gate_report: null,
   verdict: null,

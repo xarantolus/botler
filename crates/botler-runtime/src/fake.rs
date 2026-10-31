@@ -345,7 +345,8 @@ impl Containers for Fake {
     async fn run_attached(&self, spec: &ContainerSpec) -> Result<Attached> {
         Self::check_mounts(spec)?;
         let command = self.unwrap_mounts(spec)?;
-        if command.first().is_some_and(|c| c != "pi") {
+        // pi runs directly or behind the agent forwarder (`node forward.mjs pi ...`).
+        if !command.iter().take(3).any(|c| c == "pi") {
             let (output, code) = self.lock().script.clone();
             let (hub_w, _pi_r) = tokio::io::duplex(64);
             let (mut pi_w, hub_r) = tokio::io::duplex(1 << 16);
@@ -465,6 +466,14 @@ impl Containers for Fake {
                     _ => None,
                 })
                 .collect(),
+            // A stable fake address per container on its named network.
+            ips: match &c.spec.network {
+                crate::container::NetworkMode::Named(n) if c.running => {
+                    let octet = name.bytes().fold(0u8, |a, b| a.wrapping_mul(31).wrapping_add(b)) % 250 + 2;
+                    BTreeMap::from([(n.clone(), format!("10.89.0.{octet}"))])
+                }
+                _ => BTreeMap::new(),
+            },
         }))
     }
 

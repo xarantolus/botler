@@ -40,6 +40,11 @@ pub struct Environment {
     /// `http://<name>:<port>/mcp`.
     #[serde(default)]
     pub mcp: Vec<String>,
+    /// Agents: services (jobs with `lifetime = "service"` and a `port`) this agent reaches over
+    /// plain HTTP or another protocol, not MCP: it joins the services network and finds each in
+    /// `/botler/agent-dir/services.json` (name, IP and port).
+    #[serde(default)]
+    pub services: Vec<String>,
     /// Agents: MCP servers pi starts inside the container over stdio, by server name, e.g.
     /// `mcp_stdio = { fs = { command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."] } }`.
     #[serde(default)]
@@ -94,6 +99,13 @@ impl Environment {
         self.network.unwrap_or_default()
     }
 
+    /// Every service this environment reaches, over MCP or not.
+    pub fn reached(&self) -> Vec<String> {
+        let mut all = self.mcp.clone();
+        all.extend(self.services.iter().filter(|s| !self.mcp.contains(s)).cloned());
+        all
+    }
+
     /// The keys set here that do not apply to agents (`agent = true`) or jobs and services.
     pub fn foreign_keys(&self, agent: bool) -> Vec<&'static str> {
         let keys = if agent {
@@ -104,6 +116,7 @@ impl Environment {
                 ("home", self.home.is_some()),
                 ("workspace", self.workspace.is_some()),
                 ("mcp", !self.mcp.is_empty()),
+                ("services", !self.services.is_empty()),
                 ("mcp_stdio", !self.mcp_stdio.is_empty()),
                 ("tools", !self.tools.is_empty()),
             ]
@@ -131,6 +144,7 @@ impl Environment {
         env.volume |= with.volume;
         add(&mut env.secrets, &with.secrets);
         add(&mut env.mcp, &with.mcp);
+        add(&mut env.services, &with.services);
         add(&mut env.tools, &with.tools);
         add(&mut env.publish, &with.publish);
         env.mcp_stdio.extend(with.mcp_stdio.clone());
@@ -151,7 +165,8 @@ impl Environment {
         if self.network() == Network::None && new.network() == Network::Default {
             out.push(EnvEscalation::Network);
         }
-        out.extend(added(&self.mcp, &new.mcp).into_iter().map(EnvEscalation::Service));
+        // Reaching a service is one escalation whether over MCP or not.
+        out.extend(added(&self.reached(), &new.reached()).into_iter().map(EnvEscalation::Service));
         for (server, s) in &new.mcp_stdio {
             if self.mcp_stdio.get(server) != Some(s) {
                 out.push(EnvEscalation::McpStdio { server: server.clone(), command: s.command.join(" ") });

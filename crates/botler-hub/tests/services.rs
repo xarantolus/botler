@@ -259,8 +259,8 @@ async fn granted_agents_join_the_network_and_get_mcp_servers() {
 
 /// Real Podman (`BOTLER_PODMAN_TESTS=1`; needs the agent base image, which it never builds): a
 /// Python HTTP service is reachable by name from an agent-style container on the hub's network
-/// and on its published host port, and the hub stays reachable from that network. Removes its
-/// containers, network and images afterwards.
+/// and on its published host port. (Containers reach the hub itself over its socket:
+/// `tests/socket.rs`.) Removes its containers, network and images afterwards.
 #[tokio::test]
 async fn podman_service_is_reachable_by_name_and_on_its_host_port() {
     use botler_runtime::{ContainerSpec, Containers};
@@ -273,10 +273,6 @@ async fn podman_service_is_reachable_by_name_and_on_its_host_port() {
         return;
     }
     let e = common::env_on(rt.clone(), botler_runtime::fake::Fake::new()).await;
-    // The hub's API on every interface, as `botler serve` listens.
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let hub_port = listener.local_addr().unwrap().port();
-    tokio::spawn(axum::serve(listener, botler_hub::api::router(e.hub.clone())).into_future());
 
     let host_port = 20000 + (std::process::id() % 20000) as u16;
     let toml = format!(
@@ -287,12 +283,10 @@ async fn podman_service_is_reachable_by_name_and_on_its_host_port() {
     let run = e.hub.store.runs_for("web", 1).await.unwrap().remove(0);
     assert_eq!(run.status, RunStatus::Running, "{run:?}");
 
-    let probe = format!(
-        "import time, urllib.request as u\n\
+    let probe = "import time, urllib.request as u\n\
          def get(url):\n    err = None\n    for _ in range(50):\n        try:\n            return u.urlopen(url, timeout=2).status\n        except Exception as e:\n            err = e\n            time.sleep(0.2)\n    return repr(err)\n\
-         print('service', get('http://web:8000/'))\n\
-         print('hub', get('http://host.containers.internal:{hub_port}/healthz'))\n"
-    );
+         print('service', get('http://web:8000/'))\n"
+        .to_string();
     let name = format!("botler-{}-probe", e.hub.id);
     let spec = ContainerSpec {
         name: name.clone(),
@@ -330,6 +324,5 @@ async fn podman_service_is_reachable_by_name_and_on_its_host_port() {
     }
 
     assert!(logs.contains("service 200"), "{logs}");
-    assert!(logs.contains("hub 200"), "{logs}");
     assert!(from_host.starts_with("HTTP/1.0 200"), "{from_host}");
 }

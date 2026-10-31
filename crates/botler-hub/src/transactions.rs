@@ -359,6 +359,9 @@ pub const USER: &str = "user";
 pub async fn on_approval(hub: &Arc<Hub>, id: &str, approved: bool, reason: Option<&str>) -> Result<()> {
     let reason = reason.map(str::trim).filter(|r| !r.is_empty());
     let p = hub.store.proposal(id).await?;
+    if p.kind == ProposalKind::Action {
+        return crate::actions::on_approval(hub, &p, approved, reason).await;
+    }
     if approved {
         if p.status != ProposalStatus::AwaitingUser {
             return Err(HubError::Forbidden(format!(
@@ -399,7 +402,7 @@ pub async fn on_approval(hub: &Arc<Hub>, id: &str, approved: bool, reason: Optio
 }
 
 /// Answer the proposal's open approval dialog, if any.
-async fn close_approval(hub: &Hub, id: &str, answer: &str) -> Result<()> {
+pub(crate) async fn close_approval(hub: &Hub, id: &str, answer: &str) -> Result<()> {
     for d in hub.store.open_dialogs().await? {
         if d.kind == DialogKind::Approval && d.proposal_id.as_deref() == Some(id) {
             hub.store.answer_dialog(&d.id, answer).await?;

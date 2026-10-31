@@ -6,6 +6,9 @@ use std::path::Path;
 use crate::config::Paths;
 
 pub const AGENT_BASE_DOCKERFILE: &str = include_str!("../../../images/agent-base/Dockerfile");
+/// Relays the hub's socket to 127.0.0.1:7420 in agent containers (mounted, not baked into the
+/// image, so it always matches the hub).
+pub const FORWARDER: &str = include_str!("../../../images/agent-base/forward.mjs");
 /// The entrypoint of containers with network shares (bind-mounted, see `mounts.rs`).
 pub const MOUNTS_ENTRYPOINT: &str = include_str!("../../../images/mounts/botler-mounts");
 
@@ -24,6 +27,7 @@ pub const AGENT_BASE_LATEST: &str = "localhost/botler/agent-base:latest";
 pub fn unpack(paths: &Paths) -> std::io::Result<()> {
     let root = paths.assets();
     write(&root.join("agent-base/Dockerfile"), AGENT_BASE_DOCKERFILE)?;
+    write(&root.join("forward/forward.mjs"), FORWARDER)?;
     write(&root.join("mounts/botler-mounts"), MOUNTS_ENTRYPOINT)?;
     // Mount sources must exist even while a package ships no files.
     std::fs::create_dir_all(root.join("extension"))?;
