@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::future::BoxFuture;
 use sha2::{Digest, Sha256};
 
 use crate::assets;
@@ -53,23 +54,91 @@ impl Recipe {
 /// The uv workspace's shared code and lock: what tools, connectors and packages are built from.
 const TOOL_INPUTS: [&str; 5] = ["pyproject.toml", "uv.lock", "packages", "tools", "connectors"];
 
-/// The tag of `recipe` at `commit`, and the inputs present there. Every botler image the
-/// Dockerfile builds `FROM` must exist.
-async fn resolve(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<(String, Vec<String>)> {
-    let paths: Vec<&str> = recipe.inputs.iter().map(String::as_str).collect();
-    let ids = hub.repo.path_ids(commit, &paths).await?;
-    let dockerfile = hub.repo.read_file(commit, &recipe.dockerfile).await?.unwrap_or_default();
-    let mut bases = Vec::new();
-    for base in botler_bases(&dockerfile) {
-        let id = hub
-            .containers
-            .image_id(&base)
-            .await?
-            .ok_or_else(|| HubError::Undefined { kind: "base image", name: base.clone() })?;
-        bases.push((base, id));
-    }
-    let tag = format!("localhost/botler/{}:{}", recipe.repository, key(recipe, &ids, &bases));
-    Ok((tag, ids.into_keys().collect()))
+/// A monorepo image a Dockerfile builds `FROM`: `botler/image-<name>` means `images/<name>/` at
+/// the same commit, built first and substituted by its tag.
+struct MonorepoBase {
+    /// The reference as [`botler_bases`] normalizes it.
+    reference: String,
+    image: String,
+    tag: String,
+}
+
+/// What [`resolve`] finds: the tag, the inputs present, and the monorepo images it builds on.
+struct Resolved {
+    tag: String,
+    inputs: Vec<String>,
+    monorepo: Vec<MonorepoBase>,
+}
+
+/// The tag of `recipe` at `commit`. Every other botler image the Dockerfile builds `FROM` must
+/// exist.
+fn resolve<'a>(hub: &'a Hub, recipe: &'a Recipe, commit: &'a str) -> BoxFuture<'a, Result<Resolved>> {
+    Box::pin(async move {
+        let paths: Vec<&str> = recipe.inputs.iter().map(String::as_str).collect();
+        let ids = hub.repo.path_ids(commit, &paths).await?;
+        let dockerfile = hub.repo.read_file(commit, &recipe.dockerfile).await?.unwrap_or_default();
+        let mut bases = Vec::new();
+        let mut monorepo = Vec::new();
+        for base in botler_bases(&dockerfile) {
+            let image = monorepo_image(&base).map(str::to_string);
+            let defined = match &image {
+                Some(i) => hub.repo.read_file(commit, &format!("images/{i}/Dockerfile")).await?.is_some(),
+                None => false,
+            };
+            if let (Some(image), true) = (image, defined) {
+                // Its tag is a content hash already: it stands in for the image id.
+                let tag = resolve(hub, &Recipe::agent(&image), commit).await?.tag;
+                bases.push((base.clone(), tag.clone()));
+                monorepo.push(MonorepoBase { reference: base, image, tag });
+                continue;
+            }
+            let id = hub
+                .containers
+                .image_id(&base)
+                .await?
+                .ok_or_else(|| HubError::Undefined { kind: "base image", name: base.clone() })?;
+            bases.push((base, id));
+        }
+        let tag = format!("localhost/botler/{}:{}", recipe.repository, key(recipe, &ids, &bases));
+        Ok(Resolved { tag, inputs: ids.into_keys().collect(), monorepo })
+    })
+}
+
+/// `<name>` of a `localhost/botler/image-<name>[:tag]` reference.
+fn monorepo_image(reference: &str) -> Option<&str> {
+    let rest = reference.strip_prefix("localhost/botler/image-")?;
+    Some(rest.split(':').next().unwrap_or(rest)).filter(|n| !n.is_empty())
+}
+
+/// `dockerfile` with the `FROM` references in `to` replaced.
+fn rewrite_from(dockerfile: &str, to: &BTreeMap<&str, &str>) -> String {
+    dockerfile
+        .lines()
+        .map(|l| {
+            let words: Vec<&str> = l.split_whitespace().collect();
+            let Some(i) = words
+                .first()
+                .filter(|w| w.eq_ignore_ascii_case("FROM"))
+                .and_then(|_| words.iter().skip(1).position(|w| !w.starts_with("--")).map(|p| p + 1))
+            else {
+                return l.to_string();
+            };
+            let normalized = if words[i].starts_with("localhost/") {
+                words[i].to_string()
+            } else {
+                format!("localhost/{}", words[i])
+            };
+            match to.get(normalized.as_str()) {
+                Some(tag) => {
+                    let mut w = words.clone();
+                    w[i] = tag;
+                    w.join(" ")
+                }
+                None => l.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The hash a tag carries: everything that determines the image.
@@ -164,7 +233,11 @@ async fn remove_dir(dir: &Path) {
 /// The tag of `recipe` at `commit`, built if missing.
 pub async fn ensure(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<String> {
     ensure_base(hub).await?;
-    let (tag, inputs) = resolve(hub, recipe, commit).await?;
+    let Resolved { tag, inputs, monorepo } = resolve(hub, recipe, commit).await?;
+    // Before taking the build lock, which building them takes too.
+    for base in &monorepo {
+        Box::pin(ensure(hub, &Recipe::agent(&base.image), commit)).await?;
+    }
     if hub.containers.image_id(&tag).await?.is_some() {
         return Ok(tag);
     }
@@ -176,6 +249,12 @@ pub async fn ensure(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<String> 
     let inputs: Vec<&str> = inputs.iter().map(String::as_str).collect();
     let built = async {
         hub.repo.export_paths(commit, &inputs, &ctx).await?;
+        if !monorepo.is_empty() {
+            let path = ctx.join(&recipe.dockerfile);
+            let to: BTreeMap<&str, &str> = monorepo.iter().map(|b| (b.reference.as_str(), b.tag.as_str())).collect();
+            let rewritten = rewrite_from(&tokio::fs::read_to_string(&path).await?, &to);
+            tokio::fs::write(&path, rewritten).await?;
+        }
         tracing::info!(%tag, dockerfile = recipe.dockerfile, "building image");
         let labels = BTreeMap::from([(OWNER_LABEL.to_string(), owner(hub))]);
         Ok::<_, HubError>(hub.containers.build(&ctx, &recipe.dockerfile, &tag, &labels).await?)
@@ -204,7 +283,7 @@ pub async fn ensure_job_image(hub: &Hub, job: &str, commit: &str) -> Result<Stri
 
 /// The tag `recipe` has at `commit`, without building it.
 pub async fn tag(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<String> {
-    Ok(resolve(hub, recipe, commit).await?.0)
+    Ok(resolve(hub, recipe, commit).await?.tag)
 }
 
 const PI: &str = "pi";
@@ -340,6 +419,19 @@ pub async fn prebuild_loop(hub: Arc<Hub>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monorepo_bases_are_substituted_by_their_tag() {
+        assert_eq!(monorepo_image("localhost/botler/image-browser"), Some("browser"));
+        assert_eq!(monorepo_image("localhost/botler/image-browser:latest"), Some("browser"));
+        assert_eq!(monorepo_image("localhost/botler/agent-base:latest"), None);
+        let to = BTreeMap::from([("localhost/botler/image-browser", "localhost/botler/image-browser:abc")]);
+        let df = "FROM botler/image-browser AS b\nRUN echo botler/image-browser\nfrom --platform=x localhost/botler/image-browser\nFROM python:3";
+        assert_eq!(
+            rewrite_from(df, &to),
+            "FROM localhost/botler/image-browser:abc AS b\nRUN echo botler/image-browser\nfrom --platform=x localhost/botler/image-browser:abc\nFROM python:3"
+        );
+    }
 
     #[test]
     fn finds_botler_bases() {

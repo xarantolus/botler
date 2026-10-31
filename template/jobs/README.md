@@ -25,4 +25,6 @@ a service needs the user's approval; `enabled = false` keeps a job defined but n
 
 A job's image is built from the repo root, but the build context holds only `jobs/<name>/`,
 `packages/`, `tools/`, `connectors/`, `pyproject.toml` and `uv.lock` (at their repo paths, e.g.
-`COPY jobs/<name>/ ...`). The image is rebuilt only when one of those changes.
+`COPY jobs/<name>/ ...`). The image is rebuilt only when one of those changes. `FROM
+botler/image-<x>` builds on `images/<x>/` at the same commit (e.g. `images/browser`, a Chromium
+desktop: skill `browser-login`, example `jobs/browser-example/`).
