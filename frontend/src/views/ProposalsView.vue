@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Changes agents proposed to the monorepo and their status (live). A row opens its review page;
-// merged ones can be reverted.
+// merged ones can be reverted. A table on wide screens, stacked rows on a phone.
 import type { TableColumn, TableRow } from "@nuxt/ui";
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
@@ -43,6 +43,12 @@ async function revert(commit: string, title: string) {
   }
 }
 
+const empty = {
+  icon: "i-lucide-git-pull-request-arrow",
+  title: "No proposals yet",
+  description: "When an agent proposes a change to the monorepo, it shows up here for review.",
+};
+
 const columns: TableColumn<Proposal>[] = [
   { accessorKey: "title", header: "Title" },
   { accessorKey: "instance", header: "From" },
@@ -63,16 +69,49 @@ function onSelect(_e: Event, row: TableRow<Proposal>) {
     <template #right>
       <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="Refresh" :loading="loading" @click="load" />
     </template>
+    <!-- Phone: one stacked row each; the title's link covers the row. -->
+    <div class="xl:hidden">
+      <div v-if="loading && !state.proposals" class="space-y-3 p-4">
+        <USkeleton v-for="i in 3" :key="i" class="h-12 w-full" />
+      </div>
+      <UEmpty v-else-if="!state.proposals?.length" v-bind="empty" variant="naked" class="p-4" />
+      <ul v-else class="divide-y divide-default">
+        <li v-for="p in state.proposals" :key="p.id" class="relative px-4 py-3 hover:bg-elevated/50">
+          <ULink
+            :to="{ name: 'proposal', params: { id: p.id } }"
+            class="block font-medium break-words text-highlighted after:absolute after:inset-0"
+          >
+            {{ p.title }}
+          </ULink>
+          <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+            <UBadge :color="proposalStatusColor(p.status)" variant="subtle" size="sm" :label="proposalStatusLabel(p.status)" />
+            <span v-if="stageSummary(p, now)">{{ stageSummary(p, now) }}</span>
+            <span>from <span class="text-default">{{ p.instance }}</span> · <TimeAgo :at="p.updated_at" /></span>
+            <span class="text-dimmed">{{ [p.kind, p.verdict].filter(Boolean).join(" · ") }}</span>
+            <UButton
+              v-if="p.merged_commit"
+              size="xs"
+              color="warning"
+              variant="outline"
+              icon="i-lucide-undo-2"
+              label="Revert"
+              class="relative ms-auto"
+              @click="revert(p.merged_commit, p.title)"
+            />
+          </div>
+        </li>
+      </ul>
+    </div>
     <UTable
       :data="state.proposals ?? []"
       :columns="columns"
       :loading="loading && !state.proposals"
       sticky
-      class="flex-1"
+      class="hidden flex-1 xl:block"
       :ui="{ td: 'py-2.5', tr: 'cursor-pointer' }"
       @select="onSelect"
     >
-      <template #title-cell="{ row }"><span class="font-medium text-highlighted">{{ row.original.title }}</span></template>
+      <template #title-cell="{ row }"><span class="block max-w-sm min-w-48 font-medium break-words whitespace-normal text-highlighted">{{ row.original.title }}</span></template>
       <template #status-cell="{ row }">
         <UBadge
           :color="proposalStatusColor(row.original.status)"
@@ -99,12 +138,7 @@ function onSelect(_e: Event, row: TableRow<Proposal>) {
         />
       </template>
       <template #empty>
-        <UEmpty class="sticky start-0 max-w-[calc(100vw-2rem)]"
-          icon="i-lucide-git-pull-request-arrow"
-          title="No proposals yet"
-          description="When an agent proposes a change to the monorepo, it shows up here for review."
-          variant="naked"
-        />
+        <UEmpty class="sticky start-0 max-w-[calc(100vw-2rem)]" v-bind="empty" variant="naked" />
       </template>
     </UTable>
 

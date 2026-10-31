@@ -153,7 +153,7 @@ const fileId = (path: string) => `file-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
     <div v-else class="mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 sm:p-6">
       <!-- Header -->
       <header class="space-y-2">
-        <h1 class="text-lg font-semibold text-highlighted">{{ p.title }}</h1>
+        <h1 class="text-lg font-semibold break-words text-highlighted">{{ p.title }}</h1>
         <div class="flex flex-wrap items-center gap-2 text-sm text-muted">
           <UBadge :color="proposalStatusColor(p.status)" variant="subtle" :label="proposalStatusLabel(p.status)" />
           <UBadge v-if="gate" :color="gate.color" variant="outline" size="sm" icon="i-lucide-shield-check" :label="`gate ${gate.label}`" />
