@@ -69,6 +69,11 @@ pub struct HubStatus {
     pub services: Vec<ServiceStatus>,
     /// What needs attention, for the sidebar's counts.
     pub attention: crate::system::Attention,
+    /// The applied jobs and services, agent definitions and secret groups, by name: the web app
+    /// links them where agents mention them.
+    pub jobs: Vec<String>,
+    pub agents: Vec<String>,
+    pub secret_groups: Vec<String>,
 }
 
 /// A service of the applied definitions and where it can be reached.

@@ -26,4 +26,9 @@ definition_problems: Array<Diagnostic>, skipped_definitions: Array<string>, open
 /**
  * What needs attention, for the sidebar's counts.
  */
-attention: Attention, };
+attention: Attention, 
+/**
+ * The applied jobs and services, agent definitions and secret groups, by name: the web app
+ * links them where agents mention them.
+ */
+jobs: Array<string>, agents: Array<string>, secret_groups: Array<string>, };

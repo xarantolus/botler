@@ -238,6 +238,9 @@ async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
         breakers: hub.store.breakers().await?,
         attention: crate::system::attention(&hub, &services).await?,
         services,
+        jobs: applied.defs.jobs.keys().cloned().collect(),
+        agents: applied.defs.agents.keys().cloned().collect(),
+        secret_groups: applied.defs.secret_groups.keys().cloned().collect(),
     }))
 }
 

@@ -48,6 +48,20 @@ describe("ChatComposer attachments", () => {
     expect(w.text()).not.toContain("notes.txt");
   });
 
+  it("sends files without text, with Enter or the send button", async () => {
+    const w = await mountInApp(ChatComposer, { instance: "botler", archived: false, busy: false });
+    await pick(w, [new File(["x"], "photo.png")]);
+    await w.find("textarea").trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    await pick(w, [new File(["y"], "notes.txt")]);
+    await w.find("button[aria-label='Send']").trigger("click");
+    await flushPromises();
+    expect(calls.filter((c) => c.name === "send_message").map((c) => c.args)).toEqual([
+      { body: { to: "botler", text: "", mode: "steer", files: ["abc123/photo.png"] } },
+      { body: { to: "botler", text: "", mode: "steer", files: ["abc123/notes.txt"] } },
+    ]);
+  });
+
   it("blocks sending while an upload failed, until it is removed", async () => {
     const w = await mountInApp(ChatComposer, { instance: "botler", archived: false, busy: false });
     await pick(w, [new File(["x"], "bad.bin")]);

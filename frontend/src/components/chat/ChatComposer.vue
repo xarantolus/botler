@@ -101,6 +101,11 @@ async function send(mode: SendMode) {
   }
 }
 
+/** The kit's prompt submits only with text: files alone are sent from here (Enter, the button). */
+function sendFiles() {
+  if (!draft.value.trim()) void send("steer");
+}
+
 defineExpose({ focus: () => prompt.value?.textareaRef?.focus() });
 </script>
 
@@ -129,6 +134,7 @@ defineExpose({ focus: () => prompt.value?.textareaRef?.focus() });
       :ui="{ base: 'px-1' }"
       @submit="send('steer')"
       @paste="onPaste"
+      @keydown.enter.exact="sendFiles"
       @keydown.enter.ctrl.exact.prevent="send('queue')"
       @keydown.enter.meta.exact.prevent="send('queue')"
     >
@@ -175,7 +181,7 @@ defineExpose({ focus: () => prompt.value?.textareaRef?.focus() });
             @click="send('queue')"
           />
         </UTooltip>
-        <UChatPromptSubmit :loading="sending || uploading" :disabled="!canSend" color="primary" aria-label="Send" />
+        <UChatPromptSubmit :loading="sending || uploading" :disabled="!canSend" color="primary" aria-label="Send" @click="sendFiles" />
       </template>
     </UChatPrompt>
   </div>

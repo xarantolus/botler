@@ -1,6 +1,6 @@
 // App state: one reactive object, refreshed from the API and patched by the live stream.
 
-import { computed, reactive } from "vue";
+import { computed, reactive, shallowRef, watch } from "vue";
 import { call, getToken, onUnauthorized, setToken, Unauthorized } from "./api/client";
 import type {
   AgentStatus,
@@ -14,6 +14,7 @@ import type {
   Usage,
 } from "./generated";
 import { currentStatus } from "./lib/phase";
+import { noReferences, references, type References } from "./lib/references";
 import { noLive, persisted, type LiveMessage } from "./lib/transcript";
 import { notifyError } from "./notify";
 
@@ -71,6 +72,28 @@ export const waitingByInstance = computed(() => {
   for (const d of state.dialogs?.open ?? []) m[d.instance] = (m[d.instance] ?? 0) + 1;
   return m;
 });
+
+/**
+ * The names and ids rendered Markdown links (lib/references.ts). Replaced only when that set
+ * changes, not on every refresh: each change renders every Markdown text again.
+ */
+export const knownReferences = shallowRef<References>(noReferences);
+watch(
+  () => [state.instances, state.proposals, state.dialogs, state.status] as const,
+  ([instances, proposals, dialogs, status]) => {
+    // Once everything has loaded, not once per part (each would render the open chat again).
+    if (!proposals || !dialogs || !status) return;
+    const next = references({
+      instances,
+      proposals,
+      dialogs: [...dialogs.open, ...dialogs.recent],
+      jobs: status.jobs,
+      agents: status.agents,
+      secretGroups: status.secret_groups,
+    });
+    if (next.key !== knownReferences.value.key) knownReferences.value = next;
+  },
+);
 
 /** Every dialog we know of (open ones first), for linking from transcripts. */
 export const allDialogs = computed((): Dialog[] => {
