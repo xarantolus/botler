@@ -19,6 +19,8 @@ import type { ClearChatCaches } from "./ClearChatCaches";
 import type { CollectGarbage } from "./CollectGarbage";
 import type { Connections } from "./Connections";
 import type { DeleteChat } from "./DeleteChat";
+import type { DeviceRevoked } from "./DeviceRevoked";
+import type { DeviceView } from "./DeviceView";
 import type { DialogAnswer } from "./DialogAnswer";
 import type { Dialogs } from "./Dialogs";
 import type { EntryDone } from "./EntryDone";
@@ -38,6 +40,7 @@ import type { Instance } from "./Instance";
 import type { JobStarted } from "./JobStarted";
 import type { LabelEntry } from "./LabelEntry";
 import type { ListConnections } from "./ListConnections";
+import type { LoginCode } from "./LoginCode";
 import type { MemoryCommit } from "./MemoryCommit";
 import type { MemoryEntry } from "./MemoryEntry";
 import type { MemoryFile } from "./MemoryFile";
@@ -77,6 +80,8 @@ import type { SessionView } from "./SessionView";
 import type { Settings } from "./Settings";
 import type { SettingsEdit } from "./SettingsEdit";
 import type { SettingsSaved } from "./SettingsSaved";
+import type { SignIn } from "./SignIn";
+import type { SignedIn } from "./SignedIn";
 import type { StopChat } from "./StopChat";
 import type { StorageOverview } from "./StorageOverview";
 import type { StorageUsage } from "./StorageUsage";
@@ -124,6 +129,11 @@ export interface Routes {
   settings: { method: "GET"; path: "/api/v1/settings"; params: Record<string, never>; query: never; body: never; response: Settings };
   save_settings: { method: "PUT"; path: "/api/v1/settings"; params: Record<string, never>; query: never; body: SettingsEdit; response: SettingsSaved };
   models: { method: "GET"; path: "/api/v1/models"; params: Record<string, never>; query: never; body: never; response: CatalogView };
+  login: { method: "POST"; path: "/api/v1/login"; params: Record<string, never>; query: never; body: SignIn; response: SignedIn };
+  login_code: { method: "POST"; path: "/api/v1/login/codes"; params: Record<string, never>; query: never; body: never; response: LoginCode };
+  devices: { method: "GET"; path: "/api/v1/devices"; params: Record<string, never>; query: never; body: never; response: Array<DeviceView> };
+  revoke_device: { method: "DELETE"; path: "/api/v1/devices/{id}"; params: { id: string }; query: never; body: never; response: DeviceRevoked };
+  logout: { method: "POST"; path: "/api/v1/logout"; params: Record<string, never>; query: never; body: never; response: DeviceRevoked };
   channels: { method: "GET"; path: "/api/v1/channels"; params: Record<string, never>; query: never; body: never; response: ChannelsView };
   channel_code: { method: "POST"; path: "/api/v1/channels/codes"; params: Record<string, never>; query: never; body: NewPairingCode; response: PairingCode };
   revoke_binding: { method: "DELETE"; path: "/api/v1/channels/bindings/{id}"; params: { id: string }; query: never; body: never; response: BindingRevoked };
@@ -183,6 +193,11 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   settings: { method: "GET", path: "/api/v1/settings" },
   save_settings: { method: "PUT", path: "/api/v1/settings" },
   models: { method: "GET", path: "/api/v1/models" },
+  login: { method: "POST", path: "/api/v1/login" },
+  login_code: { method: "POST", path: "/api/v1/login/codes" },
+  devices: { method: "GET", path: "/api/v1/devices" },
+  revoke_device: { method: "DELETE", path: "/api/v1/devices/{id}" },
+  logout: { method: "POST", path: "/api/v1/logout" },
   channels: { method: "GET", path: "/api/v1/channels" },
   channel_code: { method: "POST", path: "/api/v1/channels/codes" },
   revoke_binding: { method: "DELETE", path: "/api/v1/channels/bindings/{id}" },

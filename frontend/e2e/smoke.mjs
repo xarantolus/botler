@@ -158,10 +158,11 @@ const token = botler("token").trim();
 // The hub listens on localhost; its agents reach it over its Unix socket.
 const hub = spawn(bin, ["--data", data, "serve", "--listen", `127.0.0.1:${port}`], {
   env: { ...process.env, RUST_LOG: "info,rmcp=warn" },
-  stdio: ["ignore", "ignore", "pipe"],
+  stdio: ["ignore", "pipe", "pipe"],
 });
 let hubLog = "";
 hub.stderr.on("data", (d) => (hubLog = (hubLog + d).slice(-20_000)));
+hub.stdout.on("data", (d) => (hubLog = (hubLog + d).slice(-20_000)));
 const url = `http://127.0.0.1:${port}`;
 for (let i = 0; ; i++) {
   try {
@@ -169,7 +170,7 @@ for (let i = 0; ; i++) {
   } catch {
     // not up yet
   }
-  if (i > 60) throw new Error(`the hub did not start:\n${hubLog}`);
+  if (i > 240) throw new Error(`the hub did not start:\n${hubLog}`);
   await new Promise((r) => setTimeout(r, 500));
 }
 
@@ -185,10 +186,10 @@ try {
   browser = await chromium.launch({ executablePath: process.env.BOTLER_E2E_CHROMIUM, headless: !process.env.BOTLER_E2E_HEADED });
   page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.on("pageerror", (e) => console.log(`   page error: ${e.message}`));
-  step("sign in");
+  step("sign in with a one-time code");
   await page.goto(url);
-  await page.getByLabel("User token").fill(token);
-  await page.getByRole("button", { name: "Open" }).click();
+  await page.getByLabel("Sign-in code or token").fill(botler("login-code").trim());
+  await page.getByRole("button", { name: "Sign in" }).click();
   const composer = page.locator("#chat-composer textarea");
   await composer.waitFor({ timeout: 60_000 });
   await snap("signed-in");
@@ -220,10 +221,13 @@ try {
   const size = await shown.locator("[data-file=image] img").evaluate((img) => [img.naturalWidth, img.naturalHeight]);
   if (size[0] !== 64 || size[1] !== 40) throw new Error(`the picture did not load: ${size}`);
   const [tab] = await Promise.all([page.waitForEvent("popup"), pdf.click()]);
-  // Headless Chromium has no PDF viewer: it downloads the blob, which aborts the navigation.
-  await tab.waitForURL(/^blob:/, { timeout: 10_000 }).catch((e) => {
-    if (!String(e).includes("ERR_ABORTED")) throw e;
-  });
+  // Headless Chromium has no PDF viewer: it navigates to the blob and aborts that as a download,
+  // or downloads it at once.
+  await Promise.race([tab.waitForURL(/^blob:/, { timeout: 10_000 }), tab.waitForEvent("download", { timeout: 10_000 })]).catch(
+    (e) => {
+      if (!String(e).includes("ERR_ABORTED")) throw e;
+    },
+  );
   await tab.close();
   // The session view references the picture; its bytes stay in the session file.
   const view = await (await fetch(`${url}/api/v1/sessions/botler`, { headers: { authorization: `Bearer ${token}` } })).json();
@@ -244,7 +248,8 @@ try {
   await composer.fill("Please propose a change");
   await composer.press("Enter");
   await page.getByRole("link", { name: "Proposals" }).click();
-  await page.getByText("Add an e2e note").first().click({ timeout: 180_000 });
+  // The list has a table and stacked rows for phones; only one of them shows.
+  await page.getByText("Add an e2e note").filter({ visible: true }).first().click({ timeout: 180_000 });
   await page.getByRole("button", { name: "Reject" }).click();
   await page.getByLabel("Reason").fill("Only a smoke test.");
   await page.getByRole("dialog").getByRole("button", { name: "Reject" }).click();
@@ -274,6 +279,11 @@ try {
   if (process.env.BOTLER_E2E_KEEP) {
     console.log(`kept ${data}`);
   } else {
+    // Services outlive the hub on purpose (they survive its restarts): remove this hub's.
+    const containers = execFileSync("podman", ["ps", "-aq", "--filter", `label=botler.data=${data}`], { encoding: "utf8" })
+      .split("\n")
+      .filter(Boolean);
+    if (containers.length) execFileSync("podman", ["rm", "-f", ...containers], { stdio: "ignore" });
     const images = execFileSync("podman", ["images", "--filter", `label=botler.data=${data}`, "--format", '{{if eq .Repository "<none>"}}{{.ID}}{{else}}{{.Repository}}:{{.Tag}}{{end}}'], { encoding: "utf8" })
       .split("\n")
       .filter(Boolean);

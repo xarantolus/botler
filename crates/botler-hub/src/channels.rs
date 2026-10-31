@@ -16,7 +16,6 @@ use botler_core::payloads::{BuiltinPayload, MessagePayload, SendMode, Via};
 use botler_core::{FRONT_DOOR, Source};
 use botler_store::{ChannelBinding, Dialog, DialogKind, OutboxItem};
 use chrono::{DateTime, Duration, Utc};
-use rand::Rng;
 
 use crate::hub::{Hub, Result, builtin};
 
@@ -44,12 +43,8 @@ pub enum Inbound {
 
 /// A new one-time pairing code for messages to go to `target`.
 pub async fn create_code(hub: &Hub, target: &str) -> Result<(String, DateTime<Utc>)> {
-    // 31^8 ≈ 10^12 codes, so guessing one from outside in its lifetime is hopeless; no 0/O, 1/I/L.
-    const ALPHABET: &[u8] = b"23456789ABCDEFGHJKMNPQRSTUVWXYZ";
-    let code: String = {
-        let mut rng = rand::rng();
-        (0..8).map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char).collect()
-    };
+    // 31^8 ≈ 10^12 codes: guessing one from outside in its lifetime is hopeless.
+    let code = crate::login::random_code(8);
     let expires = Utc::now() + Duration::minutes(CODE_MINUTES);
     hub.store.create_channel_code(&code, target, expires).await?;
     Ok((code, expires))

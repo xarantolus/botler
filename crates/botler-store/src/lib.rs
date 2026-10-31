@@ -6,6 +6,7 @@
 mod breakers;
 mod channels;
 mod deliveries;
+mod devices;
 mod dialogs;
 mod events;
 mod grants;
@@ -31,6 +32,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePo
 pub use breakers::Breaker;
 pub use channels::{ChannelBinding, ChannelStranger, OutboxItem};
 pub use deliveries::{Delivery, DeliveryStatus};
+pub use devices::Device;
 pub use dialogs::{Dialog, DialogKind, DialogStatus, NewDialog, Priority};
 pub use events::EventQuery;
 pub use grants::{Grant, NewSubscription};

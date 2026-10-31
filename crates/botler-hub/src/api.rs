@@ -23,9 +23,10 @@ use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
 use crate::ops::{self, Caller, OpError};
 use crate::wire::{
-    ApiErrorBody, ArchiveOutcome, BreakerCleared, BudgetView, Cancelled, ChatCreated, ChatRestored, DialogAnswer,
-    DialogView, Dialogs, EventPosted, HubStatus, PauseState, ProposalView, QueuedMessage, ReachedChat, Reverted,
-    RuntimeInfo, Saved, SecretFieldView, SecretGroupView, SessionAnchor, SessionView, Trace, Usage,
+    ApiErrorBody, ArchiveOutcome, BreakerCleared, BudgetView, Cancelled, ChatCreated, ChatRestored, DeviceRevoked,
+    DeviceView, DialogAnswer, DialogView, Dialogs, EventPosted, HubStatus, LoginCode, PauseState, ProposalView,
+    QueuedMessage, ReachedChat, Reverted, RuntimeInfo, Saved, SecretFieldView, SecretGroupView, SessionAnchor,
+    SessionView, SignedIn, Trace, Usage,
 };
 
 type AppState = Arc<Hub>;
@@ -82,6 +83,10 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/breakers/clear", post(clear_breaker))
         .route("/api/v1/settings", get(settings).put(save_settings))
         .route("/api/v1/models", get(models))
+        .route("/api/v1/login/codes", post(login_code))
+        .route("/api/v1/devices", get(devices))
+        .route("/api/v1/devices/{id}", delete(revoke_device))
+        .route("/api/v1/logout", post(logout))
         .route("/api/v1/channels", get(channels))
         .route("/api/v1/channels/codes", post(channel_code))
         .route("/api/v1/channels/bindings/{id}", delete(revoke_binding))
@@ -89,6 +94,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .layer(middleware::from_fn_with_state(hub.clone(), authenticate));
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        // Signing in is how a device gets its cookie.
+        .route("/api/v1/login", post(login))
         // The live stream authenticates itself (browsers cannot set headers on WebSockets).
         .route("/api/v1/live", get(crate::live::socket))
         // Webhooks verify callers with their trigger's secret, never the user's token.
@@ -105,8 +112,30 @@ pub fn router(hub: Arc<Hub>) -> Router {
 }
 
 /// Resolve the bearer token (or git's basic-auth password) to a [`Principal`].
+/// The signed-in device a cookie-authenticated request comes from.
+#[derive(Clone, Debug)]
+pub struct CurrentDevice(pub String);
+
 async fn authenticate(State(hub): State<AppState>, mut req: Request, next: Next) -> Response {
     let token = bearer(req.headers());
+    if token.is_none()
+        && let Some(cookie) = crate::login::cookie_in(req.headers())
+    {
+        if !req.headers().contains_key(crate::login::HEADER) {
+            let why =
+                format!("a request signed in with the session cookie must send the `{}` header", crate::login::HEADER);
+            return (StatusCode::FORBIDDEN, why).into_response();
+        }
+        return match crate::login::device_of(&hub, &cookie).await {
+            Ok(Some(d)) => {
+                req.extensions_mut().insert(Principal::User);
+                req.extensions_mut().insert(CurrentDevice(d.id));
+                next.run(req).await
+            }
+            Ok(None) => (StatusCode::UNAUTHORIZED, "this device was signed out; sign in again").into_response(),
+            Err(e) => ApiError::from(&e).into_response(),
+        };
+    }
     let Some(token) = token else {
         let mut r = (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
         // Lets git clients fall back to basic auth (token as password).
@@ -985,6 +1014,80 @@ async fn revert(
     user_only(&p)?;
     let head = crate::transactions::revert(&hub, &r.commit).await?;
     Ok(Json(Reverted { reverted: r.commit, commit: head }))
+}
+
+async fn login(
+    State(hub): State<AppState>,
+    headers: HeaderMap,
+    Json(s): Json<crate::login::SignIn>,
+) -> Result<Response, ApiError> {
+    match crate::login::sign_in(&hub, &s).await {
+        Ok((device, cookie)) => {
+            let set = crate::login::set_cookie(&cookie, crate::login::is_https(&headers));
+            let mut r = Json(SignedIn { device }).into_response();
+            r.headers_mut().insert(
+                header::SET_COOKIE,
+                HeaderValue::from_str(&set).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            );
+            Ok(r)
+        }
+        Err(crate::login::SignInError::Invalid) => {
+            // Slows guessing down; a real code or token answers at once.
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            Err(ApiError(StatusCode::UNAUTHORIZED, crate::login::SignInError::Invalid.to_string()))
+        }
+        Err(crate::login::SignInError::Hub(e)) => Err((&e).into()),
+    }
+}
+
+async fn login_code(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<LoginCode>> {
+    user_only(&p)?;
+    let (code, expires_at) = crate::login::create_code(&hub).await?;
+    Ok(Json(LoginCode { code, expires_at }))
+}
+
+async fn devices(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    current: Option<Extension<CurrentDevice>>,
+) -> ApiResult<Json<Vec<DeviceView>>> {
+    user_only(&p)?;
+    let me = current.map(|c| c.0.0);
+    let list = hub.store.devices().await?;
+    Ok(Json(
+        list.into_iter().map(|d| DeviceView { current: me.as_deref() == Some(d.id.as_str()), device: d }).collect(),
+    ))
+}
+
+async fn revoke_device(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<DeviceRevoked>> {
+    user_only(&p)?;
+    let revoked = hub.store.revoke_device(&id).await?;
+    tracing::info!(device = %id, revoked, "device signed out");
+    Ok(Json(DeviceRevoked { revoked }))
+}
+
+/// Sign this device out (and drop its cookie).
+async fn logout(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    current: Option<Extension<CurrentDevice>>,
+) -> Result<Response, ApiError> {
+    user_only(&p)?;
+    let revoked = match current {
+        Some(c) => hub.store.revoke_device(&c.0.0).await?,
+        None => false,
+    };
+    let mut r = Json(DeviceRevoked { revoked }).into_response();
+    r.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&crate::login::clear_cookie())
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+    );
+    Ok(r)
 }
 
 async fn channels(

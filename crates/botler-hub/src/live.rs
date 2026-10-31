@@ -1,7 +1,8 @@
 //! `GET /api/v1/live`: what changes, pushed to the web app over a WebSocket.
 //!
 //! Browsers cannot set headers on a WebSocket, and a token in the URL ends up in proxy logs, so
-//! the client authenticates with its first message, `{"type": "auth", "token": "..."}`, within
+//! the client authenticates with its first message, `{"type": "auth", "token": "..."}` (an empty
+//! token for a signed-in device, whose cookie came with the upgrade from the web app's origin), within
 //! [`AUTH_TIMEOUT`]. The server answers `{"kind": "ready"}` (from then on every change arrives)
 //! or `{"kind": "error"}` and closes. `{"type": "watch", "instance": "..."}` selects the one chat
 //! whose pi events (streaming text, tool calls) the client wants; everything else is broadcast.
@@ -98,9 +99,27 @@ pub fn without_image_data(mut event: serde_json::Value) -> serde_json::Value {
     event
 }
 
-pub async fn socket(State(hub): State<Arc<Hub>>, ws: WebSocketUpgrade) -> Response {
+pub async fn socket(State(hub): State<Arc<Hub>>, headers: axum::http::HeaderMap, ws: WebSocketUpgrade) -> Response {
+    // A signed-in device's cookie counts, but only from the web app's own origin: browsers send
+    // cookies on cross-origin WebSocket upgrades too, and a WebSocket has no preflight.
+    let same_origin = match (headers.get("origin"), headers.get(axum::http::header::HOST)) {
+        (Some(o), Some(h)) => {
+            o.to_str().ok().and_then(|o| o.split_once("://")).map(|(_, rest)| rest) == h.to_str().ok()
+        }
+        _ => false,
+    };
+    let device = match crate::login::cookie_in(&headers).filter(|_| same_origin) {
+        Some(c) => match crate::login::device_of(&hub, &c).await {
+            Ok(d) => d.is_some(),
+            Err(e) => {
+                tracing::error!(error = %e, "could not check the session cookie");
+                false
+            }
+        },
+        None => false,
+    };
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = serve(hub, socket).await {
+        if let Err(e) = serve(hub, socket, device).await {
             tracing::debug!(error = %e, "live connection ended");
         }
     })
@@ -118,7 +137,7 @@ async fn reject(socket: &mut WebSocket, error: String) -> Result<(), LiveError> 
 }
 
 /// Wait for the auth message; `Err` carries what to tell the client.
-async fn authenticate(hub: &Hub, socket: &mut WebSocket) -> Result<Result<(), String>, LiveError> {
+async fn authenticate(hub: &Hub, socket: &mut WebSocket, device: bool) -> Result<Result<(), String>, LiveError> {
     let first = match tokio::time::timeout(AUTH_TIMEOUT, socket.recv()).await {
         Err(_) => return Ok(Err("authenticate within 10 seconds".into())),
         Ok(None) => return Ok(Err("closed before authenticating".into())),
@@ -130,6 +149,9 @@ async fn authenticate(hub: &Hub, socket: &mut WebSocket) -> Result<Result<(), St
         Ok(_) => return Ok(Err("the first message must be {\"type\": \"auth\", \"token\": ...}".into())),
         Err(e) => return Ok(Err(format!("invalid message: {e}"))),
     };
+    if device && token.is_empty() {
+        return Ok(Ok(()));
+    }
     Ok(match hub.tokens.verify(&token, Utc::now()) {
         Ok(Principal::User) => Ok(()),
         Ok(_) => Err("the live stream is for the user".into()),
@@ -137,8 +159,8 @@ async fn authenticate(hub: &Hub, socket: &mut WebSocket) -> Result<Result<(), St
     })
 }
 
-async fn serve(hub: Arc<Hub>, mut socket: WebSocket) -> Result<(), LiveError> {
-    if let Err(why) = authenticate(&hub, &mut socket).await? {
+async fn serve(hub: Arc<Hub>, mut socket: WebSocket, device: bool) -> Result<(), LiveError> {
+    if let Err(why) = authenticate(&hub, &mut socket, device).await? {
         return reject(&mut socket, why).await;
     }
     // Subscribe before saying ready, so nothing emitted after `ready` is missed.

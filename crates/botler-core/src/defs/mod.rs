@@ -865,16 +865,7 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
         }
         check_mounts(l, defs, &path, &a.spec.env);
         let listed = a.spec.env.mcp.iter().map(|m| ("mcp", m));
-        for (field, m) in listed.chain(a.spec.env.services.iter().map(|s| ("services", s))) {
-            match defs.jobs.get(m) {
-                Some(j) if j.spec.lifetime == Lifetime::Service && j.spec.env.port.is_none() => {
-                    l.err(&path, format!("{field} {m:?}: the service declares no `port` to reach it on"))
-                }
-                Some(j) if j.spec.lifetime == Lifetime::Service => {}
-                Some(_) => l.err(&path, format!("{field} {m:?} is a oneshot job or action, not a service")),
-                None => l.err(&path, format!("{field} {m:?} is not a job in jobs/")),
-            }
-        }
+        check_reached(l, defs, &path, listed.chain(a.spec.env.services.iter().map(|s| ("services", s))));
         // Every model is reached over the network (even a deprecated route's local `base_url` lies
         // outside the container), so an agent without network could never call its model.
         if a.spec.env.network() == Network::None
@@ -924,6 +915,25 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
     }
 }
 
+/// `mcp` / `services` entries must name services with a port.
+fn check_reached<'a>(
+    l: &mut Loader<'_>,
+    defs: &Definitions,
+    path: &str,
+    names: impl Iterator<Item = (&'static str, &'a String)>,
+) {
+    for (field, m) in names {
+        match defs.jobs.get(m) {
+            Some(j) if j.spec.lifetime == Lifetime::Service && j.spec.env.port.is_none() => {
+                l.err(path, format!("{field} {m:?}: the service declares no `port` to reach it on"))
+            }
+            Some(j) if j.spec.lifetime == Lifetime::Service => {}
+            Some(_) => l.err(path, format!("{field} {m:?} is a oneshot job or action, not a service")),
+            None => l.err(path, format!("{field} {m:?} is not a job in jobs/")),
+        }
+    }
+}
+
 fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
     let mut host_ports: BTreeMap<u16, &str> = BTreeMap::new();
     for j in defs.jobs.values() {
@@ -936,6 +946,14 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
         }
         if j.spec.serves_mcp && (j.spec.lifetime != Lifetime::Service || j.spec.env.port.is_none()) {
             l.err(&path, "`serves_mcp` needs a service (lifetime = \"service\") with a `port`");
+        }
+        // A job reaches services the same way agents do (an MCP server is just HTTP to it).
+        check_reached(l, defs, &path, j.spec.env.services.iter().map(|s| ("services", s)));
+        if j.spec.env.services.contains(&j.name) {
+            l.err(&path, "a service does not list itself in `services`");
+        }
+        if !j.spec.env.services.is_empty() && j.spec.env.network() == Network::None {
+            l.err(&path, "`services` are reached over the network; a job with network = \"none\" cannot use them");
         }
         if j.spec.channel && j.spec.lifetime != Lifetime::Service {
             l.err(&path, "`channel` needs a service (lifetime = \"service\"): it polls its outbox all the time");

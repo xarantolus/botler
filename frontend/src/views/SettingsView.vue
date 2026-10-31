@@ -7,6 +7,7 @@ import { computed, onMounted, ref, shallowRef } from "vue";
 import { call } from "../api/client";
 import ViewPanel from "../components/common/ViewPanel.vue";
 import ChannelsPanel from "../components/settings/ChannelsPanel.vue";
+import DevicesPanel from "../components/settings/DevicesPanel.vue";
 import ModelPicker from "../components/settings/ModelPicker.vue";
 import SchemaFields from "../components/settings/SchemaFields.vue";
 import TimeAgo from "../components/common/TimeAgo.vue";
@@ -28,6 +29,7 @@ const tabs: TabsItem[] = [
   { label: "Deployment", value: "deployment", icon: "i-lucide-sliders-horizontal" },
   { label: "Jobs & Services", value: "runnables", icon: "i-lucide-cog" },
   { label: "Channels", value: "channels", icon: "i-lucide-radio-tower" },
+  { label: "Devices", value: "devices", icon: "i-lucide-monitor-smartphone" },
 ];
 
 async function load() {
@@ -246,6 +248,7 @@ function setPush(on: boolean) {
       </template>
 
       <ChannelsPanel v-else-if="tab === 'channels'" />
+      <DevicesPanel v-else-if="tab === 'devices'" />
 
       <template v-else-if="tab === 'runnables'">
         <p v-if="!loaded.runnables.length" class="text-sm text-muted">

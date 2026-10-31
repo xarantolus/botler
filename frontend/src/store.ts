@@ -22,6 +22,8 @@ export type Connection = "connecting" | "live" | "polling";
 
 export interface AppState {
   authed: boolean;
+  /** Whether the start-up check for a session has finished (until then, show nothing). */
+  authChecked: boolean;
   connection: Connection;
   status: HubStatus | null;
   usage: Usage | null;
@@ -45,7 +47,8 @@ export interface AppState {
 // through reactive() is too deep for the type checker.
 const plainReactive = reactive as <T extends object>(target: T) => T;
 export const state = plainReactive<AppState>({
-  authed: getToken() !== null,
+  authed: false,
+  authChecked: false,
   connection: "connecting",
   status: null,
   usage: null,
@@ -237,14 +240,31 @@ export function refreshAll() {
   ]);
 }
 
-export async function login(token: string): Promise<void> {
-  setToken(token);
-  // Throws (and clears the token) when it is rejected.
+/** Whether this browser is signed in (a session cookie or a stored token): checked once at start. */
+export async function checkSignedIn(): Promise<void> {
+  try {
+    state.status = await call("status", {});
+    state.authed = true;
+  } catch {
+    state.authed = false;
+  } finally {
+    state.authChecked = true;
+  }
+}
+
+/** Sign this browser in with a one-time code or a user token: the hub sets a session cookie. */
+export async function login(secret: string, name: string): Promise<void> {
+  setToken(null);
+  await call("login", { body: { secret, name } });
   state.status = await call("status", {});
   state.authed = true;
 }
 
-export function logout() {
-  setToken(null);
-  state.authed = false;
+export async function logout(): Promise<void> {
+  try {
+    if (!getToken()) await call("logout", {});
+  } finally {
+    setToken(null);
+    state.authed = false;
+  }
 }

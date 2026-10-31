@@ -5,9 +5,10 @@ import AppShell from "./components/shell/AppShell.vue";
 import LoginView from "./components/shell/LoginView.vue";
 import { startLive, stopLive } from "./live";
 import { bindToaster } from "./notify";
-import { refreshAll, state } from "./store";
+import { checkSignedIn, refreshAll, state } from "./store";
 
 bindToaster(useToast());
+void checkSignedIn();
 
 watch(
   () => state.authed,
@@ -26,6 +27,6 @@ watch(
 <template>
   <UApp :toaster="{ position: 'bottom-right', duration: 6000 }" :tooltip="{ delayDuration: 250 }">
     <AppShell v-if="state.authed" />
-    <LoginView v-else />
+    <LoginView v-else-if="state.authChecked" />
   </UApp>
 </template>

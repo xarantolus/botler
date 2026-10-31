@@ -60,6 +60,11 @@ pub enum Escalation {
     ServiceAdded {
         job: String,
     },
+    /// A job or service may now reach another service.
+    ServiceReached {
+        job: String,
+        service: String,
+    },
     /// A service port is newly published on the host (or its mapping changed).
     PortPublished {
         job: String,
@@ -121,6 +126,7 @@ impl Escalation {
             Self::ApprovalRemoved { tool } => format!("action `{tool}` no longer requires approval"),
             Self::WebhookAdded { name } => format!("opens webhook `/hooks/{name}` to inbound calls"),
             Self::ServiceAdded { job } => format!("adds always-on service `{job}`"),
+            Self::ServiceReached { job, service } => format!("lets job `{job}` reach service `{service}`"),
             Self::PortPublished { job, reach } => format!("makes service `{job}` reachable from {reach}"),
             Self::McpStdioAdded { agent, server, command } => {
                 format!("runs MCP server `{server}` (`{command}`) inside agent `{agent}`'s container")
@@ -330,8 +336,14 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
             }
         }
         for e in prev.map_or(&none, |p| &p.spec.env).escalations(&j.spec.env) {
-            if let EnvEscalation::Mount { name, mode } = e {
-                esc.insert(Escalation::MountGranted { mount: name, to: format!("job `{}`", j.name), mode });
+            match e {
+                EnvEscalation::Mount { name, mode } => {
+                    esc.insert(Escalation::MountGranted { mount: name, to: format!("job `{}`", j.name), mode });
+                }
+                EnvEscalation::Service(service) => {
+                    esc.insert(Escalation::ServiceReached { job: j.name.clone(), service });
+                }
+                _ => {}
             }
         }
         for (op, lim) in &j.spec.limits {

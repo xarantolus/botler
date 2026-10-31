@@ -43,6 +43,8 @@ enum Command {
         #[arg(long, default_value = "90")]
         days: i64,
     },
+    /// Print a one-time code that signs a browser in (valid 10 minutes).
+    LoginCode,
     /// Validate a monorepo checkout and print its deployment summary against main.
     Validate {
         #[arg(default_value = ".")]
@@ -143,6 +145,12 @@ async fn main() -> anyhow::Result<()> {
         Command::Token { days } => {
             let hub = offline_hub(paths).await?;
             println!("{}", hub.tokens.issue(&Principal::User, chrono::Duration::days(days), chrono::Utc::now()));
+            Ok(())
+        }
+        Command::LoginCode => {
+            let hub = offline_hub(paths).await?;
+            let (code, _) = botler_hub::login::create_code(&hub).await?;
+            println!("{code}");
             Ok(())
         }
         Command::Validate { dir } => validate(&paths, &dir).await,

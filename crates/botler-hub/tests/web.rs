@@ -16,14 +16,15 @@ use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 use tower::ServiceExt;
 
-/// Every route in the generated client's table is served (and requires the token).
+/// Every route in the generated client's table is served (and requires the token), except
+/// signing in, which is how a device gets its cookie.
 #[tokio::test]
 async fn route_table_matches_router() {
     let e = env().await;
     let app = botler_hub::api::router(e.hub.clone());
     let table = botler_hub::wire::route_table(&ts_rs::Config::new());
     assert!(table.len() > 20);
-    for r in table {
+    for r in table.into_iter().filter(|r| r.name != "login") {
         let path = r.path.replace("{id}", "x").replace("{instance}", "x").replace("{name}", "x");
         let req = Request::builder().method(r.method).uri(&path).body(Body::empty()).unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();

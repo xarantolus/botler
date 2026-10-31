@@ -143,6 +143,31 @@ pub struct DialogView {
     pub visit: Option<crate::ops::VisitSpec>,
 }
 
+/// A device signed in.
+#[derive(Debug, Serialize, TS)]
+pub struct SignedIn {
+    pub device: botler_store::Device,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct LoginCode {
+    pub code: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct DeviceView {
+    #[serde(flatten)]
+    pub device: botler_store::Device,
+    /// The device this request comes from.
+    pub current: bool,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct DeviceRevoked {
+    pub revoked: bool,
+}
+
 #[derive(Debug, Serialize, TS)]
 pub struct Dialogs {
     pub open: Vec<DialogView>,
@@ -441,6 +466,11 @@ routes! {
     settings: GET "/api/v1/settings" => crate::settings::Settings;
     save_settings: PUT "/api/v1/settings", body: crate::settings::SettingsEdit => crate::settings::SettingsSaved;
     models: GET "/api/v1/models" => crate::model_catalog::CatalogView;
+    login: POST "/api/v1/login", body: crate::login::SignIn => SignedIn;
+    login_code: POST "/api/v1/login/codes" => LoginCode;
+    devices: GET "/api/v1/devices" => Vec<DeviceView>;
+    revoke_device: DELETE "/api/v1/devices/{id}" => DeviceRevoked;
+    logout: POST "/api/v1/logout" => DeviceRevoked;
     channels: GET "/api/v1/channels" => crate::channels::ChannelsView;
     channel_code: POST "/api/v1/channels/codes", body: crate::channels::NewPairingCode => crate::channels::PairingCode;
     revoke_binding: DELETE "/api/v1/channels/bindings/{id}" => crate::channels::BindingRevoked;

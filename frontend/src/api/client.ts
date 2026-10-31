@@ -42,6 +42,12 @@ export function setToken(t: string | null): void {
   else s?.removeItem(TOKEN_KEY);
 }
 
+/** Headers every request carries: the token when there is one; otherwise the session cookie goes
+ * with the request, and `x-botler` tells the hub it comes from this app, not another page. */
+function authHeaders(): Record<string, string> {
+  return token ? { authorization: `Bearer ${token}` } : { "x-botler": "1" };
+}
+
 export function onUnauthorized(f: () => void): void {
   unauthorizedHandlers.push(f);
 }
@@ -76,7 +82,7 @@ export async function call<K extends keyof Routes>(name: K, args: Args<K>): Prom
   const url =
     buildPath(route.path, args.params as Record<string, string> | undefined) +
     buildQuery(args.query as Record<string, unknown> | undefined);
-  const headers: Record<string, string> = { authorization: `Bearer ${token ?? ""}` };
+  const headers: Record<string, string> = authHeaders();
   let body: string | undefined;
   if (args.body !== undefined) {
     headers["content-type"] = "application/json";
@@ -116,7 +122,7 @@ export function upload(file: File, onProgress: (done: number) => void): Promise<
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", ROUTES.upload.path + buildQuery({ name: file.name }));
-    xhr.setRequestHeader("authorization", `Bearer ${token ?? ""}`);
+    for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onerror = () => reject(new ApiError(0, "the hub is unreachable"));
     xhr.onload = () => {
@@ -140,7 +146,7 @@ export function upload(file: File, onProgress: (done: number) => void): Promise<
 
 /** A file the hub serves only with the token (an upload, a session's image), as a blob. */
 export async function fetchFile(path: string): Promise<Blob> {
-  const res = await fetch(path, { headers: { authorization: `Bearer ${token ?? ""}` } });
+  const res = await fetch(path, { headers: authHeaders() });
   if (!res.ok) throw new ApiError(res.status, (await res.text()).slice(0, 300) || res.statusText);
   return res.blob();
 }

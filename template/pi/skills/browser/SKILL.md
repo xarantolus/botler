@@ -39,3 +39,23 @@ It is granted without asking the user. You get the tools when you wake, after th
 - **Blocked domains:** ad and tracker domains don't resolve. If a page breaks because of it,
   that is the list (`images/browser`, pinned StevenBlack hosts). Say so rather than working
   around it.
+
+## From a job (deterministic scraping)
+
+A job or service can use the same browser: `services = ["browser"]` in its `job.toml` (the
+first time asks the user), then talk MCP to `http://browser:8000/mcp`. Each MCP session is its
+own context, so a job never disturbs chats. In Python, the `mcp` package's client:
+
+```python
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+async with streamablehttp_client("http://browser:8000/mcp") as (read, write, _):
+    async with ClientSession(read, write) as s:
+        await s.initialize()
+        await s.call_tool("browser_navigate", {"url": url})
+        page = await s.call_tool("browser_evaluate", {"function": "() => document.body.innerText"})
+```
+
+Keep the parsing, dedupe (cursor in `botler.state`) and typed events in the job. The browser only
+loads pages.

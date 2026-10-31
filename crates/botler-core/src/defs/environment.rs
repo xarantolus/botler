@@ -42,7 +42,8 @@ pub struct Environment {
     pub mcp: Vec<String>,
     /// Agents: services (jobs with `lifetime = "service"` and a `port`) this agent reaches over
     /// plain HTTP or another protocol, not MCP: it joins the services network and finds each in
-    /// `/botler/agent-dir/services.json` (name, IP and port).
+    /// `/botler/agent-dir/services.json` (name, IP and port). Jobs reach them by name,
+    /// `http://<service>:<port>`, on the services network.
     #[serde(default)]
     pub services: Vec<String>,
     /// Agents: MCP servers pi starts inside the container over stdio, by server name, e.g.
@@ -116,7 +117,6 @@ impl Environment {
                 ("home", self.home.is_some()),
                 ("workspace", self.workspace.is_some()),
                 ("mcp", !self.mcp.is_empty()),
-                ("services", !self.services.is_empty()),
                 ("mcp_stdio", !self.mcp_stdio.is_empty()),
                 ("tools", !self.tools.is_empty()),
             ]
@@ -288,6 +288,7 @@ mod tests {
         let e = env("volume = true\nmcp = [\"x\"]\nport = 8080");
         assert_eq!(e.foreign_keys(true), ["volume", "port"]);
         assert_eq!(e.foreign_keys(false), ["mcp"]);
+        assert!(env("services = [\"x\"]").foreign_keys(false).is_empty(), "jobs reach services too");
         assert_eq!(Environment::default().image(), "agent");
     }
 }

@@ -164,8 +164,8 @@ function onMessage(msg: ServerMessage) {
 
 function connect() {
   if (stopped) return;
-  const token = getToken();
-  if (!token) return;
+  // A signed-in device authenticates with its cookie (an empty token); a stored token still works.
+  const token = getToken() ?? "";
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/api/v1/live`);
   socket = ws;

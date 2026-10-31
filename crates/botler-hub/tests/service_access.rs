@@ -74,3 +74,23 @@ async fn a_grant_to_a_service_that_serves_mcp_gives_its_tools() {
         serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir(&chat).join("mcp.json")).unwrap()).unwrap();
     assert_eq!(mcp["mcpServers"]["web"]["url"], "http://web:8000/mcp");
 }
+
+/// A job lists a service in `services` and reaches it by name on the services network (an MCP
+/// server is plain HTTP to it); the first change that lets it asks the user.
+#[tokio::test]
+async fn a_job_reaches_a_service_it_lists() {
+    let e = common::env().await;
+    let mut files = common::job("browser", BROWSER);
+    files.extend(common::job("watch", "command = [\"w\"]\nservices = [\"browser\"]\n"));
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let before = e.hub.applied().await.defs.clone();
+    e.commit(&refs).await;
+    let after = e.hub.applied().await.defs.clone();
+    let summary = botler_core::change::preview(&before, &after, &["jobs/watch/job.toml".into()], Utc::now());
+    let reach = botler_core::change::Escalation::ServiceReached { job: "watch".into(), service: "browser".into() };
+    assert!(summary.escalations.contains(&reach), "{:?}", summary.escalations);
+
+    let run = botler_hub::jobs::start(&e.hub, "watch", None, None).await.unwrap().unwrap();
+    let c = &e.fake.containers()[&botler_hub::jobs::container_name(&e.hub, &run)];
+    assert_eq!(c.spec.network, NetworkMode::Named(e.hub.network()));
+}
