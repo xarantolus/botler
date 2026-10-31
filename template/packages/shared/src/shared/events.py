@@ -1,6 +1,7 @@
 """Typed events. Subclass `botler.Event`; the gate generates `events.manifest.json` from these."""
 
 from typing import ClassVar
+from uuid import UUID
 
 import botler
 
@@ -45,3 +46,27 @@ class ExampleLoggedIn(botler.Event):
 
     type: ClassVar[str] = "example.logged_in"
     site: str
+
+
+class ClaudeSessionRequested(botler.Event):
+    """Start or continue a Claude Code session on the user's subscription (jobs/claude-session,
+    skill `claude-code`). `resume` continues the session with that id; `repo` is cloned into a new
+    session's working directory; `notify` is the chat that hears back (default: the emitter)."""
+
+    type: ClassVar[str] = "claude_session.requested"
+    task: str
+    repo: str | None = None
+    resume: UUID | None = None
+    notify: str | None = None
+
+
+class ClaudeSessionFinished(botler.Event):
+    """A Claude Code session run ended (jobs/claude-session). `result` is Claude's final answer or
+    the failure, cut to a few thousand characters; continue with `resume = session_id`."""
+
+    type: ClassVar[str] = "claude_session.finished"
+    session_id: str
+    ok: bool
+    result: str
+    notify: str
+    cost_usd: float | None = None

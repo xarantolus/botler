@@ -17,3 +17,6 @@ branch and calling `propose_change` (gate → reviewer → user if needed → me
 | `images/` | Container images (`FROM botler/agent-base`); the build context is `images/<x>/` plus the uv workspace (`pyproject.toml`, `uv.lock`, `packages/`, `tools/`, `connectors/`), which they install into `/opt/botler/tools-venv` for Python tools |
 | `policies/` | The reviewer's policy and what needs the user's approval |
 | `gate/` | The deterministic checks every change must pass |
+
+Integrations that ship here: `jobs/claude-session/` runs Claude Code sessions on your own Claude
+subscription and messages you back (skill `claude-code`; it needs a token from `claude setup-token`).

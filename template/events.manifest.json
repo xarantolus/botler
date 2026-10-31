@@ -1,5 +1,105 @@
 [
   {
+    "description": "A Claude Code session run ended (jobs/claude-session). `result` is Claude's final answer or\n    the failure, cut to a few thousand characters; continue with `resume = session_id`.",
+    "schema": {
+      "description": "A Claude Code session run ended (jobs/claude-session). `result` is Claude's final answer or\nthe failure, cut to a few thousand characters; continue with `resume = session_id`.",
+      "properties": {
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        },
+        "notify": {
+          "title": "Notify",
+          "type": "string"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "result": {
+          "title": "Result",
+          "type": "string"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "ok",
+        "result",
+        "notify"
+      ],
+      "title": "ClaudeSessionFinished",
+      "type": "object"
+    },
+    "type": "claude_session.finished"
+  },
+  {
+    "description": "Start or continue a Claude Code session on the user's subscription (jobs/claude-session,\n    skill `claude-code`). `resume` continues the session with that id; `repo` is cloned into a new\n    session's working directory; `notify` is the chat that hears back (default: the emitter).",
+    "schema": {
+      "description": "Start or continue a Claude Code session on the user's subscription (jobs/claude-session,\nskill `claude-code`). `resume` continues the session with that id; `repo` is cloned into a new\nsession's working directory; `notify` is the chat that hears back (default: the emitter).",
+      "properties": {
+        "notify": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notify"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repo"
+        },
+        "resume": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resume"
+        },
+        "task": {
+          "title": "Task",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "title": "ClaudeSessionRequested",
+      "type": "object"
+    },
+    "type": "claude_session.requested"
+  },
+  {
     "description": "An example event: someone was greeted. Replace it with real event types.",
     "schema": {
       "description": "An example event: someone was greeted. Replace it with real event types.",

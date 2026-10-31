@@ -1,0 +1,19 @@
+version = 1
+description = "Runs a Claude Code session on the user's subscription (`claude -p`, no permission prompts: the container is the boundary) for a claude_session.requested event, and messages the requesting chat while it works and when it ends. Skill `claude-code`."
+command = ["/app/.venv/bin/python", "-m", "claude_session"]
+# Sessions take a while; the job stops Claude a few minutes before this so it can still report.
+timeout = "2h"
+# CLAUDE_CODE_OAUTH_TOKEN, from `claude setup-token` (skill `claude-code`).
+secrets = ["claude-code"]
+# Claude Code's home (~/.claude, its sessions) and every session's working directory, so `resume`
+# continues where the last run stopped.
+volume = true
+emits = ["claude_session.finished"]
+# No on_failure: a run that cannot report (no token entered, hub unreachable) opens an incident for
+# `triage`. Claude's own failures (login expired, usage limit) are messaged to the chat instead.
+
+[[trigger]]
+name = "requested"
+on = "claude_session.requested"
+# Several sessions may run at once.
+overlap = "allow"
