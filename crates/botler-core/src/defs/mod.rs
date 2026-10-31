@@ -128,7 +128,7 @@ impl Definitions {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     Error,
@@ -136,7 +136,7 @@ pub enum Severity {
 }
 
 /// One problem found while loading, tied to the file it is in.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, ts_rs::TS)]
 pub struct Diagnostic {
     pub severity: Severity,
     pub path: String,
@@ -265,6 +265,75 @@ fn glob_set(patterns: &[String]) -> Result<globset::GlobSet, globset::Error> {
         b.add(globset::GlobBuilder::new(p).literal_separator(false).build()?);
     }
     b.build()
+}
+
+/// What [`load_lenient`] could keep of a tree that does not load.
+#[derive(Debug)]
+pub struct Lenient {
+    pub definitions: Definitions,
+    /// The errors of the full tree.
+    pub errors: Vec<Diagnostic>,
+    /// What was left out to load the rest: `agents/<name>`, `jobs/<name>`, `triggers/<file>`.
+    pub skipped: Vec<String>,
+}
+
+/// The agent, job or trigger file a diagnostic belongs to, if it can be left out on its own.
+fn unit(path: &str) -> Option<String> {
+    let path = path.split('#').next().unwrap_or(path);
+    let mut segs = path.split('/');
+    match (segs.next(), segs.next()) {
+        (Some(dir @ ("agents" | "jobs")), Some(name)) if !name.is_empty() => Some(format!("{dir}/{name}")),
+        (Some("triggers"), Some(file)) if !file.is_empty() => Some(format!("triggers/{file}")),
+        _ => None,
+    }
+}
+
+/// A tree with some paths (and everything under them) hidden.
+struct Without<'a> {
+    tree: &'a dyn Tree,
+    hidden: &'a BTreeSet<String>,
+}
+
+impl Without<'_> {
+    fn hides(&self, path: &str) -> bool {
+        self.hidden.iter().any(|h| path == h || path.starts_with(&format!("{h}/")))
+    }
+}
+
+impl Tree for Without<'_> {
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+        if self.hides(path) { Ok(None) } else { self.tree.read(path) }
+    }
+
+    fn list(&self, dir: &str) -> std::io::Result<Vec<TreeEntry>> {
+        let mut entries = self.tree.list(dir)?;
+        entries.retain(|e| !self.hides(&format!("{}/{}", dir.trim_end_matches('/'), e.name)));
+        Ok(entries)
+    }
+}
+
+/// Load the valid part of a tree that does not load: agents, jobs and trigger files with errors
+/// are left out (then whatever referred to them, and so on) until the rest loads. `None` when an
+/// error is elsewhere (`botler.toml`, secrets, events, policies), which nothing can be left out for.
+pub fn load_lenient(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> Option<Lenient> {
+    let mut hidden = BTreeSet::new();
+    let mut errors = None;
+    loop {
+        let report = load_with(&Without { tree, hidden: &hidden }, default_tz);
+        let errs: Vec<Diagnostic> = report.errors().cloned().collect();
+        if let Some(definitions) = report.definitions {
+            let errors = errors.unwrap_or_default();
+            return Some(Lenient { definitions, errors, skipped: hidden.into_iter().collect() });
+        }
+        let before = hidden.len();
+        for d in &errs {
+            hidden.insert(unit(&d.path)?);
+        }
+        errors.get_or_insert(errs);
+        if hidden.len() == before {
+            return None;
+        }
+    }
 }
 
 /// Load and validate the monorepo at `tree`, with UTC where `botler.toml` names no time zone.
@@ -932,4 +1001,34 @@ fn is_builtin_event(kind: &str) -> bool {
         SESSION_STARTED,
     ]
     .contains(&kind)
+}
+
+#[cfg(test)]
+mod lenient_tests {
+    use super::*;
+
+    fn base() -> MemTree {
+        MemTree::new()
+            .with("botler.toml", "[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"p\"\nmodel = \"m\"\n")
+            .with("images/agent/Dockerfile", "FROM x")
+            .with("agents/good/agent.toml", "kind = \"persistent\"\n")
+            .with("agents/good/AGENTS.md", "hi")
+            .with("agents/bad/agent.toml", "bogus = 1\n")
+            .with("agents/bad/AGENTS.md", "hi")
+            .with("triggers/t.toml", "[[trigger]]\nname = \"x\"\nevery = \"1h\"\ntarget = { spawn = \"bad\" }\n")
+            .with("triggers/u.toml", "[[trigger]]\nname = \"y\"\nevery = \"1h\"\ntarget = { resume = \"good\" }\n")
+    }
+
+    #[test]
+    fn invalid_agents_and_what_refers_to_them_are_left_out() {
+        let t = base();
+        assert!(load(&t).definitions.is_none());
+        let l = load_lenient(&t, chrono_tz::UTC).unwrap();
+        assert_eq!(l.skipped, ["agents/bad", "triggers/t.toml"]);
+        assert!(l.definitions.agents.contains_key("good") && !l.definitions.agents.contains_key("bad"));
+        assert_eq!(l.definitions.triggers.len(), 1);
+        assert!(l.errors.iter().any(|d| d.path == "agents/bad/agent.toml"), "{:?}", l.errors);
+        // Nothing to leave out for a broken botler.toml.
+        assert!(load_lenient(&base().with("botler.toml", "nope = ["), chrono_tz::UTC).is_none());
+    }
 }

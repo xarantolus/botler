@@ -19,10 +19,27 @@ const held = computed(() => heldFor(props.instance.name, breakers.value));
 const paused = computed(() => pausing(props.instance.name, breakers.value));
 const report = computed(() => props.instance.archive_report);
 const sleepingForYou = computed(() => props.badge?.label === "waiting for you");
+/** The applied definitions do not load: the hub runs without some of them. */
+const problems = computed(() => state.status?.definition_problems ?? []);
+const skipped = computed(() => state.status?.skipped_definitions ?? []);
 </script>
 
 <template>
   <div class="flex flex-col gap-2.5">
+    <UAlert
+      v-if="problems.length"
+      color="error"
+      variant="subtle"
+      icon="i-lucide-triangle-alert"
+      :title="`The monorepo does not load: running without ${skipped.join(', ') || 'some definitions'}`"
+    >
+      <template #description>
+        <ul class="list-disc ps-5">
+          <li v-for="p in problems" :key="p.path + p.message"><code class="font-mono">{{ p.path }}</code>: {{ p.message }}</li>
+        </ul>
+        <p class="mt-1">The front door was told; a proposal that fixes these brings them back.</p>
+      </template>
+    </UAlert>
     <UAlert
       v-if="report"
       color="neutral"

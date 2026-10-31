@@ -59,6 +59,10 @@ pub struct HubStatus {
     /// The instance's time zone (IANA name); agents and delivery headers use it.
     pub timezone: String,
     pub runtime: RuntimeInfo,
+    /// Degraded: the applied commit does not load, so these parts of it are left out until a
+    /// change fixes them (empty normally).
+    pub definition_problems: Vec<botler_core::Diagnostic>,
+    pub skipped_definitions: Vec<String>,
     pub open_dialogs: usize,
     pub open_incidents: usize,
     pub breakers: Vec<Breaker>,

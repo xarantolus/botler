@@ -64,6 +64,11 @@ pub type Result<T> = std::result::Result<T, HubError>;
 pub struct Applied {
     pub commit: String,
     pub defs: Definitions,
+    /// Degraded: the commit does not load, so only its valid part is applied. These are its
+    /// errors; empty when it loads.
+    pub problems: Vec<Diagnostic>,
+    /// What was left out because of them (`agents/<name>`, `jobs/<name>`, `triggers/<file>`).
+    pub skipped: Vec<String>,
 }
 
 /// What live viewers (web app) receive.
@@ -163,30 +168,52 @@ impl Hub {
         }))
     }
 
-    /// At boot: apply main if it loads; otherwise fall back to the last applied commit and raise
-    /// an alarm, so a broken main never takes the whole system down.
+    /// At boot: apply main if it loads. Otherwise the hub still comes up (a newer hub may
+    /// validate more strictly than the one that applied main): the valid part of main, or else the
+    /// last applied commit (or its valid part), with an alarm to the front door listing the
+    /// problems, so an agent can fix them with a proposal. Fails only when nothing loads at all.
     async fn load_bootable(store: &Store, repo: &Repo) -> Result<Applied> {
         let main = repo.main().await?;
-        match load_at(repo, &main).await {
-            Ok(applied) => Ok(applied),
-            Err(HubError::InvalidDefinitions { commit, diagnostics }) => {
-                let Some(last) = store.last_applied_commit().await? else {
-                    return Err(HubError::InvalidDefinitions { commit, diagnostics });
-                };
-                tracing::error!(%commit, fallback = %last, problems = diagnostics.len(), "main does not load; staying on last applied commit");
-                let text = format!(
-                    "The monorepo's main ({commit}) does not load, so botler is still running {last}. Problems:\n{}",
-                    diagnostics.iter().map(|d| format!("- {d}")).collect::<Vec<_>>().join("\n")
-                );
-                let ev =
-                    builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None }), Source::Hub)?
-                        .to(botler_core::FRONT_DOOR)
-                        .urgent(true);
-                store.append_event(&ev).await?;
-                load_at(repo, &last).await
-            }
-            Err(e) => Err(e),
-        }
+        let (commit, diagnostics) = match load_at(repo, &main).await {
+            Ok(applied) => return Ok(applied),
+            Err(HubError::InvalidDefinitions { commit, diagnostics }) => (commit, diagnostics),
+            Err(e) => return Err(e),
+        };
+        let errors = || diagnostics.iter().filter(|d| d.severity == botler_core::defs::Severity::Error);
+        let list = errors().map(|d| format!("- {d}")).collect::<Vec<_>>().join("\n");
+        let (applied, text) = if let Some(a) = load_degraded(repo, &commit).await? {
+            let text = format!(
+                "The monorepo's main ({commit}) does not load, so botler runs without {}. Fix it with a proposal. Problems:\n{list}",
+                a.skipped.join(", ")
+            );
+            (a, text)
+        } else {
+            let Some(last) = store.last_applied_commit().await?.filter(|l| *l != commit) else {
+                return Err(HubError::InvalidDefinitions { commit, diagnostics });
+            };
+            let a = match load_at(repo, &last).await {
+                Ok(a) => a,
+                Err(HubError::InvalidDefinitions { commit, diagnostics }) => {
+                    match load_degraded(repo, &commit).await? {
+                        Some(a) => a,
+                        None => return Err(HubError::InvalidDefinitions { commit, diagnostics }),
+                    }
+                }
+                Err(e) => return Err(e),
+            };
+            (
+                a,
+                format!(
+                    "The monorepo's main ({commit}) does not load, so botler is still running {last}. Problems:\n{list}"
+                ),
+            )
+        };
+        tracing::error!(%commit, running = %applied.commit, skipped = ?applied.skipped, "definitions do not load; starting degraded");
+        let ev = builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None }), Source::Hub)?
+            .to(botler_core::FRONT_DOOR)
+            .urgent(true);
+        store.append_event(&ev).await?;
+        Ok(applied)
     }
 
     pub async fn applied(&self) -> Arc<Applied> {
@@ -265,7 +292,29 @@ pub async fn load_at(repo: &Repo, commit: &str) -> Result<Applied> {
         tracing::debug!(%commit, "{d}");
     }
     match report.definitions {
-        Some(defs) => Ok(Applied { commit: commit.to_string(), defs }),
+        Some(defs) => Ok(Applied { commit: commit.to_string(), defs, problems: vec![], skipped: vec![] }),
         None => Err(HubError::InvalidDefinitions { commit: commit.to_string(), diagnostics: report.diagnostics }),
     }
+}
+
+/// `commit`'s definitions, or their valid part when it does not load (see [`load_degraded`]).
+pub async fn load_tolerant(repo: &Repo, commit: &str) -> Result<Applied> {
+    match load_at(repo, commit).await {
+        Err(HubError::InvalidDefinitions { commit, diagnostics }) => match load_degraded(repo, &commit).await? {
+            Some(a) => Ok(a),
+            None => Err(HubError::InvalidDefinitions { commit, diagnostics }),
+        },
+        other => other,
+    }
+}
+
+/// The valid part of `commit` when it does not load (see [`botler_core::defs::load_lenient`]).
+pub async fn load_degraded(repo: &Repo, commit: &str) -> Result<Option<Applied>> {
+    let tree = repo.definition_tree(commit).await?;
+    Ok(botler_core::defs::load_lenient(&tree, crate::localtime::host()).map(|l| Applied {
+        commit: commit.to_string(),
+        defs: l.definitions,
+        problems: l.errors,
+        skipped: l.skipped,
+    }))
 }
