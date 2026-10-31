@@ -23,7 +23,8 @@ phase: WakePhase | null, items: Array<SessionItem>,
  */
 tool_renders: { [key in string]: ToolRender }, 
 /**
- * The user's messages not delivered yet (waiting for the turn to end), oldest first.
+ * The user's messages not in the session yet, oldest first: held by the hub (waiting for
+ * the run to end, or for the agent to wake), or handed to pi as steers.
  */
 queued: Array<QueuedMessage>, 
 /**

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // One message of the transcript. Its own component so a streamed chunk, which changes only the
 // last message, re-renders that one and not every message of a long chat.
+import { computed } from "vue";
 import { call } from "../../api/client";
 import { notifyError } from "../../notify";
 import { refreshSession } from "../../store";
@@ -13,11 +14,19 @@ const props = defineProps<{
   message: TranscriptMessage;
   /** The agent works (tool calls without a result are running). */
   busy: boolean;
-  /** Why queued messages wait (shown under them). */
-  queuedNote: string;
+  /** Why held messages wait, when it is not the usual (shown under them). */
+  queuedNote: string | null;
   /** The chat (to refresh after taking a message back). */
   instance: string;
 }>();
+
+/** When a message not in the session yet reaches the agent. */
+const waitsFor = computed(() => {
+  const q = props.message.metadata?.queued;
+  if (!q) return null;
+  if (q.handed_over) return "it reads this once its running tool is done";
+  return props.queuedNote ?? (q.mode === "queue" ? "delivered when the agent is done" : "delivered when the agent is ready");
+});
 
 /** Take back a queued message (the hub refuses once it is delivered). */
 async function cancel() {
@@ -58,9 +67,11 @@ function sideProps(m: TranscriptMessage) {
     <template v-if="message.role !== 'system'" #actions>
       <div class="flex items-center gap-1.5 pt-1 text-xs text-dimmed">
         <template v-if="message.metadata?.queued">
-          <UBadge color="neutral" variant="subtle" size="sm" icon="i-lucide-clock" label="queued" />
-          <span>{{ queuedNote }}</span>
+          <UBadge v-if="message.metadata.queued.handed_over" color="neutral" variant="subtle" size="sm" icon="i-lucide-send" label="sent" />
+          <UBadge v-else color="neutral" variant="subtle" size="sm" icon="i-lucide-clock" label="queued" />
+          <span>{{ waitsFor }}</span>
           <UButton
+            v-if="!message.metadata.queued.handed_over"
             icon="i-lucide-x"
             size="xs"
             color="neutral"

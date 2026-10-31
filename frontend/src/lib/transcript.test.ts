@@ -244,10 +244,10 @@ describe("buildTranscript", () => {
     expect(t.messages[1]?.metadata?.delivery).toBe("d3");
   });
 
-  it("appends the messages the hub holds as queued user messages, cancellable by delivery", () => {
+  it("appends the messages not in the session yet, held by the hub or handed to pi", () => {
     const queued = [
-      { delivery: "d7", text: "later", at: "2026-10-30T10:05:00Z", mode: "queue" as const },
-      { delivery: "d8", text: "and this", at: "2026-10-30T10:06:00Z", mode: "queue" as const },
+      { delivery: "d7", text: "later", at: "2026-10-30T10:05:00Z", mode: "steer" as const, handed_over: true },
+      { delivery: "d8", text: "and this", at: "2026-10-30T10:06:00Z", mode: "queue" as const, handed_over: false },
     ];
     const t = buildTranscript(input([user("u1", "hi")], { queued, busy: true }));
     expect(t.messages.slice(1)).toEqual([
@@ -255,13 +255,13 @@ describe("buildTranscript", () => {
         id: "queued:d7",
         role: "user",
         parts: [{ type: "text", text: "later" }],
-        metadata: { at: "2026-10-30T10:05:00Z", queued: true, delivery: "d7" },
+        metadata: { at: "2026-10-30T10:05:00Z", queued: { mode: "steer", handed_over: true }, delivery: "d7" },
       },
       {
         id: "queued:d8",
         role: "user",
         parts: [{ type: "text", text: "and this" }],
-        metadata: { at: "2026-10-30T10:06:00Z", queued: true, delivery: "d8" },
+        metadata: { at: "2026-10-30T10:06:00Z", queued: { mode: "queue", handed_over: false }, delivery: "d8" },
       },
     ]);
     // Delivered: gone from the hub's list, so only the transcript shows it.

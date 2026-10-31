@@ -7,7 +7,8 @@ export type UserMessage = {
  */
 to?: string, text: string, 
 /**
- * While the agent works: wait for its turn to end (the default) or interrupt it.
+ * While the agent works: wait for its run to end (`queue`, the default) or reach it once
+ * its running tool calls are done (`steer`).
  */
 mode?: SendMode, 
 /**

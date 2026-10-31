@@ -36,8 +36,11 @@ export interface MessageMeta {
   model?: string | null;
   /** What the agent turn cost, summed over its steps. */
   costUsd?: number | null;
-  /** Sent by the user and held by the hub until the turn ends (`delivery` cancels it). */
-  queued?: boolean;
+  /**
+   * Sent by the user, not in the session yet: held by the hub (`delivery` cancels it) or, when
+   * handed over, a steer pi adds once its running tool calls are done.
+   */
+  queued?: Pick<QueuedMessage, "mode" | "handed_over">;
   /** Still being written (the live tail). */
   live?: boolean;
   /** Uploads sent with a user's message (`<id>/<name>`). */
@@ -318,7 +321,7 @@ export function withInFlight(session: SessionTranscript, items: SessionItem[], i
       id: `queued:${q.delivery}`,
       role: "user",
       parts: [{ type: "text", text: q.text }],
-      metadata: { at: q.at, queued: true, delivery: q.delivery },
+      metadata: { at: q.at, queued: { mode: q.mode, handed_over: q.handed_over }, delivery: q.delivery },
     });
   }
 

@@ -98,9 +98,8 @@ const transcript = computed(() =>
       })
     : null,
 );
-const queuedNote = computed(() =>
-  badge.value?.type === "error" ? "the agent cannot start, see above" : "delivered when the agent is ready",
-);
+/** Why held messages wait, when it is not the usual (shown under them). */
+const queuedNote = computed(() => (badge.value?.type === "error" ? "the agent cannot start, see above" : null));
 
 // ---- scrolling ----
 // Only this follows new content, and only while the view is at the end: when the transcript

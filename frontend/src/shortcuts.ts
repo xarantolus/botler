@@ -43,8 +43,8 @@ export const SHORTCUTS: Shortcut[] = [
 /** Shown in the palette's help, handled elsewhere (the kit, the composer). */
 export const BUILTIN_SHORTCUTS: { kbds: string[]; label: string }[] = [
   { kbds: ["meta", "k"], label: "Command palette" },
-  { kbds: ["enter"], label: "Send (queue while the agent works)" },
-  { kbds: ["ctrl", "enter"], label: "Send now, interrupting the agent" },
+  { kbds: ["enter"], label: "Send (a working agent reads it after its running step)" },
+  { kbds: ["ctrl", "enter"], label: "Queue until the agent is done" },
   { kbds: ["shift", "enter"], label: "New line" },
   { kbds: ["escape"], label: "Close a dialog, leave the composer" },
 ];

@@ -196,7 +196,8 @@ pub struct SessionView {
     pub items: Vec<Item>,
     /// Render hints of the Python tools that declare one, by the name pi calls them (`web_search`).
     pub tool_renders: BTreeMap<String, ToolRender>,
-    /// The user's messages not delivered yet (waiting for the turn to end), oldest first.
+    /// The user's messages not in the session yet, oldest first: held by the hub (waiting for
+    /// the run to end, or for the agent to wake), or handed to pi as steers.
     pub queued: Vec<QueuedMessage>,
     /// The chat's session files, oldest first, the current one last: earlier ones are from
     /// handovers to a fresh session.
@@ -212,6 +213,9 @@ pub struct QueuedMessage {
     pub text: String,
     pub at: DateTime<Utc>,
     pub mode: SendMode,
+    /// Handed to pi already (a steer it adds once the running tool calls are done): it can no
+    /// longer be taken back.
+    pub handed_over: bool,
 }
 
 #[derive(Debug, Serialize, TS)]

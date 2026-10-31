@@ -48,6 +48,10 @@ pub struct LiveAgent {
     /// What changed since its previous container, told with its next delivery.
     changes: std::sync::Mutex<Vec<String>>,
     busy: AtomicBool,
+    /// The user's messages handed to pi as steers in its current run: pi holds them until the
+    /// running tool calls are done. Until the session shows them, the web app lists them as on
+    /// their way (they can no longer be taken back).
+    steered: std::sync::Mutex<Vec<String>>,
     last_active: std::sync::Mutex<DateTime<Utc>>,
     /// Set when the hub stops the agent on purpose (idle, kill switch), so the exit is not a crash.
     stopping: AtomicBool,
@@ -75,6 +79,11 @@ impl LiveAgent {
     /// exit wakes the dispatcher, which delivers to a fresh container instead).
     pub fn stopping(&self) -> bool {
         self.stopping.load(Ordering::SeqCst)
+    }
+
+    /// Deliveries of the user's messages pi holds as steers (see `steered`).
+    pub fn steered(&self) -> Vec<String> {
+        self.steered.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     fn touch(&self) {
@@ -235,7 +244,9 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// A message the user queued: held (pending, cancellable) until the agent's turn ends.
+/// A message the user queued: held (pending, cancellable) until the agent's whole run ends. One
+/// sent as a steer goes to pi right away instead, which adds it once the running tool calls are
+/// done, before its next model call (a running tool is never stopped).
 fn is_queued_message(ev: &Event) -> Result<bool> {
     if ev.source != Source::User || ev.kind != botler_core::event::kinds::MESSAGE {
         return Ok(false);
@@ -293,6 +304,9 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
     match agent.pi.prompt(&text, &[], streaming).await {
         Ok(disposition) => {
             hub.store.mark_delivered(&d.id).await?;
+            if streaming == Some(Streaming::Steer) && ev.source == Source::User {
+                agent.steered.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(d.id.clone());
+            }
             // Busy is driven only by pi's own agent_start/agent_settled events: setting it here
             // would race with a settle that arrives before this response is processed.
             tracing::debug!(delivery = %d.id, ?disposition, "delivered");
@@ -399,6 +413,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         checked: std::sync::Mutex::new(checked),
         changes: std::sync::Mutex::new(changes),
         busy: AtomicBool::new(false),
+        steered: std::sync::Mutex::default(),
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
         turn: std::sync::Mutex::default(),
@@ -794,6 +809,7 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
             }
             PiEventKind::AgentSettled => {
                 agent.busy.store(false, Ordering::SeqCst);
+                agent.steered.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
                 agent.touch();
                 if let Err(e) = hub.store.touch_instance(&agent.instance).await {
                     tracing::error!(instance = %agent.instance, error = %e, "could not record activity");

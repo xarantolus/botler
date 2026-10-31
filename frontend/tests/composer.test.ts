@@ -43,7 +43,7 @@ describe("ChatComposer attachments", () => {
     await w.find("form").trigger("submit");
     await flushPromises();
     expect(calls.find((c) => c.name === "send_message")?.args).toEqual({
-      body: { to: "botler", text: "see attached", mode: "queue", files: ["abc123/notes.txt"] },
+      body: { to: "botler", text: "see attached", mode: "steer", files: ["abc123/notes.txt"] },
     });
     expect(w.text()).not.toContain("notes.txt");
   });
@@ -59,6 +59,25 @@ describe("ChatComposer attachments", () => {
     await w.find("button[aria-label='Remove bad.bin']").trigger("click");
     await w.find("form").trigger("submit");
     await flushPromises();
-    expect(calls.find((c) => c.name === "send_message")?.args).toEqual({ body: { to: "botler", text: "hi", mode: "queue", files: undefined } });
+    expect(calls.find((c) => c.name === "send_message")?.args).toEqual({ body: { to: "botler", text: "hi", mode: "steer", files: undefined } });
+  });
+});
+
+describe("ChatComposer while the agent works", () => {
+  const modes = () => calls.filter((c) => c.name === "send_message").map((c) => (c.args as { body: { mode: string } }).body.mode);
+
+  it("sends with Enter (read after the running step) and queues until done with Ctrl+Enter", async () => {
+    const w = await mountInApp(ChatComposer, { instance: "botler", archived: false, busy: true });
+    const box = w.find("textarea");
+    await box.setValue("look at this too");
+    await box.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    await box.setValue("and then this");
+    await box.trigger("keydown", { key: "Enter", ctrlKey: true });
+    await flushPromises();
+    await box.setValue("and this");
+    await w.findAll("button").find((b) => b.text() === "When done")!.trigger("click");
+    await flushPromises();
+    expect(modes()).toEqual(["steer", "queue", "queue"]);
   });
 });

@@ -7,7 +7,8 @@ export type MessagePayload = { text: string,
  */
 files?: Array<string>, 
 /**
- * For a message from the user while the agent works: wait for the turn to end (`queue`, held
- * by the hub, cancellable until then) or interrupt it (`steer`). Absent: `steer`.
+ * For a message from the user while the agent works: wait for its run to end (`queue`, held
+ * by the hub, cancellable until then) or reach it once its running tool calls are done,
+ * before its next model call (`steer`; a running tool is never stopped). Absent: `steer`.
  */
 mode?: SendMode, };

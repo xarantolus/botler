@@ -5,4 +5,9 @@ export type QueuedMessage = {
 /**
  * Cancel with `DELETE /api/v1/messages/{id}` (this id).
  */
-delivery: string, text: string, at: string, mode: SendMode, };
+delivery: string, text: string, at: string, mode: SendMode, 
+/**
+ * Handed to pi already (a steer it adds once the running tool calls are done): it can no
+ * longer be taken back.
+ */
+handed_over: boolean, };

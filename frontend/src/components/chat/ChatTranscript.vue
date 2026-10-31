@@ -12,8 +12,8 @@ import TranscriptEntry from "./TranscriptEntry.vue";
 const props = defineProps<{
   messages: TranscriptMessage[];
   status: ChatStatus;
-  /** Why queued messages wait (shown under them). */
-  queuedNote: string;
+  /** Why held messages wait, when it is not the usual (shown under them). */
+  queuedNote: string | null;
   /** The chat (to refresh after taking a message back). */
   instance: string;
 }>();

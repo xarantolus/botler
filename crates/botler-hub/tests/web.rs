@@ -130,7 +130,8 @@ async fn live_streams_emitted_events() {
 }
 
 /// While the agent works, a queued message waits in the hub (listed in the session, cancellable)
-/// until the turn ends; a steered one interrupts it.
+/// until its run ends; a steered one goes to pi at once (listed, not cancellable, until the run
+/// settles: pi adds it after the running tool calls).
 #[tokio::test]
 async fn queued_messages_wait_for_the_turn_and_can_be_taken_back() {
     let e = env().await;
@@ -177,11 +178,22 @@ async fn queued_messages_wait_for_the_turn_and_can_be_taken_back() {
     assert_eq!(e.fake.prompt_behaviors(&container), [None, Some("steer".to_string())]);
     let (_, view) = req("GET", &session, None).await;
     let queued = view["queued"].as_array().unwrap();
-    assert_eq!(queued.iter().map(|q| q["text"].as_str().unwrap()).collect::<Vec<_>>(), ["later", "and this"]);
-    assert!(queued.iter().all(|q| q["mode"] == "queue"));
+    // The steer is pi's (it adds it once the running tool calls are done): listed until the
+    // session has it, first, and no longer cancellable.
+    let listed = |q: &Value| (q["text"].as_str().unwrap().to_string(), q["mode"].clone(), q["handed_over"].clone());
+    assert_eq!(
+        queued.iter().map(listed).collect::<Vec<_>>(),
+        [
+            ("stop!".to_string(), json!("steer"), json!(true)),
+            ("later".to_string(), json!("queue"), json!(false)),
+            ("and this".to_string(), json!("queue"), json!(false)),
+        ]
+    );
+    let steer = queued[0]["delivery"].as_str().unwrap().to_string();
+    assert_eq!(req("DELETE", &format!("/api/v1/messages/{steer}"), None).await.0, StatusCode::CONFLICT);
 
     // Take one back; the other is delivered when the turn ends.
-    let id = queued[1]["delivery"].as_str().unwrap().to_string();
+    let id = queued[2]["delivery"].as_str().unwrap().to_string();
     assert_eq!(req("DELETE", &format!("/api/v1/messages/{id}"), None).await.0, StatusCode::OK);
     assert!(e.fake.pi_event(&container, json!({ "type": "agent_settled" })));
     pump().await;

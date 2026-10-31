@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// Writing to a chat: Enter sends, Shift+Enter adds a line. While the agent works, Enter queues
-// the message (the hub holds it until the turn ends; it can be taken back until then) and
-// Ctrl/Cmd+Enter, or "Send now", interrupts the turn instead. A message to an archived chat
+// Writing to a chat: Enter sends, Shift+Enter adds a line. While the agent works, a sent message
+// reaches it once its running tool calls are done, before its next model call (pi's steer: a
+// running tool is never stopped); Ctrl/Cmd+Enter, or "When done", queues it instead (the hub
+// holds it until the agent is done; it can be taken back until then). A message to an archived chat
 // restores it; one to a sleeping agent wakes it. Files attach with the paperclip, by dropping
 // them on the composer or by pasting (images): each uploads right away and goes with the message.
 import { computed, reactive, ref, useTemplateRef, watch } from "vue";
@@ -120,16 +121,16 @@ defineExpose({ focus: () => prompt.value?.textareaRef?.focus() });
     <UChatPrompt
       ref="prompt"
       v-model="draft"
-      :placeholder="archived ? 'Message to restore this chat…' : busy ? 'Queue a message…' : 'Message…'"
+      :placeholder="archived ? 'Message to restore this chat…' : busy ? 'Message… (read after the running step)' : 'Message…'"
       :maxrows="10"
       :autofocus="false"
       variant="subtle"
       :aria-label="`Message to ${instance}`"
       :ui="{ base: 'px-1' }"
-      @submit="send('queue')"
+      @submit="send('steer')"
       @paste="onPaste"
-      @keydown.enter.ctrl.exact.prevent="send('steer')"
-      @keydown.enter.meta.exact.prevent="send('steer')"
+      @keydown.enter.ctrl.exact.prevent="send('queue')"
+      @keydown.enter.meta.exact.prevent="send('queue')"
     >
       <template v-if="attachments.length" #header>
         <ul class="flex flex-wrap gap-1.5 px-1 pt-1" aria-label="Attached files">
@@ -157,30 +158,24 @@ defineExpose({ focus: () => prompt.value?.textareaRef?.focus() });
           <span v-if="failed" class="truncate text-error">Remove the files that failed to upload to send.</span>
           <span v-else-if="hint" class="truncate">{{ hint }}</span>
           <span v-else-if="busy" class="hidden items-center gap-1 sm:inline-flex">
-            <UKbd value="enter" size="sm" /> to queue, <UKbd value="ctrl" size="sm" /><UKbd value="enter" size="sm" /> to interrupt
+            <UKbd value="enter" size="sm" /> to send after the running step, <UKbd value="ctrl" size="sm" /><UKbd value="enter" size="sm" /> when done
           </span>
           <span v-else class="hidden items-center gap-1 sm:inline-flex">
             <UKbd value="enter" size="sm" /> to send, <UKbd value="shift" size="sm" /><UKbd value="enter" size="sm" /> for a new line
           </span>
         </p>
-        <UTooltip v-if="busy" text="Send now: interrupt the agent (Ctrl+Enter)">
+        <UTooltip v-if="busy" text="Queue it until the agent is done; it can be taken back until then (Ctrl+Enter)">
           <UButton
-            icon="i-lucide-zap"
-            label="Send now"
+            icon="i-lucide-list-plus"
+            label="When done"
             size="sm"
             color="neutral"
             variant="ghost"
             :disabled="!canSend || sending"
-            @click="send('steer')"
+            @click="send('queue')"
           />
         </UTooltip>
-        <UChatPromptSubmit
-          :loading="sending || uploading"
-          :disabled="!canSend"
-          color="primary"
-          :icon="busy ? 'i-lucide-list-plus' : undefined"
-          :aria-label="busy ? 'Queue' : 'Send'"
-        />
+        <UChatPromptSubmit :loading="sending || uploading" :disabled="!canSend" color="primary" aria-label="Send" />
       </template>
     </UChatPrompt>
   </div>

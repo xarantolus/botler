@@ -271,7 +271,8 @@ pub struct UserMessage {
     #[ts(optional, as = "Option<String>")]
     to: String,
     text: String,
-    /// While the agent works: wait for its turn to end (the default) or interrupt it.
+    /// While the agent works: wait for its run to end (`queue`, the default) or reach it once
+    /// its running tool calls are done (`steer`).
     #[serde(default)]
     #[ts(optional, as = "Option<SendMode>")]
     mode: SendMode,
@@ -368,10 +369,27 @@ async fn cancel_message(
     Ok(Json(Cancelled { delivery }))
 }
 
-/// The user's messages waiting for the agent's turn to end.
-async fn queued(hub: &Hub, instance: &str) -> Result<Vec<QueuedMessage>, ApiError> {
+/// The user's messages not in the session (`items`) yet: those handed to pi as steers in its
+/// current run (it adds them once the running tool calls are done), then those the hub holds.
+async fn queued(hub: &Hub, instance: &str, items: &[crate::sessions::Item]) -> Result<Vec<QueuedMessage>, ApiError> {
+    let in_session: std::collections::HashSet<&str> = items
+        .iter()
+        .filter_map(|it| match it {
+            crate::sessions::Item::User { delivery: Some(d), .. } => Some(d.as_str()),
+            _ => None,
+        })
+        .collect();
+    let steered = match hub.agents.get(instance).await {
+        Some(a) if a.busy() => a.steered(),
+        _ => Vec::new(),
+    };
+    let mut deliveries = Vec::new();
+    for id in steered.iter().filter(|id| !in_session.contains(id.as_str())) {
+        deliveries.push((hub.store.delivery(id).await?, true));
+    }
+    deliveries.extend(hub.store.pending_deliveries(instance).await?.into_iter().map(|d| (d, false)));
     let mut out = Vec::new();
-    for d in hub.store.pending_deliveries(instance).await? {
+    for (d, handed_over) in deliveries {
         let ev = hub.store.event(&d.event_id).await?;
         if ev.source != Source::User || ev.kind != botler_core::event::kinds::MESSAGE {
             continue;
@@ -384,6 +402,7 @@ async fn queued(hub: &Hub, instance: &str) -> Result<Vec<QueuedMessage>, ApiErro
             text: m.text,
             at: d.created_at,
             mode: m.mode.unwrap_or(SendMode::Steer),
+            handed_over,
         });
     }
     Ok(out)
@@ -579,7 +598,7 @@ async fn session(
     let file = q.file.unwrap_or_else(|| inst.session_file.clone());
     let tool_renders =
         hub.applied().await.defs.tools.values().filter_map(|t| Some((t.pi_name(), t.render.clone()?))).collect();
-    let queued = queued(&hub, &inst.name).await?;
+    let queued = queued(&hub, &inst.name, &items).await?;
     Ok(Json(SessionView { instance: inst, busy, pending, phase, items, tool_renders, queued, sessions, file }))
 }
 
