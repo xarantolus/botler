@@ -246,6 +246,10 @@ pub struct Defaults {
     /// ...or when their session has been compacted this many times; 0 turns it off.
     #[serde(default = "Defaults::rollover_compactions")]
     pub rollover_compactions: u32,
+    /// Before an agent that talked with the user (or did a lot of work) sleeps without having
+    /// written memory, it gets one short turn to save what is worth keeping.
+    #[serde(default = "Defaults::memory_checkpoint")]
+    pub memory_checkpoint: bool,
 }
 
 /// `"never"` or a duration.
@@ -289,6 +293,9 @@ impl Defaults {
     fn rollover_compactions() -> u32 {
         3
     }
+    fn memory_checkpoint() -> bool {
+        true
+    }
 }
 
 impl Default for Defaults {
@@ -302,6 +309,7 @@ impl Default for Defaults {
             reply_within: Self::reply_within(),
             rollover_tokens: Self::rollover_tokens(),
             rollover_compactions: Self::rollover_compactions(),
+            memory_checkpoint: Self::memory_checkpoint(),
         }
     }
 }

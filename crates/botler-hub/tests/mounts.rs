@@ -52,8 +52,10 @@ async fn message(e: &Env, to: &str, text: &str) {
     e.hub.emit(ev).await.unwrap();
 }
 
+/// Idle agents sleep, after their memory checkpoint if they get one.
 async fn sleep_all(e: &Env) {
     agents::reap_idle(&e.hub, Utc::now() + Duration::hours(3)).await.unwrap();
+    agents::dispatch_pending(&e.hub).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 }
 

@@ -118,13 +118,21 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
         .unwrap_or_default();
     s.push_str(&format!(
         "## Memory\n\
-         Durable facts, preferences and decisions (e.g. \"dev work on GitHub repos uses secret group \
-         `github-ssh`\") go in memory: read-only at `/memory/self` (`agents/{}/`, all `{}` agents){project} \
-         and `/memory/user` (`user/`, the user's profile, shared by all agents); search it with `rg` before \
-         asking the user something they may have told you before. Change it with `memory_write`, \
-         `memory_append` and `memory_delete` (paths like `user/tools.md`) and keep a short `INDEX.md` in each. \
-         Code and definitions belong in the monorepo, working files in your home.\n\n",
-        def.name, def.name
+         Memory is what the next conversation knows. It is read-only at `/memory/user` (`user/`: the \
+         user, shared by all agents), `/memory/self` (`agents/{}/`: all `{}` agents){project}; search it \
+         with `rg` before asking the user something they may have told you before. Write it with \
+         `memory_write`, `memory_append` and `memory_delete` (paths like `user/tools.md`) in the same turn, \
+         without asking, when:\n\
+         - the user states a preference or correction (\"don't do X\", \"I prefer Y\"), a fact about \
+           themselves, their setup or the people, accounts and repos they use, or a decision (e.g. \"dev \
+           work on GitHub repos uses secret group `github-ssh`\"): in `user/`, and say \"noted\" in a few words;\n\
+         - you learned something that would cost effort to find again: how a system, tool or API behaves, a \
+           workaround, where something lives, why something failed: in `agents/{}/`, or the project's;\n\
+         - you stop with state worth picking up later (open threads, ids).\n\
+         Update an existing file rather than adding a near-duplicate, and keep each namespace's `INDEX.md` \
+         current. Not memory: what is in the monorepo or git (code, definitions), transient state, secrets \
+         or their values. Working files belong in your home.\n\n",
+        def.name, def.name, def.name
     ));
     s.push_str(
         "## Limits\n\

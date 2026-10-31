@@ -509,6 +509,15 @@ fn author(caller: &Caller) -> String {
     }
 }
 
+/// The calling agent changed memory this wake: no memory checkpoint is needed.
+async fn remembered(hub: &Hub, caller: &Caller) {
+    if let Some(me) = caller.instance()
+        && let Some(live) = hub.agents.get(me).await
+    {
+        live.since().remembered();
+    }
+}
+
 /// The caller's scope and the author name its writes carry.
 async fn scoped(hub: &Hub, caller: &Caller) -> Result<(Scope, String), OpError> {
     Ok((scope(hub, caller).await?, author(caller)))
@@ -523,7 +532,9 @@ impl Op for MemoryWrite {
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<MemoryWritten, OpError> {
         let (scope, who) = scoped(hub, caller).await?;
         permit(&scope.write, "write", &self.path)?;
-        Ok(hub.memory.write(&who, &self.path, &self.content, self.expected_sha256.as_deref()).await?)
+        let written = hub.memory.write(&who, &self.path, &self.content, self.expected_sha256.as_deref()).await?;
+        remembered(hub, caller).await;
+        Ok(written)
     }
 }
 
@@ -537,7 +548,9 @@ impl Op for MemoryAppend {
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<MemoryWritten, OpError> {
         let (scope, who) = scoped(hub, caller).await?;
         permit(&scope.write, "write", &self.path)?;
-        Ok(hub.memory.append(&who, &self.path, &self.text).await?)
+        let written = hub.memory.append(&who, &self.path, &self.text).await?;
+        remembered(hub, caller).await;
+        Ok(written)
     }
 }
 
@@ -557,6 +570,7 @@ impl Op for MemoryDelete {
         let (scope, who) = scoped(hub, caller).await?;
         permit(&scope.write, "delete", &self.path)?;
         hub.memory.delete(&who, &self.path, &self.expected_sha256).await?;
+        remembered(hub, caller).await;
         Ok(MemoryDeleted { deleted: self.path })
     }
 }

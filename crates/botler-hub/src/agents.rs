@@ -68,6 +68,8 @@ pub struct LiveAgent {
     drain: Option<Arc<dyn botler_runtime::Containers>>,
     /// Shares that failed to mount have been reported (once per wake).
     mounts_reported: AtomicBool,
+    /// What it did this wake, for its memory checkpoint ([`crate::checkpoint`]).
+    since: std::sync::Mutex<crate::checkpoint::Since>,
 }
 
 impl LiveAgent {
@@ -101,6 +103,10 @@ impl LiveAgent {
 
     fn error(&self) -> std::sync::MutexGuard<'_, Option<String>> {
         self.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub fn since(&self) -> std::sync::MutexGuard<'_, crate::checkpoint::Since> {
+        self.since.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn last_active(&self) -> DateTime<Utc> {
@@ -315,6 +321,9 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
     match result {
         Ok(disposition) => {
             hub.store.mark_delivered(&d.id).await?;
+            if ev.source == Source::User {
+                agent.since().talked();
+            }
             if streaming == Some(Streaming::Steer) && ev.source == Source::User {
                 agent.steered.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(d.id.clone());
             }
@@ -433,6 +442,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         kill: Mutex::new(Some(attached.kill)),
         drain: env.mounts.values().any(|m| *m == MountMode::ReadWrite).then(|| hub.containers.clone()),
         mounts_reported: AtomicBool::new(false),
+        since: std::sync::Mutex::default(),
     });
     hub.agents.live.lock().await.insert(instance.name.clone(), agent.clone());
     hub.store.set_instance_state(&instance.name, InstanceState::Running, Some(&spec.name)).await?;
@@ -836,9 +846,13 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                     tracing::error!(instance = %agent.instance, error = %e, "could not record activity");
                 }
                 let failed = agent.error().take();
-                let ended = match failed {
-                    Some(err) => crate::turns::failed(&hub, &agent, &err).await,
-                    None => turn_succeeded(&hub, &agent).await,
+                let ended = match crate::checkpoint::ended(&hub, &agent, failed.as_deref()).await {
+                    Ok(true) => Ok(()),
+                    Ok(false) => match failed {
+                        Some(err) => crate::turns::failed(&hub, &agent, &err).await,
+                        None => turn_succeeded(&hub, &agent).await,
+                    },
+                    Err(e) => Err(e),
                 };
                 if let Err(e) = ended {
                     tracing::error!(instance = %agent.instance, error = %e, "could not handle the end of the turn");
@@ -858,7 +872,10 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                     tracing::error!(instance = %agent.instance, error = %e, "usage metering failed");
                 }
             }
-            PiEventKind::ToolStart { tool } => agent.turn().tool_started(tool),
+            PiEventKind::ToolStart { tool } => {
+                agent.turn().tool_started(tool);
+                agent.since().tool();
+            }
             _ => {}
         }
     }
@@ -1056,32 +1073,49 @@ async fn waiting_on_user(hub: &Hub, instance: &str) -> Result<bool> {
 }
 
 /// Put idle agents to sleep (they wake on their next message). Agents that only wait for the
-/// user sleep after a short grace period instead of their full idle timeout.
+/// user sleep after a short grace period instead of their full idle timeout. Before that, one
+/// that talked with the user and wrote no memory gets its memory checkpoint ([`crate::checkpoint`]);
+/// always-on agents get it too when idle, and stay up.
 pub async fn reap_idle(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
     let applied = hub.applied().await;
     for agent in hub.agents.all().await {
+        // A checkpoint ends by putting the agent to sleep; one that takes too long is cut short.
+        let checkpoint = agent.since().sent_at();
+        if let Some(at) = checkpoint {
+            if crate::checkpoint::overdue(at, now) {
+                tracing::warn!(instance = %agent.instance, "memory checkpoint timed out; stopping");
+                agent.stop().await;
+            }
+            continue;
+        }
         if agent.busy() {
             continue;
         }
         let instance = hub.store.instance(&agent.instance).await?;
-        if applied.defs.agents.get(&instance.definition).is_some_and(|d| d.spec.always_on) {
-            continue;
-        }
-        let idle = applied
-            .defs
-            .agents
-            .get(&instance.definition)
-            .and_then(|d| d.spec.idle_timeout)
-            .unwrap_or(applied.defs.instance.defaults.idle_timeout);
+        let def = applied.defs.agents.get(&instance.definition);
+        let always_on = def.is_some_and(|d| d.spec.always_on);
+        let idle = def.and_then(|d| d.spec.idle_timeout).unwrap_or(applied.defs.instance.defaults.idle_timeout);
         if !hub.store.pending_deliveries(&agent.instance).await?.is_empty() {
             continue;
         }
         let idle_for = now - agent.last_active();
-        if idle_for > idle.as_chrono() {
-            tracing::info!(instance = %agent.instance, "idle; stopping");
-            agent.stop().await;
-        } else if idle_for > Duration::seconds(WAITING_GRACE_SECS) && waiting_on_user(hub, &agent.instance).await? {
+        let waiting = !always_on
+            && idle_for > Duration::seconds(WAITING_GRACE_SECS)
+            && waiting_on_user(hub, &agent.instance).await?;
+        if idle_for <= idle.as_chrono() && !waiting {
+            continue;
+        }
+        if let Some(def) = def
+            && crate::checkpoint::due(hub, &agent, def).await?
+        {
+            crate::checkpoint::send(hub, &agent, now).await?;
+        } else if always_on {
+            continue;
+        } else if waiting {
             tracing::info!(instance = %agent.instance, "waiting on the user; sleeping until the answer arrives");
+            agent.stop().await;
+        } else {
+            tracing::info!(instance = %agent.instance, "idle; stopping");
             agent.stop().await;
         }
     }

@@ -201,7 +201,12 @@ pub const BUILTIN: &[BuiltinEvent] = &[
             args: &[],
             why: "hand over: summary, outstanding work, where your state lives, and who should continue",
         }],
-        guidance: "Prepare to be archived. 1) Commit and push any uncommitted work in your workspace to your branch                    (or propose it). 2) Write anything worth remembering to memory. 3) Call `handover_ready` once with a                    summary of everything you did, what is still outstanding, where your state lives (branch, files,                    notes), and a `handoff` if someone should continue the outstanding work (an existing chat, or a new                    agent to spawn). Be complete: whoever picks this up only has your report.",
+        guidance: "Prepare to be archived. 1) Commit and push any uncommitted work in your workspace to your branch \
+                   (or propose it). 2) Save to memory what is worth keeping (the user's preferences, facts and \
+                   decisions, non-obvious findings). 3) Call `handover_ready` once with a summary of everything you \
+                   did, what is still outstanding, where your state lives (branch, files, notes), and a `handoff` if \
+                   someone should continue the outstanding work (an existing chat, or a new agent to spawn). Be \
+                   complete: whoever picks this up only has your report.",
     },
     BuiltinEvent {
         kind: kinds::AGENT_IDLE,
@@ -347,9 +352,9 @@ pub const BUILTIN: &[BuiltinEvent] = &[
             args: &[],
             why: "your report: what you did, what is outstanding, where your state lives",
         }],
-        guidance: "Finish or park the current step, commit and push work in progress, write what matters to memory, \
-                   then call `handover_ready` once. Be complete: with `to = self` your next session starts from only \
-                   this report (the old conversation stays searchable with `search`).",
+        guidance: "Finish or park the current step, commit and push work in progress, save to memory what is worth \
+                   keeping (the user's preferences, facts and decisions, non-obvious findings), then call `handover_ready` once. \
+                   Be complete: with `to = self` your next session starts from only this report (the old conversation stays searchable with `search`).",
     },
     BuiltinEvent {
         kind: kinds::SESSION_STARTED,
