@@ -13,6 +13,7 @@ Needs pydantic (authoring and gate time); the rest of the SDK does not.
 
 from __future__ import annotations
 
+import inspect
 import sys
 from typing import Any, ClassVar
 
@@ -50,7 +51,8 @@ def manifest() -> list[dict[str, Any]]:
         schema = cls.model_json_schema()
         entries[kind] = {
             "type": kind,
-            "description": (cls.__dict__.get("__doc__") or "").strip(),
+            # cleandoc: Python 3.13 dedents docstrings itself, older versions do not.
+            "description": inspect.cleandoc(cls.__dict__.get("__doc__") or ""),
             "schema": schema,
         }
         if cls.restricted:

@@ -1,9 +1,12 @@
 version = 1
-description = "Runs a Claude Code session on the user's subscription (`claude -p`, no permission prompts: the container is the boundary) for a claude_session.requested event, and messages the requesting chat while it works and when it ends. Skill `claude-code`."
+description = "Runs a live Claude Code session on the user's subscription (`claude -p`, streaming, no permission prompts: the container is the boundary) for claude_session.requested events: it takes messages while it works, reports every turn to the requesting chat, and stays loaded 30 minutes after the last. Skill `claude-code`."
 command = ["/app/.venv/bin/python", "-m", "claude_session"]
-# Sessions take a while; the job stops Claude a few minutes before this so it can still report.
-timeout = "2h"
-# CLAUDE_CODE_OAUTH_TOKEN, from `claude setup-token` (skill `claude-code`).
+# Turns plus 30 idle minutes after each; a run stops Claude 10 minutes before this to still report,
+# and the next message resumes the session in a new run.
+timeout = "4h"
+# CLAUDE_CODE_OAUTH_TOKEN, from `claude setup-token` (skill `claude-code`). Add "github"
+# (GITHUB_TOKEN, for private repos, pushes and PRs) once the user has entered it: a group that is
+# declared here but has no value stops the job from starting.
 secrets = ["claude-code"]
 # Claude Code's home (~/.claude, its sessions) and every session's working directory, so `resume`
 # continues where the last run stopped.
@@ -15,5 +18,6 @@ emits = ["claude_session.finished"]
 [[trigger]]
 name = "requested"
 on = "claude_session.requested"
-# Several sessions may run at once.
+# Several sessions may run at once; a run for a session that is already live hands its message to
+# that run and exits.
 overlap = "allow"

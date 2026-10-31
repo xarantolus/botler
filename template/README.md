@@ -18,5 +18,6 @@ branch and calling `propose_change` (gate → reviewer → user if needed → me
 | `policies/` | The reviewer's policy and what needs the user's approval |
 | `gate/` | The deterministic checks every change must pass |
 
-Integrations that ship here: `jobs/claude-session/` runs Claude Code sessions on your own Claude
-subscription and messages you back (skill `claude-code`; it needs a token from `claude setup-token`).
+Integrations that ship here: `jobs/claude-session/` runs live Claude Code sessions on your own Claude
+subscription that take your messages while they work and message you back (skill `claude-code`; it
+needs a token from `claude setup-token`, and a GitHub token if it should push and open PRs).

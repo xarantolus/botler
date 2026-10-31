@@ -1,15 +1,15 @@
 ---
 name: claude-code
-description: Hand a coding task to a Claude Code session that runs in a container on the user's own Claude subscription, and relay its messages. Use when the user asks for Claude Code or Claude to do something for them, or to answer or continue a Claude session.
+description: Hand a coding task to a Claude Code session that runs in a container on the user's own Claude subscription, send it follow-ups and messages while it works, and relay what it says. Use when the user asks for Claude Code or Claude to do something for them, or to answer, steer or continue a Claude session.
 ---
 
 # Claude Code sessions
 
-`jobs/claude-session/` runs Claude Code (`claude -p`, image `images/claude-code`) for every
-`claude_session.requested` event. Each request is one turn of a session. Claude works without
-permission prompts in its own container, with its own working directory per session. You do not
-get the transcript. You get messages from it while it works (its `message_user` tool) and one
-when the turn ends: its final answer and the `session_id`.
+`jobs/claude-session/` runs Claude Code (image `images/claude-code`) for `claude_session.requested`
+events. A session is live: Claude works without permission prompts in its own container and
+working directory, takes your messages while it works, and stays loaded 30 minutes after it last
+did anything. You do not get the transcript. You get messages from it (its `message_user` tool)
+and one at the end of every turn: its answer and the `session_id`.
 
 ## Setup (once)
 
@@ -26,6 +26,23 @@ Claude Code sessions on your subscription")`. When `dialog.answered` says it was
 to memory that the Claude Code token is set up (and the date: it expires after a year). Without
 the token the job cannot start, and the failure goes to `triage`, not to you.
 
+## GitHub (optional: private repos, pushes, PRs)
+
+Public repos clone without it. For more, the job needs the group `github` (`GITHUB_TOKEN`); git
+and the `gh` CLI in the session then use it. Look in memory first. Otherwise:
+
+1. Tell the user to create a fine-grained personal access token on github.com (Settings >
+   Developer settings > Fine-grained tokens) for only the repositories Claude should work on, with
+   **Contents** and **Pull requests** set to read and write. Then `request_secrets(group="github",
+   fill=["GITHUB_TOKEN"], reason="Let Claude Code sessions push and open PRs")`.
+2. When `dialog.answered` says it was provided, propose adding the group to the job: in
+   `jobs/claude-session/job.toml`, `secrets = ["claude-code", "github"]`. Only add it after the
+   token is entered: a group without a value stops the job from starting. Note in memory that
+   sessions have GitHub access, and which repositories.
+
+Every session then holds the token, so keep it narrow. To remove access, propose taking the group
+out again.
+
 ## Start a session
 
 ```
@@ -36,50 +53,59 @@ emit_event(type="claude_session.requested", payload={
 ```
 
 - **The task:** a complete brief, since Claude sees nothing else. Say what done looks like.
-- **`repo`:** only for a new session. It is cloned anonymously, so it must be public unless the
-  user adds a credential (below).
+- **`repo`:** only for a new session. Private repos need GitHub access (above).
 - **`notify`:** the chat that gets the messages. It defaults to you; set `"botler"` when you are a
   short-lived chat and the session will outlast you.
 
-Tell the user it started. Each run takes up to about 2 hours; several sessions may run at once.
+Right away you get `Claude Code session <id> started`: from then on you can send it messages.
+Tell the user it started. Note open sessions you care about in memory: the id and what it is for.
 
-## Messages and the end of a turn
+## Messages from the session
 
-They arrive as messages from the job:
 - `Claude Code session <id> says: …` is news while it works.
-- `Claude Code session <id> finished its turn:` (or `failed:`) carries the result.
+- `Claude Code session <id> finished its turn:` (or `failed:`) carries its answer.
 
-Pass them on to the user in your words, with the session id when they may want to continue. The
-same result is a `claude_session.finished` event, and the job keeps it in its state under
-`session:<id>`. Note open sessions you care about in memory: the session id and what it is for.
+Pass them on to the user in your words, with the session id when they may want to answer. The
+same result is a `claude_session.finished` event.
 
-## Continue a session (the user replies)
+## Send it a message: while it works, or later
 
-When the user answers Claude ("tell the Claude session to use Postgres"), continue it:
+Whenever the user has something for Claude ("tell Claude to use Postgres", an answer to its
+question), send it to the session, whether it is working or not:
 
 ```
 emit_event(type="claude_session.requested", payload={
   "resume": "<session_id>", "task": "The user says: use Postgres, not SQLite."})
 ```
 
-Claude has the whole earlier conversation and its working directory. When it needs a decision,
-it asks in its final answer and stops; relay the question, and resume with the user's answer.
+- **While it works**, Claude reads the message at its next step and carries on with it in mind.
+- **To stop it and do something else**, add `"interrupt": true`: its current work stops and it
+  starts on your message.
+- **After a turn**, the message starts the next turn. Claude has the whole conversation and its
+  working directory, also after the session unloaded (30 minutes idle) or days later: the same
+  event loads it again.
+
+When Claude needs a decision, it asks in its answer and waits; relay the question and send the
+user's answer the same way. Pass messages on faithfully and say they come from the user.
 
 ## Failures
 
-- **"Not logged in" or a login error:** the token is wrong or expired. Ask for a new one (setup
+- **`failed:` with a login error:** the token is wrong or expired. Ask for a new one (setup
   above) with `fill`.
 - **A usage limit:** the user's subscription limits apply (shared with their own Claude use).
-  Tell them when it should reset, if Claude said, and offer to resume then (`set_timer`).
-- **"stopped after 110 minutes":** resume it with "continue".
+  Tell them when it should reset, if Claude said, and offer to continue then (`set_timer`).
+- **"stopped at the run's limit":** a run lasts at most about 4 hours. Send a message ("continue")
+  to go on; a message that arrived just then comes back to you to send again.
+- **`stopped without reporting`:** a timer the job set fires when its run was killed (out of
+  memory, a restart). Tell the user; a message to the session continues from its last saved step.
 
 ## Limits
 
 - **No permission prompts.** Claude runs every command it chooses. The container is the boundary:
-  it holds only `/data` (Claude's home and the session directories), the network, and the token.
-  It cannot reach the user's machine or other containers.
-- **Grant only what a task needs.** For pushing to private repos, add a group (e.g. a GitHub
-  token) to `secrets` in `jobs/claude-session/job.toml` through a proposal. Every session can
-  then use it, so suggest a narrowly scoped token.
+  it holds only `/data` (Claude's home and the session directories), the network, and the
+  tokens. It cannot reach the user's machine or other containers.
+- **Grant only what a task needs.** Every session gets the job's secret groups. Claude is told to
+  keep tokens out of what it writes, and the job removes them from messages, but Claude can read
+  them: give it only tokens limited to what it may touch.
 - **Usage:** runs use the user's subscription, not botler's budget. Do not start sessions the
-  user did not ask for, and do not loop on resume.
+  user did not ask for, and do not loop on messages to a session.

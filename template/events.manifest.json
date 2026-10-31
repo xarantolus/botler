@@ -1,8 +1,8 @@
 [
   {
-    "description": "A Claude Code session run ended (jobs/claude-session). `result` is Claude's final answer or\n    the failure, cut to a few thousand characters; continue with `resume = session_id`.",
+    "description": "A turn of a Claude Code session ended (jobs/claude-session). `result` is Claude's final\nanswer or the failure, cut to a few thousand characters; continue with `resume = session_id`.",
     "schema": {
-      "description": "A Claude Code session run ended (jobs/claude-session). `result` is Claude's final answer or\nthe failure, cut to a few thousand characters; continue with `resume = session_id`.",
+      "description": "A turn of a Claude Code session ended (jobs/claude-session). `result` is Claude's final\nanswer or the failure, cut to a few thousand characters; continue with `resume = session_id`.",
       "properties": {
         "cost_usd": {
           "anyOf": [
@@ -45,10 +45,15 @@
     "type": "claude_session.finished"
   },
   {
-    "description": "Start or continue a Claude Code session on the user's subscription (jobs/claude-session,\n    skill `claude-code`). `resume` continues the session with that id; `repo` is cloned into a new\n    session's working directory; `notify` is the chat that hears back (default: the emitter).",
+    "description": "Start a Claude Code session on the user's subscription (jobs/claude-session, skill\n`claude-code`), or send one a message: `resume` is its id, and the message reaches it even while\nit works; `interrupt` stops its current work first. `repo` is cloned into a new session's\nworking directory; `notify` is the chat that hears back (default: the emitter).",
     "schema": {
-      "description": "Start or continue a Claude Code session on the user's subscription (jobs/claude-session,\nskill `claude-code`). `resume` continues the session with that id; `repo` is cloned into a new\nsession's working directory; `notify` is the chat that hears back (default: the emitter).",
+      "description": "Start a Claude Code session on the user's subscription (jobs/claude-session, skill\n`claude-code`), or send one a message: `resume` is its id, and the message reaches it even while\nit works; `interrupt` stops its current work first. `repo` is cloned into a new session's\nworking directory; `notify` is the chat that hears back (default: the emitter).",
       "properties": {
+        "interrupt": {
+          "default": false,
+          "title": "Interrupt",
+          "type": "boolean"
+        },
         "notify": {
           "anyOf": [
             {
@@ -136,7 +141,7 @@
     "type": "example.logged_in"
   },
   {
-    "description": "The example browser service's session is logged out of `site`. Open a login visit with\n    `request_visit` and `vnc_password` (valid until the login is back).",
+    "description": "The example browser service's session is logged out of `site`. Open a login visit with\n`request_visit` and `vnc_password` (valid until the login is back).",
     "restricted": true,
     "schema": {
       "description": "The example browser service's session is logged out of `site`. Open a login visit with\n`request_visit` and `vnc_password` (valid until the login is back).",
@@ -160,7 +165,7 @@
     "type": "example.login_needed"
   },
   {
-    "description": "Something the example browser service (jobs/browser-example) read from a page. Raw page\n    content: restricted, so only chats granted it subscribe.",
+    "description": "Something the example browser service (jobs/browser-example) read from a page. Raw page\ncontent: restricted, so only chats granted it subscribe.",
     "restricted": true,
     "schema": {
       "description": "Something the example browser service (jobs/browser-example) read from a page. Raw page\ncontent: restricted, so only chats granted it subscribe.",

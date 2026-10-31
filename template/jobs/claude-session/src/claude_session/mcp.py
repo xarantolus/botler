@@ -1,20 +1,26 @@
 """A stdio MCP server with one tool, `message_user`, that Claude Code starts for the session
-(`--mcp-config`). It sends the text to the chat in CLAUDE_SESSION_NOTIFY through the botler SDK.
-The protocol is newline-delimited JSON-RPC 2.0; only what a tools-only server needs is here."""
+(`--mcp-config`). It sends the text through the botler SDK to the chat named in the file
+CLAUDE_SESSION_NOTIFY_FILE (the chat of the session's latest message). The protocol is
+newline-delimited JSON-RPC 2.0; only what a tools-only server needs is here."""
 
 import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import IO, Any
 
 import botler
+
+# The session's secrets: never in a message, whatever Claude writes.
+SECRETS = ("CLAUDE_CODE_OAUTH_TOKEN", "GITHUB_TOKEN")
 
 TOOL = {
     "name": "message_user",
     "description": (
         "Send the user a short message now, while you keep working: progress worth knowing "
-        "(a PR is up), or that you are blocked. For questions, ask in your final reply instead."
+        "(a PR is up), or that you are blocked. For questions, ask in your final reply instead: "
+        "the answer comes back as a new message."
     ),
     "inputSchema": {
         "type": "object",
@@ -22,6 +28,13 @@ TOOL = {
         "required": ["text"],
     },
 }
+
+
+def redact(text: str, environ: Mapping[str, str]) -> str:
+    for name in SECRETS:
+        if value := environ.get(name):
+            text = text.replace(value, f"[{name}]")
+    return text
 
 
 def handle(request: dict[str, Any], send: Callable[[str], object]) -> dict[str, Any] | None:
@@ -68,10 +81,11 @@ def serve(stdin: IO[str], stdout: IO[str], send: Callable[[str], object]) -> Non
 
 
 def main() -> None:
-    notify, session = os.environ["CLAUDE_SESSION_NOTIFY"], os.environ["CLAUDE_SESSION_ID"]
+    notify, session = Path(os.environ["CLAUDE_SESSION_NOTIFY_FILE"]), os.environ["CLAUDE_SESSION_ID"]
 
     def send(text: str) -> object:
-        return botler.send_message(notify, f"Claude Code session {session} says: {text}")
+        text = redact(text, os.environ)
+        return botler.send_message(notify.read_text(), f"Claude Code session {session} says: {text}")
 
     serve(sys.stdin, sys.stdout, send)
 

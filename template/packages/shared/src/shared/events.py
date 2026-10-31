@@ -49,20 +49,22 @@ class ExampleLoggedIn(botler.Event):
 
 
 class ClaudeSessionRequested(botler.Event):
-    """Start or continue a Claude Code session on the user's subscription (jobs/claude-session,
-    skill `claude-code`). `resume` continues the session with that id; `repo` is cloned into a new
-    session's working directory; `notify` is the chat that hears back (default: the emitter)."""
+    """Start a Claude Code session on the user's subscription (jobs/claude-session, skill
+    `claude-code`), or send one a message: `resume` is its id, and the message reaches it even while
+    it works; `interrupt` stops its current work first. `repo` is cloned into a new session's
+    working directory; `notify` is the chat that hears back (default: the emitter)."""
 
     type: ClassVar[str] = "claude_session.requested"
     task: str
     repo: str | None = None
     resume: UUID | None = None
+    interrupt: bool = False
     notify: str | None = None
 
 
 class ClaudeSessionFinished(botler.Event):
-    """A Claude Code session run ended (jobs/claude-session). `result` is Claude's final answer or
-    the failure, cut to a few thousand characters; continue with `resume = session_id`."""
+    """A turn of a Claude Code session ended (jobs/claude-session). `result` is Claude's final
+    answer or the failure, cut to a few thousand characters; continue with `resume = session_id`."""
 
     type: ClassVar[str] = "claude_session.finished"
     session_id: str
