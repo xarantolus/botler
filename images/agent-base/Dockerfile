@@ -55,8 +55,10 @@ ENV PI_CODING_AGENT_DIR=/botler/agent-dir \
 
 # Agents run as container root. Under rootless Podman that is the unprivileged host user, so bind-
 # mounted session files and homes stay owned by the user who runs the hub (no keep-id needed).
-# HOME is not /root: it is an ordinary directory the hub mounts and keeps per agent.
-RUN mkdir -p /botler /home/agent /inbox
+# HOME is not /root: it is an ordinary directory the hub mounts and keeps per agent. root's passwd
+# entry points there too, so tools that ignore $HOME (ssh, getpwuid, `~root`) agree on `~`.
+RUN mkdir -p /botler /home/agent /inbox \
+ && sed -i "s|^root:\([^:]*\):0:0:\([^:]*\):/root:|root:\1:0:0:\2:/home/agent:|" /etc/passwd
 WORKDIR /home/agent
 # No init here: the hub starts every container with `--init`, whose init is PID 1 and reaps zombies.
 CMD ["pi", "--mode", "rpc"]

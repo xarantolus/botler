@@ -99,7 +99,7 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
     }
     s.push_str(&format!(
         "## Your files\n\
-         Your home `/home/agent` (`$HOME`, your working directory) persists across wakes and restarts; \
+         Your home `/home/agent` (`$HOME`, `~`, your working directory; also root's home, not `/root`) persists across wakes and restarts; \
          `/tmp` and everything else outside your home and mounts is wiped whenever you sleep. Clone repos \
          and keep notes and tools in your home. {}\n\n",
         match &def.spec.env.home {
