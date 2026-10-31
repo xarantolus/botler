@@ -7,6 +7,8 @@ export const shell = reactive({
   newChat: false,
   /** The mobile sidebar (drawer) is open. */
   sidebar: false,
+  /** The session tree of the chat on screen is open. */
+  sessionTree: false,
   /** The command palette is open. */
   palette: false,
   /** What is typed in the command palette. */

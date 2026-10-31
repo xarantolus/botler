@@ -49,13 +49,19 @@ function onReasoningClick(e: MouseEvent, id: string) {
           block
           icon="i-lucide-history"
           trailing-icon="i-lucide-chevron-down"
-          :label="`New session started from handover (previous: ${part.data.previous})`"
+          label="New session, continued from a handover"
           class="justify-start text-muted"
           :ui="{ trailingIcon: 'ms-auto group-data-[state=open]:rotate-180 transition-transform' }"
         />
         <template #content>
           <div class="space-y-2 border-t border-default px-3 py-2.5 text-sm text-muted">
             <MarkdownText :source="part.data.summary" />
+            <ULink
+              :to="{ query: { file: part.data.previous } }"
+              class="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            >
+              <UIcon name="i-lucide-history" class="size-3.5" />Read the previous session
+            </ULink>
             <ul v-if="part.data.outstanding.length" class="list-disc ps-5">
               <li v-for="o in part.data.outstanding" :key="o">outstanding: {{ o }}</li>
             </ul>

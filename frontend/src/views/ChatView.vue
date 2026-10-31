@@ -8,7 +8,8 @@ import ChatNavbar from "../components/chat/ChatNavbar.vue";
 import ChatTranscript from "../components/chat/ChatTranscript.vue";
 import { redirectChat } from "../lib/events";
 import { currentStatus, phaseBadge } from "../lib/phase";
-import { buildTranscript } from "../lib/transcript";
+import { sessionOptions } from "../lib/sessions";
+import { buildTranscript, noLive } from "../lib/transcript";
 import { watch as watchLive } from "../live";
 import { shell } from "../shell";
 import {
@@ -44,13 +45,16 @@ watch(
   { immediate: true },
 );
 
+/** The session file in the link (`?file=`): an earlier session, read only; none is the current. */
+const linkedFile = computed(() => (typeof route.query.file === "string" ? route.query.file : null));
 watch(
-  name,
-  async (n, old) => {
-    if (n === old) return;
-    clearSession();
-    watchLive(n ?? null);
-    if (n) await refreshSession(n);
+  [name, linkedFile],
+  async ([n, file], [old] = [undefined, undefined]) => {
+    if (n !== old) {
+      clearSession();
+      watchLive(n ?? null);
+    }
+    if (n) await showSessionFile(n, file);
   },
   { immediate: true },
 );
@@ -72,6 +76,14 @@ const badge = computed(() =>
       })
     : null,
 );
+/** Showing an earlier session (before a handover), not the current one. */
+const earlier = computed(() => !!session.value && session.value.file !== session.value.instance.session_file);
+const sessions = computed(() => (session.value ? sessionOptions(session.value.sessions, (d) => d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })) : []));
+function showSession(file: string) {
+  const current = file === session.value?.instance.session_file;
+  void router.replace({ query: { ...route.query, file: current ? undefined : file } });
+}
+
 const cost = computed(() => (name.value ? state.usage?.total_by_instance[name.value]?.cost_usd : undefined));
 
 const transcript = computed(() =>
@@ -79,8 +91,9 @@ const transcript = computed(() =>
     ? buildTranscript({
         items: session.value.items,
         dialogs: allDialogs.value,
-        queued: session.value.queued,
-        streaming: state.streaming,
+        // An earlier session is history: nothing streams or waits in it.
+        queued: earlier.value ? [] : session.value.queued,
+        streaming: earlier.value ? noLive() : state.streaming,
         busy: session.value.busy,
       })
     : null,
@@ -181,20 +194,28 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
       <div v-if="inst" class="hidden border-b border-default px-4 py-3 has-[>div>*]:block sm:px-6">
         <ChatBanners :instance="inst" :status="status" :badge="badge" class="mx-auto max-w-3xl" @show-request="showRequest" />
       </div>
+      <!-- Earlier sessions of this chat (one per handover to a fresh session); `?file=` links one. -->
       <div
         v-if="name && session && session.sessions.length > 1"
-        class="flex items-center gap-2 border-b border-default px-4 py-1.5 text-xs text-muted sm:px-6"
+        class="flex flex-wrap items-center gap-2 border-b border-default px-4 py-1.5 text-xs sm:px-6"
+        :class="earlier ? 'bg-warning/10 text-default' : 'text-muted'"
       >
-        <UIcon name="i-lucide-history" class="size-4" />
-        Session
+        <UIcon name="i-lucide-history" class="size-4 shrink-0" />
         <USelect
           :model-value="session.file"
-          :items="session.sessions"
+          :items="sessions"
+          value-key="value"
           size="xs"
-          aria-label="Session"
-          @update:model-value="(f: string) => void showSessionFile(name!, f === session!.instance.session_file ? null : f)"
+          variant="ghost"
+          aria-label="Session of this chat"
+          class="min-w-56"
+          @update:model-value="(f: string) => showSession(f)"
         />
-        <span v-if="session.file !== session.instance.session_file">an earlier session, before a handover (read only)</span>
+        <UButton size="xs" color="neutral" variant="ghost" icon="i-lucide-git-branch" label="Tree" @click="shell.sessionTree = true" />
+        <template v-if="earlier">
+          <span>An earlier session, before a handover: read only.</span>
+          <UButton size="xs" variant="link" label="Back to the current session" class="p-0" @click="showSession(session.instance.session_file)" />
+        </template>
       </div>
     </template>
 
@@ -251,6 +272,7 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
             ref="composer"
             :instance="name"
             :archived="inst?.state === 'archived'"
+            :hint="earlier ? 'You are reading an earlier session; messages go to the current one.' : undefined"
             :busy="!!session?.busy || badge?.busy === true"
             @sent="toBottom(true)"
           />

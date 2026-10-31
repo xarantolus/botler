@@ -147,6 +147,7 @@ let sessionFile: string | null = null;
 
 /** View one of the chat's session files (null: the current one). */
 export function showSessionFile(name: string, file: string | null) {
+  sessionFor = name; // so refreshSession keeps the file
   sessionFile = file;
   return refreshSession(name);
 }
