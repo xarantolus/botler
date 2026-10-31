@@ -308,7 +308,9 @@ const fileId = (path: string) => `file-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
       class="sticky bottom-0 z-10 flex flex-wrap items-center gap-2 border-t border-default bg-default/95 px-4 py-3 backdrop-blur sm:px-6"
     >
       <span class="me-auto text-sm text-muted">
-        <span class="hidden sm:inline">{{ p.status === "awaiting_user" ? "Waiting for your decision." : "Checks are running; you can reject it now." }}</span>
+        <span class="hidden sm:inline">{{
+          p.status === "awaiting_user" ? "Waiting for your decision." : "Checks are running. You can approve once they pass if it needs you; you can reject it now."
+        }}</span>
       </span>
       <UButton
         color="error"
@@ -320,10 +322,11 @@ const fileId = (path: string) => `file-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
         @click="decide(false)"
       />
       <UButton
+        v-if="p.status === 'awaiting_user'"
         icon="i-lucide-check"
-        :label="p.status === 'awaiting_user' ? 'Approve' : 'Approve once checks finish'"
+        label="Approve"
         :loading="busy === 'approve'"
-        :disabled="!!busy || p.status !== 'awaiting_user'"
+        :disabled="!!busy"
         @click="decide(true)"
       />
     </div>
