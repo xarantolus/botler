@@ -53,6 +53,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/usage", get(usage))
         .route("/api/v1/messages", post(user_message))
         .route("/api/v1/uploads", put(upload))
+        .route("/api/v1/uploads/{id}/{name}", get(get_upload))
         .route("/api/v1/messages/{id}", delete(cancel_message))
         .route("/api/v1/dialogs", get(dialogs))
         .route("/api/v1/dialogs/{id}/answer", post(answer_dialog))
@@ -293,6 +294,28 @@ impl From<crate::uploads::UploadError> for ApiError {
         };
         ApiError(code, e.to_string())
     }
+}
+
+/// An upload, back to the user (thumbnails, downloads): images inline, anything else as an
+/// attachment, never sniffed.
+async fn get_upload(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path((id, name)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    user_only(&p)?;
+    let (bytes, content_type, inline) = crate::uploads::read(&hub, &format!("{id}/{name}")).await?;
+    let disposition =
+        if inline { "inline".to_string() } else { format!("attachment; filename=\"{}\"", name.replace('"', "")) };
+    let disposition =
+        HeaderValue::from_str(&disposition).map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    let headers = [
+        (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
+        (header::CONTENT_DISPOSITION, disposition),
+        (header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
+        (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400")),
+    ];
+    Ok((headers, bytes).into_response())
 }
 
 /// Store the raw request body as a new upload.

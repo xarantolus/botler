@@ -64,6 +64,39 @@ async fn uploads_reach_only_the_chat_they_are_sent_to() {
     assert!(prompt.contains("Attached files") && prompt.contains(&path), "{prompt}");
 }
 
+/// Uploads come back to the user: images inline with their type, anything else (SVG included)
+/// as an attachment, never sniffed; only for the user.
+#[tokio::test]
+async fn uploads_are_served_back_safely() {
+    let e = common::env().await;
+    let get = |path: String, who: Principal| {
+        let token = e.hub.tokens.issue(&who, chrono::Duration::hours(1), Utc::now());
+        let req = Request::get(path).header("authorization", format!("Bearer {token}")).body(Body::empty()).unwrap();
+        botler_hub::api::router(e.hub.clone()).oneshot(req)
+    };
+    let header = |r: &axum::response::Response, h: &str| r.headers()[h].to_str().unwrap().to_string();
+    let png: &[u8] = b"\x89PNG\r\n\x1a\nfake";
+    let (_, up) = api(&e, "PUT", "/api/v1/uploads?name=photo.png", Body::from(png)).await;
+    let r = get(format!("/api/v1/uploads/{}", up["file"].as_str().unwrap()), Principal::User).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!((header(&r, "content-type"), header(&r, "content-disposition")), ("image/png".into(), "inline".into()));
+    assert_eq!(header(&r, "x-content-type-options"), "nosniff");
+    assert_eq!(axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap(), png);
+
+    let (_, svg) = api(&e, "PUT", "/api/v1/uploads?name=x.svg", Body::from("<svg onload=alert(1)/>")).await;
+    let r = get(format!("/api/v1/uploads/{}", svg["file"].as_str().unwrap()), Principal::User).await.unwrap();
+    assert_eq!(header(&r, "content-type"), "application/octet-stream");
+    assert_eq!(header(&r, "content-disposition"), "attachment; filename=\"x.svg\"");
+
+    let agent = Principal::Agent { instance: "botler".into(), wake: "w".into() };
+    let r = get(format!("/api/v1/uploads/{}", up["file"].as_str().unwrap()), agent).await.unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        get("/api/v1/uploads/0123/nope.png".into(), Principal::User).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
 #[tokio::test]
 async fn image_input_reaches_models_json() {
     let e = common::env().await;

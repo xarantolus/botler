@@ -17,6 +17,7 @@ const user = (id: string, text: string, extra: Partial<Item<"user">> = {}): Item
   local_time: null,
   gap: null,
   message_text: null,
+  files: [],
   ...extra,
 });
 
@@ -344,6 +345,13 @@ describe("streamed to persisted", () => {
     expect(first.messages[1]!.metadata?.key).toBe("reply:u1");
     expect(later.messages[1]!.metadata?.key).toBe("reply:u1");
     expect(first.messages[1]!.parts[0]).toMatchObject({ type: "reasoning", state: "streaming" });
+  });
+});
+
+describe("attachments", () => {
+  it("carries the files sent with a message, and none otherwise", () => {
+    const t = buildTranscript(input([user("u1", "look", { files: ["abc/photo.png"] }), user("u2", "plain")]));
+    expect(t.messages.map((m) => m.metadata?.files)).toEqual([["abc/photo.png"], undefined]);
   });
 });
 

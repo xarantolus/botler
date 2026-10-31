@@ -70,6 +70,22 @@ fn stored(hub: &Hub, file: &str) -> Result<PathBuf, UploadError> {
     Ok(path)
 }
 
+/// An upload's bytes and how to serve them: images (not SVG, which can carry script) inline with
+/// their type, anything else as an attachment.
+pub async fn read(hub: &Hub, file: &str) -> Result<(Vec<u8>, &'static str, bool), UploadError> {
+    let path = stored(hub, file)?;
+    let ext = file.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let image = match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "avif" => Some("image/avif"),
+        _ => None,
+    };
+    Ok((tokio::fs::read(path).await?, image.unwrap_or("application/octet-stream"), image.is_some()))
+}
+
 /// Give `instance` the uploads `files`; returns where it finds them in its container.
 pub async fn attach(hub: &Hub, instance: &str, files: &[String]) -> Result<Vec<String>, UploadError> {
     let mut out = Vec::with_capacity(files.len());

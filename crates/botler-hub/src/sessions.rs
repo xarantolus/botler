@@ -29,6 +29,9 @@ pub enum Item {
         /// For a message the user typed: exactly their text (`text` is what the agent received,
         /// with the catalog's guidance around it).
         message_text: Option<String>,
+        /// For a message the user typed: the uploads attached to it (`<id>/<name>`, served at
+        /// `GET /api/v1/uploads/<id>/<name>`).
+        files: Vec<String>,
     },
     Assistant {
         id: String,
@@ -178,7 +181,8 @@ fn result_links(tool: &str, text: &str) -> (Option<String>, Option<String>) {
 /// The text of the user's chat message `event_id`, or `None` for any other event. Events are
 /// never deleted, but a session can outlive a database it was copied from: a missing event is
 /// shown as the delivered text.
-async fn user_text(hub: &Hub, event_id: &str) -> Result<Option<String>> {
+/// The text and attached uploads of a message the user typed (None for anything else).
+async fn user_text(hub: &Hub, event_id: &str) -> Result<Option<(Option<String>, Vec<String>)>> {
     let ev = match hub.store.event(event_id).await {
         Ok(ev) => ev,
         Err(botler_store::Error::NotFound { .. }) => return Ok(None),
@@ -187,7 +191,11 @@ async fn user_text(hub: &Hub, event_id: &str) -> Result<Option<String>> {
     if ev.kind != botler_core::event::kinds::MESSAGE || ev.source != botler_core::Source::User {
         return Ok(None);
     }
-    Ok(ev.payload.get("text").and_then(Value::as_str).map(String::from))
+    let text = ev.payload.get("text").and_then(Value::as_str).map(String::from);
+    let files = ev.payload.get("files").and_then(Value::as_array).into_iter().flatten();
+    let prefix = format!("{}/", crate::uploads::INBOX);
+    let files = files.filter_map(|f| f.as_str()?.strip_prefix(&prefix).map(String::from)).collect();
+    Ok(Some((text, files)))
 }
 
 /// Point an existing session's header at working directory `cwd`. pi resumes a session in the
@@ -254,6 +262,7 @@ pub fn parse_entry(e: &Value) -> Option<Item> {
                             provenance: Some(h.provenance),
                             event_kind: Some(h.kind),
                             message_text: None,
+                            files: Vec::new(),
                             delivery: Some(h.delivery),
                             event: Some(h.event),
                             local_time: h.local_time,
@@ -271,6 +280,7 @@ pub fn parse_entry(e: &Value) -> Option<Item> {
                             local_time: None,
                             gap: None,
                             message_text: None,
+                            files: Vec::new(),
                         },
                     };
                     Some(item)
@@ -400,8 +410,11 @@ pub async fn read(hub: &Hub, instance: &str, file: Option<&str>) -> Result<Vec<I
     let mut out = Vec::new();
     for e in branch {
         let Some(mut item) = parse_entry(e) else { continue };
-        if let Item::User { event: Some(ev), message_text, .. } = &mut item {
-            *message_text = user_text(hub, ev).await?;
+        if let Item::User { event: Some(ev), message_text, files, .. } = &mut item
+            && let Some((text, attached)) = user_text(hub, ev).await?
+        {
+            *message_text = text;
+            *files = attached;
         }
         if let Item::Note { id, at, event_kind, event, .. } = &item
             && event_kind == botler_core::event::kinds::SESSION_STARTED

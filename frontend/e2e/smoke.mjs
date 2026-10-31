@@ -4,8 +4,9 @@
 //   cargo build -p botler && cd frontend && npm run e2e
 //
 // It creates a scratch data directory, points the model routes at a stub OpenAI-compatible server
-// (this file), starts `botler serve` on BOTLER_E2E_PORT (default 7437, never 7420), and drives the
-// app in headless Chromium: sign in, send a message, answer the agent's question inline, ask for a
+// (this file), starts `botler serve` on 127.0.0.1:BOTLER_E2E_PORT (default 7437, never 7420; its
+// agents reach it over its Unix socket), and drives the
+// app in headless Chromium: sign in, send a message, attach a file, answer the agent's question inline, ask for a
 // change and reject the proposal, and run a job from the System view when there is one. At the
 // end it stops the hub, which removes its agent containers, then removes the images labelled with
 // the scratch data directory and the directory itself. Set BOTLER_E2E_KEEP=1 to keep them.
@@ -96,6 +97,7 @@ const stub = createServer((req, res) => {
     res.end("data: [DONE]\n\n");
   });
 });
+// Agents reach the stub through host.containers.internal (the host's address, not loopback).
 await new Promise((ok) => stub.listen(0, "0.0.0.0", ok));
 const stubPort = stub.address().port;
 
@@ -114,7 +116,8 @@ git("-c", "user.name=e2e", "-c", "user.email=e2e@localhost", "commit", "-qam", "
 git("push", "-q", "origin", "HEAD:main");
 execFileSync(bin, ["--data", data, "secret", "set", "OPENROUTER_API_KEY"], { input: "stub-key" });
 const token = botler("token").trim();
-const hub = spawn(bin, ["--data", data, "serve", "--listen", `0.0.0.0:${port}`], {
+// The hub listens on localhost; its agents reach it over its Unix socket.
+const hub = spawn(bin, ["--data", data, "serve", "--listen", `127.0.0.1:${port}`], {
   env: { ...process.env, RUST_LOG: "info,rmcp=warn" },
   stdio: ["ignore", "ignore", "pipe"],
 });
@@ -156,6 +159,14 @@ try {
   await composer.press("Enter");
   await page.getByText("Hello from the stub model.").waitFor({ timeout: AGENT });
   await snap("replied");
+
+  step("attach a file to a message");
+  await page.locator("#chat-composer input[type=file]").setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("hello") });
+  await page.locator("#chat-composer").getByText("notes.txt").waitFor();
+  await composer.fill("Here is a file");
+  await composer.press("Enter");
+  await page.locator("[data-role=user]").getByRole("button", { name: "notes.txt" }).waitFor({ timeout: 120_000 });
+  await snap("attached");
 
   step("answer the agent's question inline");
   await composer.fill("Please ask me something");
