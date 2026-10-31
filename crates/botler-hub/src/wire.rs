@@ -259,7 +259,7 @@ pub struct SecretGroupView {
     pub class: SecretClass,
     pub complete: bool,
     pub fields: Vec<SecretFieldView>,
-    /// Definitions and model routes it is granted to.
+    /// Definitions (and model calls) it is granted to.
     pub granted_to: Vec<String>,
     /// Chats holding it through a grant (also archived ones, whose grants are suspended).
     pub held_by: Vec<String>,
@@ -429,4 +429,7 @@ routes! {
     pause: POST "/api/v1/pause" => PauseState;
     resume: POST "/api/v1/resume" => PauseState;
     clear_breaker: POST "/api/v1/breakers/clear", body: ClearBreaker => BreakerCleared;
+    settings: GET "/api/v1/settings" => crate::settings::Settings;
+    save_settings: PUT "/api/v1/settings", body: crate::settings::SettingsEdit => crate::settings::SettingsSaved;
+    models: GET "/api/v1/models" => crate::model_catalog::CatalogView;
 }

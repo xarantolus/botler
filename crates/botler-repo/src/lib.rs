@@ -489,7 +489,19 @@ impl Repo {
     /// A commit on top of `base` that writes (`Some`) or deletes (`None`) files. Used by the hub
     /// for changes the user approved directly (e.g. declaring secrets from a filled form).
     pub async fn commit_files(&self, base: &str, files: &[(&str, Option<&str>)], message: &str) -> Result<String> {
-        self.commit_changes(base, &[], files, message).await
+        self.commit_in(base, &[], files, message, None).await
+    }
+
+    /// [`Repo::commit_files`] with another author (`Name <email>`), e.g. the user's own edits;
+    /// the hub stays the committer.
+    pub async fn commit_files_by(
+        &self,
+        base: &str,
+        files: &[(&str, Option<&str>)],
+        message: &str,
+        author: &str,
+    ) -> Result<String> {
+        self.commit_in(base, &[], files, message, Some(author)).await
     }
 
     /// A commit on top of `base` that first renames paths (files or directories, `git mv`, so
@@ -500,6 +512,17 @@ impl Repo {
         moves: &[(&str, &str)],
         files: &[(&str, Option<&str>)],
         message: &str,
+    ) -> Result<String> {
+        self.commit_in(base, moves, files, message, None).await
+    }
+
+    async fn commit_in(
+        &self,
+        base: &str,
+        moves: &[(&str, &str)],
+        files: &[(&str, Option<&str>)],
+        message: &str,
+        author: Option<&str>,
     ) -> Result<String> {
         let wt = self.temp_worktree(base).await?;
         let result = async {
@@ -522,7 +545,10 @@ impl Repo {
                 }
             }
             self.git_in(&wt, &["add", "--all"]).await?;
-            self.git_in(&wt, &["commit", "--quiet", "--allow-empty", "-m", message]).await?;
+            let author = author.map(|a| format!("--author={a}"));
+            let mut args = vec!["commit", "--quiet", "--allow-empty", "-m", message];
+            args.extend(author.as_deref());
+            self.git_in(&wt, &args).await?;
             self.git_in(&wt, &["rev-parse", "HEAD"]).await
         }
         .await;

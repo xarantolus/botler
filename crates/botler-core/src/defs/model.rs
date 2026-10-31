@@ -58,17 +58,134 @@ pub enum Undeclared {
     Warn,
 }
 
-/// The model routing table. Agents name a route, never a model.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// The provider of every model named by id. Deprecated routes may name another.
+pub const OPENROUTER: &str = "openrouter";
+
+/// The models agents use. An agent's `model` and `default` are any OpenRouter model id
+/// (`vendor/model`, see <https://openrouter.ai/models>); `model` lists the ones we typically use.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Models {
-    /// Route used when an agent does not name one.
+    /// Model id used when an agent does not name one.
     #[serde(default)]
     pub default: Option<String>,
+    /// Name of the container secret holding the OpenRouter API key.
     #[serde(default)]
+    pub api_key_secret: Option<String>,
+    /// Another OpenAI-compatible endpoint serving the same model ids (a gateway, a test stub).
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Output token cap per model call (lowered to the model's own maximum). pi otherwise requests
+    /// the model's full maximum, which spend-capped provider keys reject.
+    #[serde(default = "Models::default_max_tokens")]
+    pub max_tokens: u32,
+    /// The models we typically use, with what each is good for: suggestions for the web app and
+    /// agents, not a whitelist. Also where per-model overrides go.
+    #[serde(default, rename = "model", skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelEntry>,
+    /// Deprecated: named routes from before agents named model ids. Still resolved by name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub routes: BTreeMap<String, ModelRoute>,
 }
 
+impl Models {
+    fn default_max_tokens() -> u32 {
+        16_384
+    }
+
+    /// What a model name (an id, or a deprecated route name) resolves to.
+    pub fn resolve(&self, name: &str) -> ModelChoice {
+        if let Some(r) = self.routes.get(name) {
+            return ModelChoice {
+                provider: r.provider.clone(),
+                id: r.model.clone(),
+                base_url: r.base_url.clone(),
+                api_key_secret: r.api_key_secret.clone(),
+                max_tokens: r.max_tokens,
+                input: r.input.clone(),
+                thinking: r.thinking.clone(),
+            };
+        }
+        let entry = self.models.iter().find(|m| m.id == name);
+        ModelChoice {
+            provider: OPENROUTER.into(),
+            id: name.into(),
+            base_url: self.base_url.clone(),
+            api_key_secret: self.api_key_secret.clone(),
+            max_tokens: entry.and_then(|e| e.max_tokens).unwrap_or(self.max_tokens),
+            input: entry.and_then(|e| e.input.clone()),
+            thinking: entry.and_then(|e| e.thinking.clone()),
+        }
+    }
+
+    /// The secrets used as model API keys, with what uses each (`models`, `model route x`).
+    pub fn key_secrets(&self) -> Vec<(String, &str)> {
+        let routes = self
+            .routes
+            .iter()
+            .filter_map(|(r, route)| Some((format!("model route {r}"), route.api_key_secret.as_deref()?)));
+        self.api_key_secret.as_deref().map(|s| ("models".to_string(), s)).into_iter().chain(routes).collect()
+    }
+}
+
+impl Default for Models {
+    fn default() -> Self {
+        Self {
+            default: None,
+            api_key_secret: None,
+            base_url: None,
+            max_tokens: Self::default_max_tokens(),
+            models: vec![],
+            routes: BTreeMap::new(),
+        }
+    }
+}
+
+/// Whether `s` has the shape of an OpenRouter model id: `vendor/model`, no spaces.
+pub fn is_model_id(s: &str) -> bool {
+    s.split_once('/').is_some_and(|(v, m)| !v.is_empty() && !m.is_empty()) && !s.contains(char::is_whitespace)
+}
+
+/// A model we typically use (`[[models.model]]`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
+pub struct ModelEntry {
+    /// OpenRouter model id, e.g. `deepseek/deepseek-v4.1-flash`.
+    pub id: String,
+    /// What it is good for, in one line.
+    #[serde(default)]
+    pub note: String,
+    /// Output token cap for this model (default: `models.max_tokens`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_tokens: Option<u32>,
+    /// What the model takes, e.g. `["text", "image"]` (default: OpenRouter's catalog). Agents only
+    /// see images (attachments, `read` of a picture) when it includes `image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub input: Option<Vec<ModelInput>>,
+    /// pi thinking level, e.g. `low` or `high`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thinking: Option<String>,
+}
+
+/// The model an agent runs on, resolved from its `model` (or the default).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ModelChoice {
+    /// pi provider id: `openrouter`, unless a deprecated route names another.
+    pub provider: String,
+    pub id: String,
+    pub base_url: Option<String>,
+    pub api_key_secret: Option<String>,
+    /// The configured output token cap (the hub lowers it to the model's maximum).
+    pub max_tokens: u32,
+    /// Configured input kinds; unset: OpenRouter's catalog, else pi's own knowledge.
+    pub input: Option<Vec<ModelInput>>,
+    pub thinking: Option<String>,
+}
+
+/// Deprecated: a named route (`[models.routes.<name>]`). `privacy` and `fallback` are ignored.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ModelRoute {
@@ -81,43 +198,23 @@ pub struct ModelRoute {
     /// Name of the container secret holding the API key, if any.
     #[serde(default)]
     pub api_key_secret: Option<String>,
-    /// Output token cap per model call. pi otherwise requests the model's full maximum, which
-    /// spend-capped provider keys reject.
-    #[serde(default = "ModelRoute::default_max_tokens")]
+    #[serde(default = "Models::default_max_tokens")]
     pub max_tokens: u32,
     #[serde(default)]
     pub thinking: Option<String>,
-    /// What the model takes, e.g. `["text", "image"]`. Unset: pi's own knowledge of the model.
-    /// Agents only see images (attachments, `read` of a picture) when it includes `image`.
     #[serde(default)]
     pub input: Option<Vec<ModelInput>>,
-    /// `local` routes may never fall back to a hosted route.
     #[serde(default)]
-    pub privacy: Privacy,
-    /// Ordered fallbacks (route names).
+    pub privacy: Option<String>,
     #[serde(default)]
     pub fallback: Vec<String>,
 }
 
-impl ModelRoute {
-    fn default_max_tokens() -> u32 {
-        16_384
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelInput {
     Text,
     Image,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Privacy {
-    #[default]
-    Hosted,
-    Local,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -252,7 +349,7 @@ pub struct Agent {
     /// `ephemeral` agents are templates: each spawn creates a new instance.
     #[serde(default)]
     pub kind: AgentKind,
-    /// Model route name from `botler.toml`.
+    /// OpenRouter model id, e.g. `deepseek/deepseek-v4.1-flash`. Unset: `models.default`.
     #[serde(default)]
     pub model: Option<String>,
     #[serde(flatten)]

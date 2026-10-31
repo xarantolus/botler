@@ -266,10 +266,9 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         for j in d.jobs.values() {
             add(&j.spec.env.secrets, &[], format!("job `{}`", j.name));
         }
-        for (r, route) in &d.instance.models.routes {
-            if let Some(s) = &route.api_key_secret {
-                add(&[], std::slice::from_ref(s), format!("model route `{r}`"));
-            }
+        // One label for every model key, so moving it between routes and `[models]` is no grant.
+        for (_, s) in d.instance.models.key_secrets() {
+            add(&[], &[s.to_string()], "model calls".to_string());
         }
         g
     };
@@ -741,9 +740,12 @@ mod tests {
 
     fn base() -> MemTree {
         MemTree::new()
-            .with("botler.toml", "timezone = \"Europe/Berlin\"\n[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"openrouter\"\nmodel = \"x\"\n")
+            .with("botler.toml", "timezone = \"Europe/Berlin\"\n[models]\ndefault = \"p/m\"\n")
             .with("images/agent/Dockerfile", "FROM x")
-            .with("secrets.toml", "[[group]]\nname = \"gitlab\"\nclass = \"container\"\n[[group.secret]]\nname = \"GITLAB_TOKEN\"\n")
+            .with(
+                "secrets.toml",
+                "[[group]]\nname = \"gitlab\"\nclass = \"container\"\n[[group.secret]]\nname = \"GITLAB_TOKEN\"\n",
+            )
             .with("agents/main/agent.toml", "kind = \"persistent\"\n")
             .with("agents/main/AGENTS.md", "hi")
             .with("agents/triage/agent.toml", "")

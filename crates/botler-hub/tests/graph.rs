@@ -342,7 +342,7 @@ async fn event_types_list_producers_and_subscribers_and_are_searchable() {
     // `emits` must name declared types.
     let report = botler_core::load(
         &botler_core::defs::MemTree::new()
-            .with("botler.toml", "[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"p\"\nmodel = \"m\"\n")
+            .with("botler.toml", "[models]\ndefault = \"p/m\"\n")
             .with("jobs/j/job.toml", "command = [\"x\"]\nemits = [\"nope.never\"]\n")
             .with("jobs/j/Dockerfile", "FROM x"),
     );

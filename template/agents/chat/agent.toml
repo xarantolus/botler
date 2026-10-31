@@ -3,7 +3,6 @@ description = "A plain conversation: started from the web app for anything that 
 kind = "ephemeral"
 image = "agent"
 workspace = "volume"
-model = "standard"
 idle_timeout = "30m"
 tools = ["web.*"]
 # The chat's persistent home is /home/agent. To share one between chats of a project:

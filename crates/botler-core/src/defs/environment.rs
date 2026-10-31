@@ -258,7 +258,7 @@ mod tests {
         use crate::defs::{MemTree, load};
         let tree = |agent: &str, job: &str| {
             MemTree::new()
-                .with("botler.toml", "[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"p\"\nmodel = \"m\"\n")
+                .with("botler.toml", "[models]\ndefault = \"p/m\"\n")
                 .with("images/agent/Dockerfile", "FROM x")
                 .with("agents/a/agent.toml", agent)
                 .with("agents/a/AGENTS.md", "hi")
@@ -274,7 +274,7 @@ mod tests {
         // Jobs may run without network; an agent could never reach its (remote) model.
         let offline = errors(&tree("network = \"none\"\n", ""));
         assert_eq!(offline.len(), 1, "{offline:?}");
-        assert!(offline[0].contains("network = \"none\" cannot reach model route \"d\" (p/m)"), "{offline:?}");
+        assert!(offline[0].contains("network = \"none\" cannot reach model \"p/m\" (openrouter)"), "{offline:?}");
         let unknown = errors(&tree("bogus = 1\n", "bogus = 1\n"));
         assert_eq!(unknown.len(), 2, "{unknown:?}");
         assert!(unknown.iter().all(|e| e.contains("unknown field `bogus`")), "{unknown:?}");

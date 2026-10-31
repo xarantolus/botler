@@ -7,7 +7,7 @@ import type { SecretFieldView } from "./SecretFieldView";
  */
 export type SecretGroupView = { name: string, description: string, class: SecretClass, complete: boolean, fields: Array<SecretFieldView>, 
 /**
- * Definitions and model routes it is granted to.
+ * Definitions (and model calls) it is granted to.
  */
 granted_to: Array<string>, 
 /**

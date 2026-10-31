@@ -161,7 +161,7 @@ mod tests {
         let tree = MemTree::new()
             .with(
                 "botler.toml",
-                format!("{extra_botler}\n[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"openrouter\"\nmodel = \"x\"\n"),
+                format!("{extra_botler}\n[models]\ndefault = \"p/m\"\n"),
             )
             .with(
                 "events/mail.toml",
@@ -222,9 +222,10 @@ type = "mail.sent"
 
     #[test]
     fn invalid_schema_and_builtin_redeclaration_fail_load() {
-        let tree = MemTree::new()
-            .with("botler.toml", "[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"p\"\nmodel = \"x\"\n")
-            .with("events/x.toml", "[[event]]\ntype = \"x.y\"\nschema = { type = \"nonsense\" }\n\n[[event]]\ntype = \"runnable.failed\"\n");
+        let tree = MemTree::new().with("botler.toml", "[models]\ndefault = \"p/m\"\n").with(
+            "events/x.toml",
+            "[[event]]\ntype = \"x.y\"\nschema = { type = \"nonsense\" }\n\n[[event]]\ntype = \"runnable.failed\"\n",
+        );
         let report = load(&tree);
         let msgs: Vec<String> = report.errors().map(|d| d.message.clone()).collect();
         assert!(msgs.iter().any(|m| m.contains("schema of x.y is invalid")), "{msgs:#?}");

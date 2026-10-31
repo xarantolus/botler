@@ -21,9 +21,7 @@ fn tool_render_hints_are_typed() {
     let tree = |render: &str| {
         let tool =
             format!(r#"[{{"name": "t.f", "parameters": {{}}, "module": "t", "function": "f", "render": {render}}}]"#);
-        MemTree::new()
-            .with("botler.toml", "[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"p\"\nmodel = \"m\"\n")
-            .with("tools.manifest.json", tool)
+        MemTree::new().with("botler.toml", "[models]\ndefault = \"p/m\"\n").with("tools.manifest.json", tool)
     };
     let errors = |render: &str| load(&tree(render)).errors().map(|d| d.message.clone()).collect::<Vec<_>>();
     let ok = load(&tree(r#"{"kind": "links", "items": "results"}"#));

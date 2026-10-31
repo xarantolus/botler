@@ -3,7 +3,7 @@
 //
 //   cargo build -p botler && cd frontend && npm run e2e
 //
-// It creates a scratch data directory, points the model routes at a stub OpenAI-compatible server
+// It creates a scratch data directory, points the models at a stub OpenAI-compatible server
 // (this file), starts `botler serve` on 127.0.0.1:BOTLER_E2E_PORT (default 7437, never 7420; its
 // agents reach it over its Unix socket), and drives the
 // app in headless Chromium: sign in, send a message, attach a file, answer the agent's question inline, ask for a
@@ -108,8 +108,8 @@ const work = join(data, "e2e-clone");
 const git = (...args) => execFileSync("git", ["-C", work, ...args], { stdio: "pipe" });
 execFileSync("git", ["clone", "-q", join(data, "repo.git"), work]);
 const toml = readFileSync(join(work, "botler.toml"), "utf8").replace(
-  /(\[models\.routes\.\w+\]\n)/g,
-  `$1base_url = "http://host.containers.internal:${stubPort}/v1"\n`,
+  /^\[models\]\n/m,
+  `[models]\nbase_url = "http://host.containers.internal:${stubPort}/v1"\n`,
 );
 writeFileSync(join(work, "botler.toml"), toml);
 git("-c", "user.name=e2e", "-c", "user.email=e2e@localhost", "commit", "-qam", "e2e: models from the stub");

@@ -1,4 +1,4 @@
-//! Uploads attached to messages, image input on model routes, and ntfy push for blocking
+//! Uploads attached to messages, image input on models, and ntfy push for blocking
 //! requests.
 
 mod common;
@@ -101,9 +101,21 @@ async fn uploads_are_served_back_safely() {
 async fn image_input_reaches_models_json() {
     let e = common::env().await;
     e.hub.store.set_secret(&e.hub.secret_key, "OPENROUTER_API_KEY", "sk").await.unwrap();
-    let route = &e.hub.applied().await.defs.instance.models.routes["smart"];
-    assert_eq!(route.input, Some(vec![botler_core::defs::ModelInput::Text, botler_core::defs::ModelInput::Image]));
-    let toml = "version = 1\nkind = \"persistent\"\nimage = \"agent\"\nmodel = \"smart\"\n";
+    // Image input comes from OpenRouter's catalog.
+    let sonnet = botler_hub::model_catalog::CatalogModel {
+        id: "~anthropic/claude-sonnet-latest".into(),
+        name: "Sonnet".into(),
+        context_length: Some(1_000_000),
+        max_output: Some(128_000),
+        image: true,
+        price_in: Some(2.0),
+        price_out: Some(10.0),
+        price_cache_read: None,
+        price_cache_write: None,
+    };
+    *e.hub.catalog.write().await =
+        Some(std::sync::Arc::new(botler_hub::model_catalog::Catalog { fetched_at: Utc::now(), models: vec![sonnet] }));
+    let toml = "version = 1\nkind = \"persistent\"\nimage = \"agent\"\nmodel = \"~anthropic/claude-sonnet-latest\"\n";
     e.commit(&[("agents/looker/agent.toml", toml), ("agents/looker/AGENTS.md", "Look at things.")]).await;
     let ev = botler_core::Event::new(
         kinds::MESSAGE,
@@ -119,10 +131,9 @@ async fn image_input_reaches_models_json() {
     let models: Value =
         serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir("looker").join("models.json")).unwrap())
             .unwrap();
-    assert_eq!(
-        models["providers"]["openrouter"]["modelOverrides"]["anthropic/claude-sonnet-latest"]["input"],
-        json!(["text", "image"])
-    );
+    let model = &models["providers"]["openrouter"]["modelOverrides"]["~anthropic/claude-sonnet-latest"];
+    assert_eq!(model["input"], json!(["text", "image"]));
+    assert_eq!((model["maxTokens"].as_u64(), model["contextWindow"].as_u64()), (Some(16384), Some(1_000_000)));
 }
 
 /// A blocking request pushes fixed text to `<ntfy_url>/<topic>`; the question stays home.

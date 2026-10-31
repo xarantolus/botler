@@ -79,6 +79,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/pause", post(pause))
         .route("/api/v1/resume", post(resume))
         .route("/api/v1/breakers/clear", post(clear_breaker))
+        .route("/api/v1/settings", get(settings).put(save_settings))
+        .route("/api/v1/models", get(models))
         .route("/git/monorepo.git/{*rest}", any(git))
         .layer(middleware::from_fn_with_state(hub.clone(), authenticate));
     Router::new()
@@ -742,9 +744,9 @@ async fn secrets(
             grantees.entry(g.as_str()).or_default().push(format!("job {}", j.name));
         }
     }
-    for (r, route) in &applied.defs.instance.models.routes {
-        if let Some(sec) = route.api_key_secret.as_ref().and_then(|n| applied.defs.secrets.get(n)) {
-            grantees.entry(sec.group.as_str()).or_default().push(format!("model route {r}"));
+    for (to, s) in applied.defs.instance.models.key_secrets() {
+        if let Some(sec) = applied.defs.secrets.get(s) {
+            grantees.entry(sec.group.as_str()).or_default().push(to);
         }
     }
     let mut holders: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
@@ -802,6 +804,31 @@ async fn set_secret(
     // Deliveries waiting on a missing secret can proceed now.
     hub.dispatch_notify.notify_one();
     Ok(Json(Saved { ok: true }))
+}
+
+async fn settings(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<crate::settings::Settings>> {
+    user_only(&p)?;
+    Ok(Json(crate::settings::get(&hub).await?))
+}
+
+async fn save_settings(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Json(edit): Json<crate::settings::SettingsEdit>,
+) -> ApiResult<Json<crate::settings::SettingsSaved>> {
+    user_only(&p)?;
+    Ok(Json(crate::settings::save(&hub, &edit).await?))
+}
+
+async fn models(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<crate::model_catalog::CatalogView>> {
+    user_only(&p)?;
+    Ok(Json(crate::model_catalog::view(&hub).await))
 }
 
 async fn proposals(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<Proposal>>> {

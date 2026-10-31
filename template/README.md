@@ -5,7 +5,7 @@ branch and calling `propose_change` (gate → reviewer → user if needed → me
 
 | Path | What |
 |---|---|
-| `botler.toml` | Instance settings: time zone, model routes, defaults |
+| `botler.toml` | Instance settings: time zone, models, defaults |
 | `secrets.toml` | Secret declarations (values live in the hub, never here) |
 | `agents/<name>/` | Agent definitions (`agent.toml`) and their prompts (`AGENTS.md`) |
 | `jobs/<name>/` | Deterministic containers: oneshot or long-running services |

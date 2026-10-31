@@ -36,7 +36,7 @@ pub fn gate_container(hub: &Hub, id: &str) -> String {
 }
 
 /// The container for `what` in `env`, running `command` in `image`. `extra_secrets` are single
-/// secrets besides the environment's groups (a model route's API key).
+/// secrets besides the environment's groups (the model's API key).
 pub async fn container_spec(
     hub: &Hub,
     env: &Environment,

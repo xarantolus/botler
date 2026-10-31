@@ -28,7 +28,7 @@ pub struct AgentEnv {
     pub pi: Option<String>,
     /// Hash of `AGENTS.md`.
     pub instructions: String,
-    /// Hash of the rest of the definition and its model route.
+    /// Hash of the rest of the definition and its model.
     pub definition: String,
 }
 
@@ -78,7 +78,7 @@ pub async fn compute(
         tool_code,
         pi: images::pi_export_name(hub, &applied.commit).await?,
         instructions: hash(&def.prompt)?,
-        definition: hash(&(spec, applied.defs.route_for(&def.spec)))?,
+        definition: hash(&(spec, applied.defs.model_for(&def.spec)))?,
     })
 }
 

@@ -4,33 +4,27 @@ version = 1
 # timezone = "Europe/Berlin"
 
 [models]
-default = "standard"
-
-# Agents name a route, never a model. Routes carry their own token cap and privacy class.
-# Defaults are deliberately cheap; an agent opts into `smart` by setting `model = "smart"`.
-
-# Reliable tool use at very low cost (verified with pi tool calls).
-[models.routes.standard]
-provider = "openrouter"
-model = "deepseek/deepseek-v4.1-flash"
+# Agents run on OpenRouter (https://openrouter.ai/models). `default` and an agent's `model` take
+# any OpenRouter model id; image input, output limit, context and price come from OpenRouter's
+# model list. Defaults are deliberately cheap: an agent opts into a stronger model by naming it.
+default = "deepseek/deepseek-v4.1-flash"
 api_key_secret = "OPENROUTER_API_KEY"
+# Output token cap per model call (lowered to the model's own maximum).
 max_tokens = 16384
 
-# Cheapest: classification, short summaries. Weaker at multi-step tool use.
-[models.routes.fast]
-provider = "openrouter"
-model = "qwen/qwen3.8-flash"
-api_key_secret = "OPENROUTER_API_KEY"
-max_tokens = 8192
+# The models we typically use, with what each is good for. Suggestions, not a whitelist; an entry
+# can also override `max_tokens`, `input` (e.g. ["text", "image"]) or `thinking` for its model.
+[[models.model]]
+id = "deepseek/deepseek-v4.1-flash"
+note = "Default: reliable tool use at very low cost."
 
-# Expensive; only for agents that name it. Sees images (attachments, `read` of a picture):
-# routes only get images when `input` includes "image".
-[models.routes.smart]
-provider = "openrouter"
-model = "anthropic/claude-sonnet-latest"
-api_key_secret = "OPENROUTER_API_KEY"
-max_tokens = 16384
-input = ["text", "image"]
+[[models.model]]
+id = "qwen/qwen3.8-flash"
+note = "Cheapest: classification, short summaries. Weaker at multi-step tool use."
+
+[[models.model]]
+id = "~anthropic/claude-sonnet-latest"
+note = "Expensive and strong: hard reasoning, long multi-step work, images."
 
 [defaults]
 idle_timeout = "15m"

@@ -7,6 +7,7 @@ import type { ArchiveRequest } from "./ArchiveRequest";
 import type { BotlerEvent } from "./BotlerEvent";
 import type { BreakerCleared } from "./BreakerCleared";
 import type { Cancelled } from "./Cancelled";
+import type { CatalogView } from "./CatalogView";
 import type { ChatCreated } from "./ChatCreated";
 import type { ChatForked } from "./ChatForked";
 import type { ChatRestored } from "./ChatRestored";
@@ -69,6 +70,9 @@ import type { ServiceRestarted } from "./ServiceRestarted";
 import type { SessionQuery } from "./SessionQuery";
 import type { SessionTree } from "./SessionTree";
 import type { SessionView } from "./SessionView";
+import type { Settings } from "./Settings";
+import type { SettingsEdit } from "./SettingsEdit";
+import type { SettingsSaved } from "./SettingsSaved";
 import type { StopChat } from "./StopChat";
 import type { StorageOverview } from "./StorageOverview";
 import type { StorageUsage } from "./StorageUsage";
@@ -113,6 +117,9 @@ export interface Routes {
   pause: { method: "POST"; path: "/api/v1/pause"; params: Record<string, never>; query: never; body: never; response: PauseState };
   resume: { method: "POST"; path: "/api/v1/resume"; params: Record<string, never>; query: never; body: never; response: PauseState };
   clear_breaker: { method: "POST"; path: "/api/v1/breakers/clear"; params: Record<string, never>; query: never; body: ClearBreaker; response: BreakerCleared };
+  settings: { method: "GET"; path: "/api/v1/settings"; params: Record<string, never>; query: never; body: never; response: Settings };
+  save_settings: { method: "PUT"; path: "/api/v1/settings"; params: Record<string, never>; query: never; body: SettingsEdit; response: SettingsSaved };
+  models: { method: "GET"; path: "/api/v1/models"; params: Record<string, never>; query: never; body: never; response: CatalogView };
   run_logs: { method: "POST"; path: "/api/v1/ops/get_run_logs"; params: Record<string, never>; query: never; body: GetRunLogs; response: RunLogs };
   proposal: { method: "POST"; path: "/api/v1/ops/get_proposal"; params: Record<string, never>; query: never; body: GetProposal; response: ProposalDetail };
   memory_list: { method: "POST"; path: "/api/v1/ops/memory_list"; params: Record<string, never>; query: never; body: MemoryList; response: Array<MemoryEntry> };
@@ -166,6 +173,9 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   pause: { method: "POST", path: "/api/v1/pause" },
   resume: { method: "POST", path: "/api/v1/resume" },
   clear_breaker: { method: "POST", path: "/api/v1/breakers/clear" },
+  settings: { method: "GET", path: "/api/v1/settings" },
+  save_settings: { method: "PUT", path: "/api/v1/settings" },
+  models: { method: "GET", path: "/api/v1/models" },
   run_logs: { method: "POST", path: "/api/v1/ops/get_run_logs" },
   proposal: { method: "POST", path: "/api/v1/ops/get_proposal" },
   memory_list: { method: "POST", path: "/api/v1/ops/memory_list" },

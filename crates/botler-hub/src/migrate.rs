@@ -151,6 +151,61 @@ async fn rename_definition(repo: &Repo) -> Result<()> {
     Ok(())
 }
 
+/// Agents named a model route (`model = "standard"`); now they name an OpenRouter model id. While
+/// main's `botler.toml` still has `[models.routes]`, a hub-authored commit rewrites each agent's
+/// `model = "<route>"`: dropped when it names the default route (exactly the template's own
+/// change, so the template upgrade that replaces the routes merges cleanly), else the route's
+/// model id. Routes of another provider stay (an id cannot express them). Only committed if it
+/// adds no validation errors.
+pub async fn model_names(repo: &Repo) -> Result<()> {
+    let head = repo.main().await?;
+    let tree = repo.definition_tree(&head).await?;
+    let Some(defs) = botler_core::load(&tree).definitions else { return Ok(()) };
+    let models = &defs.instance.models;
+    let mut edits: Vec<(String, String)> = Vec::new();
+    for a in defs.agents.values() {
+        let Some((name, route)) = a.spec.model.as_deref().and_then(|m| models.routes.get_key_value(m)) else {
+            continue;
+        };
+        if route.provider != botler_core::defs::OPENROUTER {
+            continue;
+        }
+        let path = format!("agents/{}/agent.toml", a.name);
+        let Some(text) = repo.read_file(&head, &path).await? else { continue };
+        let mut doc: toml_edit::DocumentMut =
+            text.parse().map_err(|e| HubError::Migration(format!("{path} does not parse: {e}")))?;
+        if models.default.as_ref() == Some(name) {
+            doc.remove("model");
+        } else if let Some(v) = doc.get_mut("model").and_then(|i| i.as_value_mut()) {
+            // Keep a trailing comment.
+            let decor = v.decor().clone();
+            *v = route.model.as_str().into();
+            *v.decor_mut() = decor;
+        }
+        edits.push((path, doc.to_string()));
+    }
+    if edits.is_empty() {
+        return Ok(());
+    }
+    let mut after = tree.clone();
+    for (path, text) in &edits {
+        after.insert(path, text);
+    }
+    let errors = |t: &dyn Tree| botler_core::load(t).errors().count();
+    if errors(&after) > errors(&tree) {
+        tracing::warn!("naming models by id instead of route would add validation errors; left as is");
+        return Ok(());
+    }
+    let files: Vec<(&str, Option<&str>)> = edits.iter().map(|(p, t)| (p.as_str(), Some(t.as_str()))).collect();
+    let message = "Name agents' models by id instead of route\n\n\
+                   Model routes are deprecated: agents name an OpenRouter model id, and an agent on the \
+                   default needs no `model`. Done by the hub at boot.";
+    let commit = repo.commit_files(&head, &files, message).await?;
+    repo.advance_main(&head, &commit).await?;
+    tracing::info!(%commit, agents = edits.len(), "agents now name models by id");
+    Ok(())
+}
+
 /// `resume = "<old>"` (any spacing, either quote) becomes `resume = "<new>"`. `None` if absent.
 fn retarget_resume(text: &str, old: &str, new: &str) -> Option<String> {
     let mut out = String::with_capacity(text.len());

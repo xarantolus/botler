@@ -109,10 +109,10 @@ impl Definitions {
         self.agents.values().filter(|a| a.spec.kind == AgentKind::Persistent)
     }
 
-    /// The model route an agent resolves to, if any.
-    pub fn route_for(&self, agent: &Agent) -> Option<(&str, &ModelRoute)> {
+    /// The model an agent runs on: its `model`, else `models.default`.
+    pub fn model_for(&self, agent: &Agent) -> Option<ModelChoice> {
         let name = agent.model.as_deref().or(self.instance.models.default.as_deref())?;
-        self.instance.models.routes.get_key_value(name).map(|(k, v)| (k.as_str(), v))
+        Some(self.instance.models.resolve(name))
     }
 
     /// Where failures of a runnable go.
@@ -641,25 +641,28 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
 
 fn validate_models(l: &mut Loader<'_>, defs: &Definitions) {
     let models = &defs.instance.models;
-    if let Some(d) = &models.default
-        && !models.routes.contains_key(d)
-    {
-        l.err("botler.toml", format!("models.default names unknown route {d:?}"));
+    if let Some(d) = &models.default {
+        check_model_name(l, models, "botler.toml", "models.default", d);
     }
-    for (name, route) in &models.routes {
-        for fb in &route.fallback {
-            match models.routes.get(fb) {
-                None => l.err("botler.toml", format!("route {name}: fallback {fb:?} does not exist")),
-                Some(f) if route.privacy == Privacy::Local && f.privacy != Privacy::Local => l.err(
-                    "botler.toml",
-                    format!("route {name} is local-only and may not fall back to hosted route {fb}"),
-                ),
-                _ => {}
-            }
+    let mut seen = BTreeSet::new();
+    for m in &models.models {
+        if !is_model_id(&m.id) {
+            l.err("botler.toml", format!("models.model id {:?} is not an OpenRouter model id (vendor/model)", m.id));
         }
-        if let Some(s) = &route.api_key_secret {
-            check_route_secret(l, defs, "botler.toml", s);
+        if !seen.insert(m.id.as_str()) {
+            l.err("botler.toml", format!("models.model {:?} is listed twice", m.id));
         }
+    }
+    if !models.routes.is_empty() {
+        l.warn(
+            "botler.toml",
+            "[models.routes] is deprecated: agents and models.default name OpenRouter model ids directly \
+             (model = \"vendor/model\"), [[models.model]] lists the ones we typically use, and route privacy \
+             and fallback are ignored",
+        );
+    }
+    for (_, s) in models.key_secrets() {
+        check_route_secret(l, defs, "botler.toml", s);
     }
     if let Some(p) = &defs.instance.push {
         if !(p.ntfy_url.starts_with("https://") || p.ntfy_url.starts_with("http://")) {
@@ -686,7 +689,20 @@ fn check_container_group(l: &mut Loader<'_>, defs: &Definitions, path: &str, gro
     }
 }
 
-/// A single secret a model route uses as its API key.
+/// A model name: a deprecated route's name, or an OpenRouter model id.
+fn check_model_name(l: &mut Loader<'_>, models: &Models, path: &str, field: &str, name: &str) {
+    if !models.routes.contains_key(name) && !is_model_id(name) {
+        l.err(
+            path,
+            format!(
+                "{field} {name:?} is not an OpenRouter model id like \"deepseek/deepseek-v4.1-flash\" (named routes \
+                 were replaced by model ids; botler.toml lists the ones we typically use)"
+            ),
+        );
+    }
+}
+
+/// A single secret a model uses as its API key.
 fn check_route_secret(l: &mut Loader<'_>, defs: &Definitions, path: &str, name: &str) {
     match defs.secrets.get(name) {
         None => l.err(path, format!("secret {name} is not declared in secrets.toml")),
@@ -766,13 +782,11 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
         if !defs.images.contains(a.spec.env.image()) {
             l.err(&path, format!("image {:?} not found under images/", a.spec.env.image()));
         }
-        if let Some(m) = &a.spec.model
-            && !defs.instance.models.routes.contains_key(m)
-        {
-            l.err(&path, format!("model route {m:?} not defined in botler.toml"));
+        if let Some(m) = &a.spec.model {
+            check_model_name(l, &defs.instance.models, &path, "model", m);
         }
-        if defs.route_for(&a.spec).is_none() {
-            l.err(&path, "no model route: set `model` or `models.default` in botler.toml");
+        if defs.model_for(&a.spec).is_none() {
+            l.err(&path, "no model: set `model` or `models.default` in botler.toml");
         }
         for g in &a.spec.env.secrets {
             check_container_group(l, defs, &path, g);
@@ -789,17 +803,17 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
                 None => l.err(&path, format!("{field} {m:?} is not a job in jobs/")),
             }
         }
-        // Every model route is reached over the network today (even a local `base_url` lies
+        // Every model is reached over the network (even a deprecated route's local `base_url` lies
         // outside the container), so an agent without network could never call its model.
         if a.spec.env.network() == Network::None
-            && let Some((route, r)) = defs.route_for(&a.spec)
+            && let Some(m) = defs.model_for(&a.spec)
         {
             l.err(
                 &path,
                 format!(
-                    "network = \"none\" cannot reach model route {route:?} ({}/{}): agents call their model over \
-                     the network. Remove `network = \"none\"`",
-                    r.provider, r.model
+                    "network = \"none\" cannot reach model {:?} ({}): agents call their model over the network. \
+                     Remove `network = \"none\"`",
+                    m.id, m.provider
                 ),
             );
         }
@@ -1009,7 +1023,7 @@ mod lenient_tests {
 
     fn base() -> MemTree {
         MemTree::new()
-            .with("botler.toml", "[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"p\"\nmodel = \"m\"\n")
+            .with("botler.toml", "[models]\ndefault = \"p/m\"\n")
             .with("images/agent/Dockerfile", "FROM x")
             .with("agents/good/agent.toml", "kind = \"persistent\"\n")
             .with("agents/good/AGENTS.md", "hi")

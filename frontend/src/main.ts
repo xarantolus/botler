@@ -11,6 +11,7 @@ import ProposalsView from "./views/ProposalsView.vue";
 import RequestsView from "./views/RequestsView.vue";
 import SearchView from "./views/SearchView.vue";
 import SecretsView from "./views/SecretsView.vue";
+import SettingsView from "./views/SettingsView.vue";
 import ShareView from "./views/ShareView.vue";
 import SystemView from "./views/SystemView.vue";
 import "./style.css";
@@ -29,6 +30,7 @@ const router = createRouter({
     { path: "/proposals", name: "proposals", component: ProposalsView },
     { path: "/proposals/:id", name: "proposal", component: ProposalReviewView, props: true },
     { path: "/secrets", name: "secrets", component: SecretsView },
+    { path: "/settings", name: "settings", component: SettingsView },
     { path: "/search", name: "search", component: SearchView },
     { path: "/memory", name: "memory", component: MemoryView },
     { path: "/share", name: "share", component: ShareView },

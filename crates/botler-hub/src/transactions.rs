@@ -155,7 +155,10 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     hub.store.set_proposal_gate(id, &head, &summary, "").await?;
     // The proposal records the main it was checked against; merge requires main to be unchanged.
     hub.store.set_proposal_base(id, &base).await?;
-    let md = summary.to_markdown(new.defs.timezone);
+    let mut md = summary.to_markdown(new.defs.timezone);
+    for w in crate::model_catalog::warnings(hub, &new.defs).await {
+        md.push_str(&format!("- {w}\n"));
+    }
     update(hub, id, "gating", &format!("Validated. Deployment summary:\n\n{md}\nRunning the gate…")).await?;
 
     let (ok, report) = run_gate(hub, id, &head).await?;
@@ -870,7 +873,10 @@ pub async fn preview_branch(hub: &Hub, instance: &str, branch: &str) -> Result<C
     let base = hub.repo.main().await?;
     let tree = hub.repo.definition_tree(&head).await?;
     let report = botler_core::load_with(&tree, crate::localtime::host());
-    let diagnostics: Vec<String> = report.diagnostics.iter().map(ToString::to_string).collect();
+    let mut diagnostics: Vec<String> = report.diagnostics.iter().map(ToString::to_string).collect();
+    if let Some(defs) = &report.definitions {
+        diagnostics.extend(crate::model_catalog::warnings(hub, defs).await.iter().map(ToString::to_string));
+    }
     let Some(new) = report.definitions else {
         return Ok(ChangePreview { valid: false, diagnostics, summary: None, needs_user_approval: None, note: None });
     };

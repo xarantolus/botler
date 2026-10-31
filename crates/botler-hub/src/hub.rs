@@ -116,6 +116,8 @@ pub struct Hub {
     pub storage_cache: Mutex<Option<crate::storage::StorageOverview>>,
     pub search: crate::search::Index,
     pub memory: crate::memory::Memory,
+    /// OpenRouter's model catalog, when it was ever fetched ([`crate::model_catalog`]).
+    pub catalog: RwLock<Option<Arc<crate::model_catalog::Catalog>>>,
 }
 
 impl std::fmt::Debug for Hub {
@@ -137,11 +139,13 @@ impl Hub {
             repo.prune_worktrees().await?;
         }
         crate::migrate::front_door(&paths, &store, &repo).await?;
+        crate::migrate::model_names(&repo).await?;
         let applied = Self::load_bootable(&store, &repo).await?;
         let memory = crate::memory::Memory::open(paths.memory()).await?;
         let (live, _) = broadcast::channel(1024);
         let search = crate::search::Index::open(&paths.search_db()).await?;
         let id = paths.hub_id();
+        let catalog = crate::model_catalog::load_cached(&paths.root);
         Ok(Arc::new(Self {
             id,
             paths,
@@ -164,6 +168,7 @@ impl Hub {
             storage_cache: Mutex::new(None),
             search,
             memory,
+            catalog: RwLock::new(catalog),
         }))
     }
 

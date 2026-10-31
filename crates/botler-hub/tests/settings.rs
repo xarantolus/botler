@@ -1,0 +1,135 @@
+//! The Settings page's API: what it reads, and saves committed on main as the user.
+
+mod common;
+
+use std::sync::Arc;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use botler_hub::auth::Principal;
+use botler_hub::model_catalog::{Catalog, CatalogModel};
+use chrono::Utc;
+use serde_json::{Value, json};
+use tower::ServiceExt;
+
+async fn api(e: &common::Env, method: &str, body: Option<Value>) -> Value {
+    let token = e.hub.tokens.issue(&Principal::User, chrono::Duration::hours(1), Utc::now());
+    let req = Request::builder()
+        .method(method)
+        .uri("/api/v1/settings")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(body.map_or(Body::empty(), |b| Body::from(b.to_string())))
+        .unwrap();
+    let resp = botler_hub::api::router(e.hub.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 1 << 22).await.unwrap()).unwrap()
+}
+
+async fn file(e: &common::Env, path: &str) -> String {
+    let main = e.hub.repo.main().await.unwrap();
+    e.hub.repo.read_file(&main, path).await.unwrap().unwrap()
+}
+
+fn model(id: &str) -> CatalogModel {
+    CatalogModel {
+        id: id.into(),
+        name: id.into(),
+        context_length: None,
+        max_output: None,
+        image: false,
+        price_in: None,
+        price_out: None,
+        price_cache_read: None,
+        price_cache_write: None,
+    }
+}
+
+#[tokio::test]
+async fn edits_are_committed_as_the_user_and_keep_the_files_layout() {
+    let e = common::env().await;
+    let ids = ["deepseek/deepseek-v4.1-flash", "qwen/qwen3.8-flash", "~anthropic/claude-sonnet-latest"];
+    *e.hub.catalog.write().await =
+        Some(Arc::new(Catalog { fetched_at: Utc::now(), models: ids.iter().map(|i| model(i)).collect() }));
+    let s = api(&e, "GET", None).await;
+    assert_eq!(s["models"]["default"], "deepseek/deepseek-v4.1-flash");
+    assert_eq!(s["models"]["models"].as_array().unwrap().len(), 3);
+    let chat = s["agents"].as_array().unwrap().iter().find(|a| a["name"] == "chat").unwrap().clone();
+    assert_eq!(chat["effective_model"], "deepseek/deepseek-v4.1-flash");
+    assert_eq!(s["defaults"]["idle_timeout"], "15m");
+    assert!(s["defaults_schema"]["properties"]["idle_timeout"].is_object(), "{}", s["defaults_schema"]);
+    assert!(s["warnings"].as_array().unwrap().is_empty(), "{}", s["warnings"]);
+    let loaded = s["commit"].as_str().unwrap().to_string();
+
+    // Main moves meanwhile: a field the page did not touch keeps main's value.
+    let toml = file(&e, "botler.toml").await.replace("# timezone = \"Europe/Berlin\"", "timezone = \"Europe/Berlin\"");
+    e.commit(&[("botler.toml", &toml)]).await;
+
+    // Problems are reported per field, and nothing is saved.
+    let mut defaults = s["defaults"].clone();
+    defaults["idle_timeout"] = json!("soon");
+    let mut agent = chat["edit"].clone();
+    agent["model"] = json!("qwen/qwen-flash");
+    let bad =
+        json!({ "commit": loaded, "agents": { "chat": agent }, "deployment": { "defaults": defaults, "push": null } });
+    let r = api(&e, "PUT", Some(bad)).await;
+    assert_eq!(r["saved"], false);
+    let fields: Vec<&str> = r["errors"].as_array().unwrap().iter().map(|e| e["field"].as_str().unwrap()).collect();
+    assert_eq!(fields, ["agents.chat.model", "defaults.idle_timeout"], "{r}");
+    assert!(r["errors"][0]["message"].as_str().unwrap().contains("closest: qwen/qwen3.8-flash"), "{r}");
+    // A problem only the whole tree shows belongs to the file's section.
+    let push = json!({ "ntfy_url": "https://ntfy.sh", "topic_secret": "NOPE" });
+    let r =
+        api(&e, "PUT", Some(json!({ "commit": loaded, "deployment": { "defaults": s["defaults"], "push": push } })))
+            .await;
+    assert_eq!((&r["saved"], &r["errors"][0]["field"]), (&json!(false), &json!("botler.toml")), "{r}");
+
+    let mut models = s["models"].clone();
+    models["models"].as_array_mut().unwrap().remove(1);
+    models["default"] = json!("qwen/qwen3.8-flash");
+    let mut defaults = s["defaults"].clone();
+    defaults["idle_timeout"] = json!("1200s");
+    let mut agent = chat["edit"].clone();
+    agent["model"] = json!("~anthropic/claude-sonnet-latest");
+    agent["tools"] = json!([]);
+    let edit = json!({
+        "commit": loaded,
+        "models": models,
+        "agents": { "chat": agent },
+        "deployment": { "defaults": defaults, "push": null },
+    });
+    let r = api(&e, "PUT", Some(edit)).await;
+    assert_eq!(r["saved"], true, "{r}");
+    assert_eq!(r["commit"], e.hub.repo.main().await.unwrap());
+
+    let toml = file(&e, "botler.toml").await;
+    assert!(toml.contains("timezone = \"Europe/Berlin\""), "main's own change survives: {toml}");
+    assert!(toml.contains("default = \"qwen/qwen3.8-flash\"") && toml.contains("idle_timeout = \"20m\""), "{toml}");
+    assert!(toml.contains("# The models we typically use") && !toml.contains("Cheapest"), "{toml}");
+    let chat_toml = file(&e, "agents/chat/agent.toml").await;
+    assert!(
+        chat_toml.contains("model = \"~anthropic/claude-sonnet-latest\"") && !chat_toml.contains("tools"),
+        "{chat_toml}"
+    );
+    assert!(chat_toml.contains("# The chat's persistent home"), "{chat_toml}");
+    let log = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(e.hub.repo.git_dir())
+        .args(["log", "-1", "--format=%an|%s", "main"])
+        .output()
+        .unwrap();
+    let log = String::from_utf8(log.stdout).unwrap();
+    assert!(log.starts_with("the user|settings: ") && log.trim_end().ends_with("(by the user)"), "{log}");
+    let applied = e.hub.applied().await;
+    assert_eq!(
+        applied.defs.model_for(&applied.defs.agents["chat"].spec).unwrap().id,
+        "~anthropic/claude-sonnet-latest"
+    );
+    drop(applied);
+
+    // Saving the same again changes nothing.
+    let s = api(&e, "GET", None).await;
+    let same = json!({ "commit": s["commit"], "models": s["models"], "deployment": { "defaults": s["defaults"], "push": null } });
+    let r = api(&e, "PUT", Some(same)).await;
+    assert_eq!((&r["saved"], &r["commit"]), (&json!(true), &s["commit"]), "{r}");
+}

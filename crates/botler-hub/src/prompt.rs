@@ -89,7 +89,9 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
              result includes a deployment summary in plain words (what will run when, what needs the \
              user's approval): read it. Nothing you push takes effect until it is merged. `gate/run` and \
              everything the gate checks are files on your branch: a gate failure is always fixable there \
-             (changes to `gate/` need the user's approval).\n\n",
+             (changes to `gate/` need the user's approval). An agent's `model` (in `agent.toml`, \
+             default `models.default`) is any OpenRouter model id; `[[models.model]]` in `botler.toml` \
+             lists the ones we typically use and what each is good for.\n\n",
             branch.map(|b| format!(" on branch `{b}`")).unwrap_or_default()
         )),
         Workspace::Volume | Workspace::None => s.push_str(&format!(

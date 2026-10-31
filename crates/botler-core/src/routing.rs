@@ -164,7 +164,7 @@ mod tests {
 
     fn defs() -> Definitions {
         let tree = MemTree::new()
-            .with("botler.toml", "[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"openrouter\"\nmodel = \"x\"\n")
+            .with("botler.toml", "[models]\ndefault = \"p/m\"\n")
             .with("images/agent/Dockerfile", "FROM x")
             .with("agents/main/agent.toml", "kind = \"persistent\"\n[[trigger]]\nname = \"mail\"\non = \"mail.*\"\nfilter = { folder = \"inbox\" }\nprompt = \"New mail\"\n")
             .with("agents/main/AGENTS.md", "hi")

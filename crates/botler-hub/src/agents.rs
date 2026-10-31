@@ -579,10 +579,10 @@ async fn container_spec(
     branch: Option<&str>,
     wake: &str,
 ) -> Result<ContainerSpec> {
-    let (_route_name, route) = applied
+    let route = applied
         .defs
-        .route_for(&def.spec)
-        .ok_or_else(|| HubError::Undefined { kind: "model route", name: def.name.clone() })?;
+        .model_for(&def.spec)
+        .ok_or_else(|| HubError::Undefined { kind: "model for agent", name: def.name.clone() })?;
 
     // The forwarder relays 127.0.0.1:7420 to the hub's socket, then runs pi.
     let mut command = vec![
@@ -595,7 +595,7 @@ async fn container_spec(
         "--session".into(),
         format!("/botler/sessions/{}", instance.session_file),
         "--model".into(),
-        format!("{}/{}", route.provider, route.model),
+        format!("{}/{}", route.provider, route.id),
         "--append-system-prompt".into(),
         "/botler/agent-dir/botler.md".into(),
         "-e".into(),
@@ -654,11 +654,8 @@ async fn container_spec(
     if let Some(u) = &route.base_url {
         provider.insert("baseUrl".into(), json!(u));
     }
-    let mut model = json!({ "maxTokens": route.max_tokens });
-    if let Some(input) = &route.input {
-        model["input"] = json!(input);
-    }
-    provider.insert("modelOverrides".into(), json!({ route.model.clone(): model }));
+    let model = crate::model_catalog::pi_model(&route, crate::model_catalog::known(hub, &route).await.as_ref());
+    provider.insert("modelOverrides".into(), json!({ route.id.clone(): model }));
     let models = json!({ "providers": { route.provider.clone(): provider } });
     let mut servers = serde_json::Map::new();
     servers.insert(

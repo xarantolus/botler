@@ -110,3 +110,52 @@ async fn fresh_data_dir_is_untouched() {
     assert!(e.hub.repo.rev("refs/heads/main~1").await.unwrap().is_none(), "no migration commit on a fresh repo");
     assert!(e.hub.store.find_instance("main").await.unwrap().is_none());
 }
+
+/// The template's `[models]` before models were named by id.
+const ROUTES_TOML: &str = "version = 1\n\n[models]\ndefault = \"standard\"\n\n[models.routes.standard]\nprovider = \"openrouter\"\nmodel = \"deepseek/deepseek-v4.1-flash\"\napi_key_secret = \"OPENROUTER_API_KEY\"\n\n[models.routes.smart]\nprovider = \"openrouter\"\nmodel = \"anthropic/claude-sonnet-latest\"\napi_key_secret = \"OPENROUTER_API_KEY\"\ninput = [\"text\", \"image\"]\n\n[defaults]\nidle_timeout = \"15m\"\n";
+
+#[tokio::test]
+async fn agents_naming_routes_name_model_ids_and_the_template_upgrade_merges() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("template");
+    common::copy_dir(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template")), &tpl);
+    std::fs::write(tpl.join("botler.toml"), ROUTES_TOML).unwrap();
+    let chat = std::fs::read_to_string(tpl.join("agents/chat/agent.toml")).unwrap();
+    std::fs::write(
+        tpl.join("agents/chat/agent.toml"),
+        chat.replacen("idle_timeout", "model = \"standard\"\nidle_timeout", 1),
+    )
+    .unwrap();
+    let paths = Paths::new(dir.path().join("data"));
+    paths.ensure().unwrap();
+    let repo = botler_repo::Repo::new(paths.repo(), paths.worktrees());
+    repo.init_from(&tpl).await.unwrap();
+    // An agent-written definition on the smart route.
+    let base = repo.main().await.unwrap();
+    let looker = "version = 1\nkind = \"persistent\"\nmodel = \"smart\" # sees images\n";
+    let head = repo.commit_files(&base, &[("agents/looker/agent.toml", Some(looker))], "looker").await.unwrap();
+    repo.advance_main(&base, &head).await.unwrap();
+
+    let hub = open(&paths).await;
+    let main = hub.repo.main().await.unwrap();
+    let read = |p: &'static str| {
+        let (repo, main) = (&hub.repo, &main);
+        async move { repo.read_file(main, p).await.unwrap().unwrap() }
+    };
+    assert_eq!(read("agents/chat/agent.toml").await, chat, "the default route's line is dropped, as in the template");
+    assert!(
+        read("agents/looker/agent.toml").await.contains("model = \"anthropic/claude-sonnet-latest\" # sees images")
+    );
+    let defs = &hub.applied().await.defs;
+    assert_eq!(defs.model_for(&defs.agents["chat"].spec).unwrap().id, "deepseek/deepseek-v4.1-flash");
+
+    // The template upgrade that replaces the routes merges without conflicts.
+    let tree = botler_hub::template::embedded_tree(&hub.repo, &paths.worktrees()).await.unwrap();
+    let up = botler_hub::template::upgrade(&hub, &tree).await.unwrap();
+    assert!(matches!(up, botler_hub::template::Upgrade::Proposed { .. }), "{up:?}");
+    drop(hub);
+    // Nothing left to migrate on the next boot.
+    let hub = open(&paths).await;
+    assert_eq!(hub.repo.main().await.unwrap(), main);
+    std::fs::remove_dir_all(paths.run_dir().unwrap()).unwrap();
+}

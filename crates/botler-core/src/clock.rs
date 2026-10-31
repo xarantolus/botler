@@ -133,12 +133,7 @@ mod tests {
         use crate::trigger::ScheduleSpec;
         let tree = |toml: &str| {
             MemTree::new()
-                .with(
-                    "botler.toml",
-                    format!(
-                        "{toml}[models]\ndefault = \"d\"\n[models.routes.d]\nprovider = \"openrouter\"\nmodel = \"x\"\n"
-                    ),
-                )
+                .with("botler.toml", format!("{toml}[models]\ndefault = \"p/m\"\n"))
                 .with("images/agent/Dockerfile", "FROM x")
                 .with(
                     "agents/botler/agent.toml",
