@@ -64,7 +64,9 @@ class _UnixConnection(http.client.HTTPConnection):
 
 def _error(op: str, status: int, raw: str, reason: str) -> BotlerError:
     try:
-        message = str(json.loads(raw)["error"])
+        error = json.loads(raw)["error"]
+        # The model gateway answers in OpenAI's shape: {"error": {"message": ...}}.
+        message = str(error["message"] if isinstance(error, dict) and "message" in error else error)
     except (ValueError, KeyError, TypeError):
         message = raw or reason
     return BotlerError(op, _CODES.get(status, "internal"), message, status)
@@ -74,7 +76,7 @@ class _NotConnected(Exception):
     """The hub did not take the connection: the request was never sent, so it can be retried."""
 
 
-def _call_socket(op: str, path: str, body: bytes, token: str) -> Any:
+def _call_socket(op: str, route: str, path: str, body: bytes, token: str) -> Any:
     conn = _UnixConnection(path)
     try:
         try:
@@ -83,7 +85,7 @@ def _call_socket(op: str, path: str, body: bytes, token: str) -> Any:
             raise _NotConnected(f"cannot reach the hub at {path}: {e}") from e
         conn.request(
             "POST",
-            f"/api/v1/ops/{op}",
+            route,
             body=body,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         )
@@ -98,8 +100,8 @@ def _call_socket(op: str, path: str, body: bytes, token: str) -> Any:
     return json.loads(raw or b"null")
 
 
-def _call_url(op: str, base: str, body: bytes, token: str) -> Any:
-    url = base.rstrip("/") + f"/api/v1/ops/{op}"
+def _call_url(op: str, route: str, base: str, body: bytes, token: str) -> Any:
+    url = base.rstrip("/") + route
     req = urllib.request.Request(
         url,
         data=body,
@@ -124,7 +126,12 @@ def call(op: str, args: dict[str, Any]) -> Any:
 
     While the hub restarts it takes no connections; the call then waits for it (up to
     `RECONNECT_SECONDS`) instead of failing, so a service survives hub upgrades."""
-    body = json.dumps({k: v for k, v in args.items() if v is not None}).encode()
+    return post(f"/api/v1/ops/{op}", op, {k: v for k, v in args.items() if v is not None})
+
+
+def post(route: str, op: str, payload: Any) -> Any:
+    """POST `payload` as JSON to the hub's `route`; `op` names the call in errors."""
+    body = json.dumps(payload).encode()
     sock = os.environ.get("BOTLER_SOCKET")
     token = _env("BOTLER_TOKEN", op)
     base = None if sock else _env("BOTLER_URL", op)
@@ -132,7 +139,9 @@ def call(op: str, args: dict[str, Any]) -> Any:
     delay = 0.25
     while True:
         try:
-            return _call_socket(op, sock, body, token) if sock else _call_url(op, base or "", body, token)
+            if sock:
+                return _call_socket(op, route, sock, body, token)
+            return _call_url(op, route, base or "", body, token)
         except _NotConnected as e:
             if time.monotonic() + delay > deadline:
                 raise BotlerError(op, "unreachable", f"{e} (waited {RECONNECT_SECONDS:.0f} s)") from e

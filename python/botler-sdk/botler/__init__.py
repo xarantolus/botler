@@ -14,7 +14,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 from . import _ops as ops
-from ._client import BotlerError
+from ._client import BotlerError, post
 
 if TYPE_CHECKING:
     from .events import Event
@@ -26,6 +26,7 @@ __all__ = [
     "Event",
     "Settings",
     "action_args",
+    "chat",
     "emit",
     "health",
     "log",
@@ -35,6 +36,18 @@ __all__ = [
     "state",
     "tool",
 ]
+
+
+def chat(messages: list[dict[str, Any]], model: str = "default", **params: Any) -> dict[str, Any]:
+    """Jobs and services: one chat completion through the hub (OpenAI's request and response
+    shape; `params` such as `temperature` or `response_format` pass through). `model` must be in
+    the job's `models = [...]` (`default` is `models.default`). The hub holds the key, meters the
+    call and stops at the job's budget (`BotlerError` with code `rate_limited`).
+
+        reply = botler.chat([{"role": "user", "content": "Summarize: ..."}])
+        text = reply["choices"][0]["message"]["content"]
+    """
+    return post("/v1/chat/completions", "chat", {"model": model, "messages": messages, **params})
 
 
 def action_args() -> dict[str, Any]:

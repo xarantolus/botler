@@ -29,6 +29,13 @@ A job or service reaches another service with `services = ["<name>"]`: it joins 
 network and finds it at `http://<name>:<port>` (e.g. the shared browser's MCP at
 `http://browser:8000/mcp`, skill `browser`). The first time asks the user.
 
+A job or service that needs a model (to summarize, classify, extract) lists it:
+`models = ["default"]` (or OpenRouter ids), and calls `botler.chat(messages, model=...)`. The
+hub holds the key, meters each call and stops at the job's `budget` (default
+`defaults.budget`). Never put a provider key in a job. Adding a model asks the user.
+
+`[app]` gives a service a web UI the user opens inside botler (skill `apps`).
+
 `channel = true` makes a service a channel: it carries the user's messages from Telegram, email
 and the like (skill `channels`, template `jobs/example-channel/`). Every change to a channel needs
 the user's approval.

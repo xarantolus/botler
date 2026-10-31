@@ -60,6 +60,11 @@ pub enum Escalation {
     ServiceAdded {
         job: String,
     },
+    /// A job may call a model it could not before (it spends money).
+    ModelsGranted {
+        job: String,
+        model: String,
+    },
     /// A service gets (or changes) a UI the user opens inside botler.
     AppAdded {
         job: String,
@@ -130,6 +135,7 @@ impl Escalation {
             Self::ApprovalRemoved { tool } => format!("action `{tool}` no longer requires approval"),
             Self::WebhookAdded { name } => format!("opens webhook `/hooks/{name}` to inbound calls"),
             Self::ServiceAdded { job } => format!("adds always-on service `{job}`"),
+            Self::ModelsGranted { job, model } => format!("lets job `{job}` call model `{model}` (spends money)"),
             Self::AppAdded { job } => format!("shows service `{job}`'s web UI as an app in botler"),
             Self::ServiceReached { job, service } => format!("lets job `{job}` reach service `{service}`"),
             Self::PortPublished { job, reach } => format!("makes service `{job}` reachable from {reach}"),
@@ -331,6 +337,20 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         // code-only changes do not ask; new secrets, ports and network still do.
         if j.spec.is_service() && !prev.is_some_and(|p| p.spec.is_service()) {
             esc.insert(Escalation::ServiceAdded { job: j.name.clone() });
+        }
+        for m in &j.spec.models {
+            if !prev.is_some_and(|p| p.spec.models.contains(m)) {
+                esc.insert(Escalation::ModelsGranted { job: j.name.clone(), model: m.clone() });
+            }
+        }
+        if let (Some(b), Some(p)) = (&j.spec.budget, prev) {
+            let before = p.spec.budget.clone().unwrap_or_else(|| old.instance.defaults.budget.clone());
+            if b.usd_per_day.unwrap_or(f64::INFINITY) > before.usd_per_day.unwrap_or(f64::INFINITY) {
+                esc.insert(Escalation::LimitRaised {
+                    owner: format!("job `{}`", j.name),
+                    operation: "usd_per_day".into(),
+                });
+            }
         }
         if j.spec.app.is_some() && !prev.is_some_and(|p| p.spec.app.is_some()) {
             esc.insert(Escalation::AppAdded { job: j.name.clone() });

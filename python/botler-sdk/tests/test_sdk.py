@@ -29,6 +29,7 @@ class FakeHub:
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
+                # Ops by name; other routes (the model gateway) by path.
                 op = self.path.removeprefix("/api/v1/ops/")
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 hub.calls.append((op, self.headers["Authorization"], body))
@@ -162,6 +163,22 @@ def test_a_call_waits_for_a_restarting_hub(monkeypatch: pytest.MonkeyPatch) -> N
         botler.health.ok()
         assert [c[0] for c in h.calls] == ["health"], "sent once, after the hub came back"
     h.server.shutdown()
+
+
+def test_chat_goes_through_the_gateway(hub: FakeHub) -> None:
+    import botler
+
+    reply = botler.chat([{"role": "user", "content": "hi"}], temperature=0)
+    assert reply == {"ok": True}
+    assert hub.calls[-1] == (
+        "/v1/chat/completions",
+        "Bearer tok",
+        {"model": "default", "messages": [{"role": "user", "content": "hi"}], "temperature": 0},
+    )
+    hub.responses["/v1/chat/completions"] = (429, {"error": {"message": "job x spent $1.00 today"}})
+    with pytest.raises(botler.BotlerError) as e:
+        botler.chat([{"role": "user", "content": "hi"}])
+    assert (e.value.code, e.value.message) == ("rate_limited", "job x spent $1.00 today")
 
 
 def test_action_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -491,6 +491,14 @@ pub struct Job {
     /// behind botler's sign-in, on the hub's apps port (another origin than the web app).
     #[serde(default)]
     pub app: Option<AppSpec>,
+    /// Models the runnable may call through the hub (`POST /v1/chat/completions` on its socket,
+    /// `botler.chat`): OpenRouter ids, or `default` for `models.default`. The hub holds the key,
+    /// meters every call, and stops at the budget.
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// Model spending limits (`usd_per_day`, `tokens_per_day`); unset: `defaults.budget`.
+    #[serde(default)]
+    pub budget: Option<Budget>,
     /// Actions: JSON Schema of the arguments object `invoke_action` must pass.
     #[serde(default)]
     pub args: Option<serde_json::Value>,

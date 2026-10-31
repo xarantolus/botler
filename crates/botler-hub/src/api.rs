@@ -87,6 +87,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/devices", get(devices))
         .route("/api/v1/devices/{id}", delete(revoke_device))
         .route("/api/v1/logout", post(logout))
+        .route(crate::gateway::PATH, post(chat_completions))
         .route("/api/v1/apps", get(apps))
         .route("/api/v1/apps/{name}/ticket", post(app_ticket))
         .route("/api/v1/channels", get(channels))
@@ -1090,6 +1091,32 @@ async fn logout(
             .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
     );
     Ok(r)
+}
+
+/// The model gateway for jobs and services (see `gateway.rs`), in OpenAI's error shape.
+async fn chat_completions(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    use crate::gateway::GatewayError as G;
+    let fail = |status: StatusCode, m: String| {
+        (status, Json(serde_json::json!({ "error": { "message": m } }))).into_response()
+    };
+    let caller = match Caller::resolve(&hub, p).await {
+        Ok(c) => c,
+        Err(e) => return fail(StatusCode::FORBIDDEN, e.to_string()),
+    };
+    match crate::gateway::chat(&hub, &caller, body).await {
+        Ok((status, reply)) => {
+            (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(reply)).into_response()
+        }
+        Err(e @ G::Forbidden(_)) => fail(StatusCode::FORBIDDEN, e.to_string()),
+        Err(e @ G::BadRequest(_)) => fail(StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e @ G::Budget(_)) => fail(StatusCode::TOO_MANY_REQUESTS, e.to_string()),
+        Err(e @ G::Upstream(_)) => fail(StatusCode::BAD_GATEWAY, e.to_string()),
+        Err(G::Hub(e)) => ApiError::from(&e).into_response(),
+    }
 }
 
 async fn apps(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<AppView>>> {

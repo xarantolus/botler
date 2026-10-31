@@ -955,6 +955,15 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
         if !j.spec.env.services.is_empty() && j.spec.env.network() == Network::None {
             l.err(&path, "`services` are reached over the network; a job with network = \"none\" cannot use them");
         }
+        for m in &j.spec.models {
+            if m == "default" {
+                if defs.instance.models.default.is_none() {
+                    l.err(&path, "`models` names `default`, but botler.toml sets no `models.default`");
+                }
+            } else if !m.contains('/') && !defs.instance.models.routes.contains_key(m) {
+                l.err(&path, format!("models {m:?} is not an OpenRouter model id (vendor/model) or `default`"));
+            }
+        }
         if let Some(app) = &j.spec.app {
             if j.spec.lifetime != Lifetime::Service || j.spec.env.port.is_none() {
                 l.err(&path, "`[app]` needs a service (lifetime = \"service\") with a `port` that serves its UI");
