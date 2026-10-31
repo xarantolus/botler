@@ -4,6 +4,7 @@ pub mod actions;
 pub mod agent_env;
 pub mod agents;
 pub mod api;
+pub mod apps;
 pub mod assets;
 pub mod auth;
 pub mod bindings;

@@ -23,10 +23,10 @@ use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
 use crate::ops::{self, Caller, OpError};
 use crate::wire::{
-    ApiErrorBody, ArchiveOutcome, BreakerCleared, BudgetView, Cancelled, ChatCreated, ChatRestored, DeviceRevoked,
-    DeviceView, DialogAnswer, DialogView, Dialogs, EventPosted, HubStatus, LoginCode, PauseState, ProposalView,
-    QueuedMessage, ReachedChat, Reverted, RuntimeInfo, Saved, SecretFieldView, SecretGroupView, SessionAnchor,
-    SessionView, SignedIn, Trace, Usage,
+    ApiErrorBody, AppTicket, AppView, ArchiveOutcome, BreakerCleared, BudgetView, Cancelled, ChatCreated, ChatRestored,
+    DeviceRevoked, DeviceView, DialogAnswer, DialogView, Dialogs, EventPosted, HubStatus, LoginCode, PauseState,
+    ProposalView, QueuedMessage, ReachedChat, Reverted, RuntimeInfo, Saved, SecretFieldView, SecretGroupView,
+    SessionAnchor, SessionView, SignedIn, Trace, Usage,
 };
 
 type AppState = Arc<Hub>;
@@ -87,6 +87,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/devices", get(devices))
         .route("/api/v1/devices/{id}", delete(revoke_device))
         .route("/api/v1/logout", post(logout))
+        .route("/api/v1/apps", get(apps))
+        .route("/api/v1/apps/{name}/ticket", post(app_ticket))
         .route("/api/v1/channels", get(channels))
         .route("/api/v1/channels/codes", post(channel_code))
         .route("/api/v1/channels/bindings/{id}", delete(revoke_binding))
@@ -1088,6 +1090,42 @@ async fn logout(
             .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
     );
     Ok(r)
+}
+
+async fn apps(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<AppView>>> {
+    user_only(&p)?;
+    let applied = hub.applied().await;
+    let mut out = Vec::new();
+    for j in applied.defs.jobs.values().filter(|j| j.spec.is_service()) {
+        let Some(app) = &j.spec.app else { continue };
+        let running = hub
+            .containers
+            .inspect(&crate::services::container_name(&hub, &j.name))
+            .await
+            .map_err(HubError::from)?
+            .is_some_and(|c| c.running);
+        out.push(AppView {
+            name: j.name.clone(),
+            title: app.title.clone(),
+            icon: app.icon.clone().unwrap_or_else(|| "app-window".into()),
+            description: j.spec.description.clone(),
+            running,
+        });
+    }
+    Ok(Json(out))
+}
+
+async fn app_ticket(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<AppTicket>> {
+    user_only(&p)?;
+    if !hub.applied().await.defs.jobs.get(&name).is_some_and(|j| j.spec.app.is_some()) {
+        return Err(ApiError(StatusCode::NOT_FOUND, format!("no app named {name}")));
+    }
+    let ticket = crate::apps::ticket(&hub, &name);
+    Ok(Json(AppTicket { port: crate::apps::port(&hub), path: crate::apps::enter_path(&name, &ticket) }))
 }
 
 async fn channels(

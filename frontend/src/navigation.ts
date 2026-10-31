@@ -48,6 +48,7 @@ export const sections = computed((): Section[] => [
     count: attention.value?.proposals_in_flight ?? 0,
     countColor: attention.value?.proposals_awaiting_user ? "warning" : "neutral",
   },
+  ...(state.apps?.length ? [{ name: "apps", label: "Apps", icon: "i-lucide-app-window" }] : []),
   { name: "secrets", label: "Secrets", icon: "i-lucide-key-round" },
   { name: "memory", label: "Memory", icon: "i-lucide-brain" },
   { name: "settings", label: "Settings", icon: "i-lucide-settings" },

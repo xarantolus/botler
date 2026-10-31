@@ -40,6 +40,7 @@ schemars.workspace = true
 axum = { version = "0.8", features = ["ws", "multipart"] }
 tower = "0.5"
 http = "1"
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 rmcp = { version = "3.8", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 tokio-util = "0.7"
 futures = "0.3"

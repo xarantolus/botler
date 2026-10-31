@@ -9,6 +9,7 @@ import http.client
 import json
 import os
 import socket
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -26,6 +27,9 @@ _CODES = {
 }
 
 TIMEOUT_SECONDS = 60.0
+# How long a call waits for a hub that is not taking connections (it restarts, e.g. for an
+# upgrade, in well under this) before raising `unreachable`.
+RECONNECT_SECONDS = 90.0
 
 
 class BotlerError(Exception):
@@ -66,9 +70,17 @@ def _error(op: str, status: int, raw: str, reason: str) -> BotlerError:
     return BotlerError(op, _CODES.get(status, "internal"), message, status)
 
 
+class _NotConnected(Exception):
+    """The hub did not take the connection: the request was never sent, so it can be retried."""
+
+
 def _call_socket(op: str, path: str, body: bytes, token: str) -> Any:
     conn = _UnixConnection(path)
     try:
+        try:
+            conn.connect()
+        except OSError as e:
+            raise _NotConnected(f"cannot reach the hub at {path}: {e}") from e
         conn.request(
             "POST",
             f"/api/v1/ops/{op}",
@@ -78,7 +90,7 @@ def _call_socket(op: str, path: str, body: bytes, token: str) -> Any:
         resp = conn.getresponse()
         raw = resp.read()
     except OSError as e:
-        raise BotlerError(op, "unreachable", f"cannot reach the hub at {path}: {e}") from e
+        raise BotlerError(op, "unreachable", f"lost the hub at {path} during the call: {e}") from e
     finally:
         conn.close()
     if resp.status >= 400:
@@ -86,23 +98,43 @@ def _call_socket(op: str, path: str, body: bytes, token: str) -> Any:
     return json.loads(raw or b"null")
 
 
-def call(op: str, args: dict[str, Any]) -> Any:
-    """Run hub operation `op`. Arguments that are None are left out (the hub applies defaults)."""
-    body = json.dumps({k: v for k, v in args.items() if v is not None}).encode()
-    sock = os.environ.get("BOTLER_SOCKET")
-    if sock:
-        return _call_socket(op, sock, body, _env("BOTLER_TOKEN", op))
-    url = _env("BOTLER_URL", op).rstrip("/") + f"/api/v1/ops/{op}"
+def _call_url(op: str, base: str, body: bytes, token: str) -> Any:
+    url = base.rstrip("/") + f"/api/v1/ops/{op}"
     req = urllib.request.Request(
         url,
         data=body,
         method="POST",
-        headers={"Authorization": f"Bearer {_env('BOTLER_TOKEN', op)}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
             return json.loads(resp.read() or b"null")
     except urllib.error.HTTPError as e:
         raise _error(op, e.code, e.read().decode(errors="replace"), str(e.reason)) from e
-    except (urllib.error.URLError, OSError) as e:
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (ConnectionRefusedError, FileNotFoundError)):
+            raise _NotConnected(f"cannot reach the hub at {url}: {e}") from e
         raise BotlerError(op, "unreachable", f"cannot reach the hub at {url}: {e}") from e
+    except OSError as e:
+        raise BotlerError(op, "unreachable", f"lost the hub at {url} during the call: {e}") from e
+
+
+def call(op: str, args: dict[str, Any]) -> Any:
+    """Run hub operation `op`. Arguments that are None are left out (the hub applies defaults).
+
+    While the hub restarts it takes no connections; the call then waits for it (up to
+    `RECONNECT_SECONDS`) instead of failing, so a service survives hub upgrades."""
+    body = json.dumps({k: v for k, v in args.items() if v is not None}).encode()
+    sock = os.environ.get("BOTLER_SOCKET")
+    token = _env("BOTLER_TOKEN", op)
+    base = None if sock else _env("BOTLER_URL", op)
+    deadline = time.monotonic() + RECONNECT_SECONDS
+    delay = 0.25
+    while True:
+        try:
+            return _call_socket(op, sock, body, token) if sock else _call_url(op, base or "", body, token)
+        except _NotConnected as e:
+            if time.monotonic() + delay > deadline:
+                raise BotlerError(op, "unreachable", f"{e} (waited {RECONNECT_SECONDS:.0f} s)") from e
+            time.sleep(delay)
+            delay = min(delay * 2, 5.0)

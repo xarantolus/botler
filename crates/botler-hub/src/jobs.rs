@@ -147,6 +147,14 @@ pub(crate) async fn launch_job(
     tokio::fs::write(&event_file, event_json).await?;
     spec.mounts.push(Mount::Bind { src: event_file, dst: "/botler/event.json".into(), read_only: true });
     spec.env.insert("BOTLER_EVENT_FILE".into(), "/botler/event.json".into());
+    if service
+        && def.spec.app.is_some()
+        && let Some(port) = env.port
+    {
+        // Only the hub's apps proxy reaches it (127.0.0.1); the user opens it through botler.
+        let host_port = crate::apps::host_port(&hub.id, &run.runnable);
+        spec.ports.push(botler_runtime::PortMapping { bind: "127.0.0.1".into(), host_port, port });
+    }
     if let Some(settings) = &def.settings {
         // `botler.settings`: the values from settings.toml; the model fills in its defaults.
         let file = run_dir.join("settings.json");

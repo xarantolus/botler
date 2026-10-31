@@ -18,6 +18,8 @@ export type * from "./AgentTurnFailedPayload";
 export type * from "./AgentView";
 export type * from "./Answer";
 export type * from "./ApiErrorBody";
+export type * from "./AppTicket";
+export type * from "./AppView";
 export type * from "./AppliedCommit";
 export type * from "./ArchiveHandoff";
 export type * from "./ArchiveOutcome";

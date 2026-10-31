@@ -2,6 +2,8 @@
 
 import type { AccessRevoked } from "./AccessRevoked";
 import type { Answer } from "./Answer";
+import type { AppTicket } from "./AppTicket";
+import type { AppView } from "./AppView";
 import type { ArchiveOutcome } from "./ArchiveOutcome";
 import type { ArchiveRequest } from "./ArchiveRequest";
 import type { BindingRevoked } from "./BindingRevoked";
@@ -134,6 +136,8 @@ export interface Routes {
   devices: { method: "GET"; path: "/api/v1/devices"; params: Record<string, never>; query: never; body: never; response: Array<DeviceView> };
   revoke_device: { method: "DELETE"; path: "/api/v1/devices/{id}"; params: { id: string }; query: never; body: never; response: DeviceRevoked };
   logout: { method: "POST"; path: "/api/v1/logout"; params: Record<string, never>; query: never; body: never; response: DeviceRevoked };
+  apps: { method: "GET"; path: "/api/v1/apps"; params: Record<string, never>; query: never; body: never; response: Array<AppView> };
+  app_ticket: { method: "POST"; path: "/api/v1/apps/{name}/ticket"; params: { name: string }; query: never; body: never; response: AppTicket };
   channels: { method: "GET"; path: "/api/v1/channels"; params: Record<string, never>; query: never; body: never; response: ChannelsView };
   channel_code: { method: "POST"; path: "/api/v1/channels/codes"; params: Record<string, never>; query: never; body: NewPairingCode; response: PairingCode };
   revoke_binding: { method: "DELETE"; path: "/api/v1/channels/bindings/{id}"; params: { id: string }; query: never; body: never; response: BindingRevoked };
@@ -198,6 +202,8 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   devices: { method: "GET", path: "/api/v1/devices" },
   revoke_device: { method: "DELETE", path: "/api/v1/devices/{id}" },
   logout: { method: "POST", path: "/api/v1/logout" },
+  apps: { method: "GET", path: "/api/v1/apps" },
+  app_ticket: { method: "POST", path: "/api/v1/apps/{name}/ticket" },
   channels: { method: "GET", path: "/api/v1/channels" },
   channel_code: { method: "POST", path: "/api/v1/channels/codes" },
   revoke_binding: { method: "DELETE", path: "/api/v1/channels/bindings/{id}" },

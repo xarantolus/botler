@@ -108,12 +108,17 @@ fn constant_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// The session cookie in a `Cookie` header.
 pub fn cookie_in(headers: &axum::http::HeaderMap) -> Option<String> {
+    cookie_value(headers, COOKIE)
+}
+
+/// The value of cookie `name` in the request's `Cookie` headers.
+pub fn cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all(axum::http::header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
-        .find_map(|c| c.trim().strip_prefix(&format!("{COOKIE}=")).map(str::to_owned))
+        .find_map(|c| c.trim().strip_prefix(&format!("{name}=")).map(str::to_owned))
 }
 
 /// `Set-Cookie` for a signed-in device (`secure` when the page is served over HTTPS).

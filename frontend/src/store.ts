@@ -4,6 +4,7 @@ import { computed, reactive, shallowRef, watch } from "vue";
 import { call, getToken, onUnauthorized, setToken, Unauthorized } from "./api/client";
 import type {
   AgentStatus,
+  AppView,
   BotlerEvent,
   Dialog,
   Dialogs,
@@ -31,6 +32,8 @@ export interface AppState {
   dialogs: Dialogs | null;
   /** The latest proposals, newest first; patched live as they move. */
   proposals: Proposal[] | null;
+  /** Services' web UIs (`[app]`). */
+  apps: AppView[] | null;
   events: BotlerEvent[];
   /** Latest known status per chat: from the live stream, or the wake phase of a fetch. */
   liveStatus: Record<string, AgentStatus>;
@@ -55,6 +58,7 @@ export const state = plainReactive<AppState>({
   instances: [],
   dialogs: null,
   proposals: null,
+  apps: null,
   events: [],
   liveStatus: {},
   wakeStarted: {},
@@ -151,6 +155,12 @@ export function refreshDialogs() {
   });
 }
 
+export function refreshApps() {
+  return guarded("Loading apps", async () => {
+    state.apps = await call("apps", {});
+  });
+}
+
 export function refreshProposals() {
   const seq = ++proposalsSeq;
   return guarded("Loading proposals", async () => {
@@ -235,6 +245,7 @@ export function refreshAll() {
     refreshInstances(),
     refreshDialogs(),
     refreshProposals(),
+    refreshApps(),
     refreshEvents(),
     sessionFor ? refreshSession(sessionFor) : Promise.resolve(),
   ]);

@@ -8,6 +8,7 @@ import textwrap
 import socketserver
 import tempfile
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -134,10 +135,32 @@ def test_the_socket_is_used_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
         assert (e.value.code, e.value.status, e.value.message) == ("forbidden", 403, "no")
         server.shutdown()
         server.server_close()
+        monkeypatch.setattr(botler._client, "RECONNECT_SECONDS", 0.5)
         monkeypatch.setenv("BOTLER_SOCKET", f"{d}/gone.sock")
         with pytest.raises(botler.BotlerError) as e:
             botler.ops.list_timers()
         assert e.value.code == "unreachable" and e.value.status is None
+    h.server.shutdown()
+
+
+def test_a_call_waits_for_a_restarting_hub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """While the hub restarts its socket takes no connections; a call waits instead of failing."""
+    import botler
+
+    h = FakeHub()
+    with tempfile.TemporaryDirectory() as d:
+        path = f"{d}/hub.sock"
+        monkeypatch.setenv("BOTLER_SOCKET", path)
+        monkeypatch.setenv("BOTLER_TOKEN", "tok")
+
+        def start_later() -> None:
+            time.sleep(0.8)
+            server = _UnixHTTPServer(path, h.handler)
+            server.serve_forever()
+
+        threading.Thread(target=start_later, daemon=True).start()
+        botler.health.ok()
+        assert [c[0] for c in h.calls] == ["health"], "sent once, after the hub came back"
     h.server.shutdown()
 
 
@@ -164,6 +187,7 @@ def test_unreachable_and_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
     assert e.value.code == "not_configured"
     monkeypatch.setenv("BOTLER_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("BOTLER_TOKEN", "t")
+    monkeypatch.setattr(botler._client, "RECONNECT_SECONDS", 0.5)
     with pytest.raises(botler.BotlerError) as e:
         botler.ops.list_timers()
     assert e.value.code == "unreachable" and e.value.status is None

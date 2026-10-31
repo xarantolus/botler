@@ -143,6 +143,24 @@ pub struct DialogView {
     pub visit: Option<crate::ops::VisitSpec>,
 }
 
+/// An app (a service's web UI) for the navigation.
+#[derive(Debug, Serialize, TS)]
+pub struct AppView {
+    pub name: String,
+    pub title: String,
+    /// A Lucide icon name.
+    pub icon: String,
+    pub description: String,
+    pub running: bool,
+}
+
+/// Where the iframe opens an app: `path` on the apps `port` of the host the web app is on.
+#[derive(Debug, Serialize, TS)]
+pub struct AppTicket {
+    pub port: u16,
+    pub path: String,
+}
+
 /// A device signed in.
 #[derive(Debug, Serialize, TS)]
 pub struct SignedIn {
@@ -471,6 +489,8 @@ routes! {
     devices: GET "/api/v1/devices" => Vec<DeviceView>;
     revoke_device: DELETE "/api/v1/devices/{id}" => DeviceRevoked;
     logout: POST "/api/v1/logout" => DeviceRevoked;
+    apps: GET "/api/v1/apps" => Vec<AppView>;
+    app_ticket: POST "/api/v1/apps/{name}/ticket" => AppTicket;
     channels: GET "/api/v1/channels" => crate::channels::ChannelsView;
     channel_code: POST "/api/v1/channels/codes", body: crate::channels::NewPairingCode => crate::channels::PairingCode;
     revoke_binding: DELETE "/api/v1/channels/bindings/{id}" => crate::channels::BindingRevoked;

@@ -60,6 +60,10 @@ pub enum Escalation {
     ServiceAdded {
         job: String,
     },
+    /// A service gets (or changes) a UI the user opens inside botler.
+    AppAdded {
+        job: String,
+    },
     /// A job or service may now reach another service.
     ServiceReached {
         job: String,
@@ -126,6 +130,7 @@ impl Escalation {
             Self::ApprovalRemoved { tool } => format!("action `{tool}` no longer requires approval"),
             Self::WebhookAdded { name } => format!("opens webhook `/hooks/{name}` to inbound calls"),
             Self::ServiceAdded { job } => format!("adds always-on service `{job}`"),
+            Self::AppAdded { job } => format!("shows service `{job}`'s web UI as an app in botler"),
             Self::ServiceReached { job, service } => format!("lets job `{job}` reach service `{service}`"),
             Self::PortPublished { job, reach } => format!("makes service `{job}` reachable from {reach}"),
             Self::McpStdioAdded { agent, server, command } => {
@@ -326,6 +331,9 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
         // code-only changes do not ask; new secrets, ports and network still do.
         if j.spec.is_service() && !prev.is_some_and(|p| p.spec.is_service()) {
             esc.insert(Escalation::ServiceAdded { job: j.name.clone() });
+        }
+        if j.spec.app.is_some() && !prev.is_some_and(|p| p.spec.app.is_some()) {
+            esc.insert(Escalation::AppAdded { job: j.name.clone() });
         }
         if j.spec.is_service() {
             let before = prev.filter(|o| o.spec.is_service()).map_or(&none, |o| &o.spec.env);

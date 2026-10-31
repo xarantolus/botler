@@ -2,6 +2,7 @@ import ui from "@nuxt/ui/vue-plugin";
 import { createApp } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
 import App from "./App.vue";
+import AppsView from "./views/AppsView.vue";
 import ChatView from "./views/ChatView.vue";
 import EventsView from "./views/EventsView.vue";
 import IncidentsView from "./views/IncidentsView.vue";
@@ -31,6 +32,8 @@ const router = createRouter({
     { path: "/proposals/:id", name: "proposal", component: ProposalReviewView, props: true },
     { path: "/secrets", name: "secrets", component: SecretsView },
     { path: "/settings", name: "settings", component: SettingsView },
+    { path: "/apps", name: "apps", component: AppsView },
+    { path: "/apps/:name", name: "app", component: AppsView, props: true },
     { path: "/search", name: "search", component: SearchView },
     { path: "/memory", name: "memory", component: MemoryView },
     { path: "/share", name: "share", component: ShareView },

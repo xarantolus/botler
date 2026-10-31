@@ -955,6 +955,14 @@ fn validate_jobs(l: &mut Loader<'_>, defs: &Definitions) {
         if !j.spec.env.services.is_empty() && j.spec.env.network() == Network::None {
             l.err(&path, "`services` are reached over the network; a job with network = \"none\" cannot use them");
         }
+        if let Some(app) = &j.spec.app {
+            if j.spec.lifetime != Lifetime::Service || j.spec.env.port.is_none() {
+                l.err(&path, "`[app]` needs a service (lifetime = \"service\") with a `port` that serves its UI");
+            }
+            if app.path.as_deref().is_some_and(|p| !p.starts_with('/')) {
+                l.err(&path, "`app.path` starts with `/`");
+            }
+        }
         if j.spec.channel && j.spec.lifetime != Lifetime::Service {
             l.err(&path, "`channel` needs a service (lifetime = \"service\"): it polls its outbox all the time");
         }

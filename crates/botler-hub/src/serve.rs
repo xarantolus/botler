@@ -91,6 +91,20 @@ pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()
             tracing::error!(error = %e, "the hub's socket stopped serving");
         }
     });
+    let apps_addr = std::net::SocketAddr::new(hub.config.listen.ip(), crate::apps::port(&hub));
+    // Apps are optional: botler runs without them when their port is taken.
+    match tokio::net::TcpListener::bind(apps_addr).await {
+        Ok(apps) => {
+            tracing::info!(addr = %apps_addr, "apps listening");
+            let apps_app = crate::apps::router(hub.clone());
+            tokio::spawn(async move {
+                if let Err(e) = axum::serve(apps, apps_app).await {
+                    tracing::error!(error = %e, "the apps port stopped serving");
+                }
+            });
+        }
+        Err(e) => tracing::error!(addr = %apps_addr, error = %e, "cannot serve apps; the web app still works"),
+    }
     let stop_hub = hub.clone();
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
