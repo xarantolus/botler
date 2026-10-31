@@ -304,6 +304,23 @@ impl Store {
         Ok(n == 1)
     }
 
+    /// Start an in-flight proposal's pipeline over: back to `gating` at the rebase stage, from any
+    /// stage, merge included (main moved under the merge, or the hub restarted mid-merge). False
+    /// if it had already finished.
+    pub async fn restart_proposal(&self, id: &str) -> Result<bool> {
+        let now = ts(Utc::now());
+        let n = sqlx::query(
+            "UPDATE proposals SET status = 'gating', stage = 'rebase', stage_at = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')",
+        )
+        .bind(&now)
+        .bind(&now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(n == 1)
+    }
+
     /// Record who decided an in-flight proposal and why; with `status`, also finish it there.
     /// False if it had already finished or is merging.
     pub async fn decide_proposal(

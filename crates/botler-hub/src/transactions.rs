@@ -87,11 +87,14 @@ pub async fn pipeline(hub: &Arc<Hub>, id: &str) -> Result<()> {
     if attempt > MAX_ATTEMPTS {
         return fail(hub, id, "main kept changing while this proposal was in flight; propose again").await;
     }
-    let p = hub.store.proposal(id).await?;
-    hub.store.set_proposal_status(id, ProposalStatus::Gating).await?;
-    if !stage(hub, id, ProposalStage::Rebase).await? {
+    // Atomically back to the start, also from the merge stage (main moved under the merge, or
+    // the hub restarted mid-merge): a re-run must really run.
+    if !hub.store.restart_proposal(id).await? {
+        tracing::info!(proposal = %id, "proposal finished before its pipeline (re-)ran");
         return Ok(());
     }
+    broadcast(hub, id).await?;
+    let p = hub.store.proposal(id).await?;
     let original = p.head_commit.clone().unwrap_or_default();
     let head = match hub.repo.rebase_onto_main(&original, &p.title).await {
         Ok(h) => h,
@@ -412,13 +415,23 @@ pub(crate) async fn close_approval(hub: &Hub, id: &str, answer: &str) -> Result<
 }
 
 /// Move an in-flight proposal to `stage` and show it live. False once it was decided (the user
-/// rejected it): the pipeline then stops.
+/// rejected it): the pipeline then stops. Any other refusal (it is merging) is a bug that would
+/// leave the proposal stuck, so it is an error, which fails the proposal visibly.
 async fn stage(hub: &Hub, id: &str, stage: ProposalStage) -> Result<bool> {
-    let moved = hub.store.set_proposal_stage(id, stage).await?;
-    if moved {
+    if hub.store.set_proposal_stage(id, stage).await? {
         broadcast(hub, id).await?;
+        return Ok(true);
     }
-    Ok(moved)
+    let p = hub.store.proposal(id).await?;
+    if p.status.is_terminal() {
+        return Ok(false);
+    }
+    let from = p.stage.map_or("none", ProposalStage::as_str);
+    Err(HubError::StageRefused {
+        id: id.into(),
+        to: stage.as_str(),
+        detail: format!("it is {} at stage {from}", p.status.as_str()),
+    })
 }
 
 /// Show the proposal's current state to live viewers.

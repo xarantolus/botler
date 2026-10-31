@@ -55,6 +55,8 @@ pub enum HubError {
     Backoff { instance: String, until: chrono::DateTime<chrono::Utc> },
     #[error("host port {ports} is already in use by another program or container; publish a free port: {source}")]
     PortInUse { ports: String, source: botler_runtime::ContainerError },
+    #[error("proposal {id} cannot move to stage {to}: {detail}")]
+    StageRefused { id: String, to: &'static str, detail: String },
 }
 
 pub type Result<T> = std::result::Result<T, HubError>;
