@@ -253,7 +253,7 @@ try {
   await page.getByRole("button", { name: "Reject" }).click();
   await page.getByLabel("Reason").fill("Only a smoke test.");
   await page.getByRole("dialog").getByRole("button", { name: "Reject" }).click();
-  await page.getByText("Only a smoke test.").waitFor({ timeout: 30_000 });
+  await page.getByText("Only a smoke test.").filter({ visible: true }).first().waitFor({ timeout: 30_000 });
   await snap("rejected");
 
   step("System: run a job now");
