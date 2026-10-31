@@ -397,6 +397,14 @@ impl Containers for Fake {
                     _ => None,
                 })
                 .collect(),
+            // A stable fake address per container on its named network.
+            ips: match &c.spec.network {
+                crate::container::NetworkMode::Named(n) if c.running => {
+                    let octet = name.bytes().fold(0u8, |a, b| a.wrapping_mul(31).wrapping_add(b)) % 250 + 2;
+                    BTreeMap::from([(n.clone(), format!("10.89.0.{octet}"))])
+                }
+                _ => BTreeMap::new(),
+            },
         }))
     }
 

@@ -126,7 +126,8 @@ pub fn environment_of<'a>(held: impl IntoIterator<Item = &'a Resource>) -> Envir
     for r in held {
         match r.kind {
             ResourceKind::Secret => env.secrets.push(r.name.clone()),
-            ResourceKind::Service => env.mcp.push(r.name.clone()),
+            // A grant reaches the service; it is no MCP server unless the definition says so.
+            ResourceKind::Service => env.services.push(r.name.clone()),
             ResourceKind::Mount | ResourceKind::Event => {}
         }
     }
@@ -137,7 +138,7 @@ pub fn environment_of<'a>(held: impl IntoIterator<Item = &'a Resource>) -> Envir
 pub fn env_gives(env: &Environment, r: &Resource) -> bool {
     match r.kind {
         ResourceKind::Secret => env.secrets.contains(&r.name),
-        ResourceKind::Service => env.mcp.contains(&r.name),
+        ResourceKind::Service => env.reached().contains(&r.name),
         ResourceKind::Mount | ResourceKind::Event => false,
     }
 }
@@ -165,7 +166,7 @@ mod tests {
             ["secret:a", "service:notes", "mount:nas", "event:x.y"].iter().map(|s| s.parse().unwrap()).collect();
         let env = environment_of(&held);
         assert_eq!(env.secrets, ["a"]);
-        assert_eq!(env.mcp, ["notes"]);
+        assert_eq!((env.mcp.len(), env.services.clone()), (0, vec!["notes".to_string()]), "a grant is no MCP server");
         assert!(env_gives(&env, &held[0]) && !env_gives(&env, &held[2]));
     }
 }

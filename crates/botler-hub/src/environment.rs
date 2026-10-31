@@ -128,7 +128,7 @@ pub async fn container_spec(
     spec.network = match env.network() {
         Network::None => NetworkMode::None,
         // Services and the agents granted them meet on the services network.
-        Network::Default if service || !env.mcp.is_empty() => {
+        Network::Default if service || !env.reached().is_empty() => {
             hub.containers.ensure_network(&hub.network()).await?;
             NetworkMode::Named(hub.network())
         }

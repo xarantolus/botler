@@ -101,7 +101,7 @@ pub fn changes(old: &AgentEnv, new: &AgentEnv) -> Vec<String> {
     }
     diff(&mut out, "access", &old.held, &new.held);
     diff(&mut out, "secret groups", &old.env.secrets, &new.env.secrets);
-    diff(&mut out, "services", &old.env.mcp, &new.env.mcp);
+    diff(&mut out, "services", &old.env.reached(), &new.env.reached());
     if old.env.mcp_stdio != new.env.mcp_stdio {
         out.push("MCP servers changed".into());
     }

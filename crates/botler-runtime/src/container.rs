@@ -99,6 +99,8 @@ pub struct ContainerInfo {
     pub image: String,
     /// Host paths mounted into the container.
     pub mounts: Vec<PathBuf>,
+    /// The container's IP address on each network it is attached to.
+    pub ips: BTreeMap<String, String>,
 }
 
 /// A lifecycle event for a hub-managed container.
@@ -298,6 +300,18 @@ struct InspectConfig {
     image: String,
 }
 
+#[derive(Deserialize, Default)]
+struct InspectNetworks {
+    #[serde(rename = "Networks", default)]
+    networks: Option<BTreeMap<String, InspectNetwork>>,
+}
+
+#[derive(Deserialize)]
+struct InspectNetwork {
+    #[serde(rename = "IPAddress", default)]
+    ip: String,
+}
+
 #[derive(Deserialize)]
 struct InspectMount {
     #[serde(rename = "Source", default)]
@@ -316,6 +330,8 @@ struct Inspect {
     config: InspectConfig,
     #[serde(rename = "Mounts", default)]
     mounts: Vec<InspectMount>,
+    #[serde(rename = "NetworkSettings", default)]
+    network: InspectNetworks,
 }
 
 impl From<Inspect> for ContainerInfo {
@@ -329,6 +345,14 @@ impl From<Inspect> for ContainerInfo {
             labels: i.config.labels.unwrap_or_default(),
             image: i.config.image,
             mounts: i.mounts.into_iter().map(|m| m.source).collect(),
+            ips: i
+                .network
+                .networks
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(_, n)| !n.ip.is_empty())
+                .map(|(name, n)| (name, n.ip))
+                .collect(),
         }
     }
 }

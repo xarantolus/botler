@@ -64,6 +64,8 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
            `unsubscribe(id)`; find types with `list_event_types(query)` or `search(sources=[\"event_type\"])`.\n\
          - Missing a secret group, service or share your definition does not give you? \
            `request_access(\"secret:<group>\", reason)`: the answer wakes you with it applied.\n\
+         - Services you may reach are listed in `/botler/agent-dir/services.json` (name, IP and port): \
+           use `http://<name>:<port>`, or the IP where a client rejects names (Chrome DevTools).\n\
          - Anything recurring is a trigger file in the monorepo, never a promise you try to remember. \
            Add `triggers/<topic>.toml` to a monorepo checkout:\n\
            ```toml\n\

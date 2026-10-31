@@ -633,14 +633,15 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
         for g in &a.spec.env.secrets {
             check_container_group(l, defs, &path, g);
         }
-        for m in &a.spec.env.mcp {
+        let listed = a.spec.env.mcp.iter().map(|m| ("mcp", m));
+        for (field, m) in listed.chain(a.spec.env.services.iter().map(|s| ("services", s))) {
             match defs.jobs.get(m) {
                 Some(j) if j.spec.lifetime == Lifetime::Service && j.spec.env.port.is_none() => {
-                    l.err(&path, format!("mcp {m:?}: the service declares no `port` to reach it on"))
+                    l.err(&path, format!("{field} {m:?}: the service declares no `port` to reach it on"))
                 }
                 Some(j) if j.spec.lifetime == Lifetime::Service => {}
-                Some(_) => l.err(&path, format!("mcp {m:?} is a oneshot job, not a service")),
-                None => l.err(&path, format!("mcp {m:?} is not a job in jobs/")),
+                Some(_) => l.err(&path, format!("{field} {m:?} is a oneshot job or action, not a service")),
+                None => l.err(&path, format!("{field} {m:?} is not a job in jobs/")),
             }
         }
         // Every model route is reached over the network today (even a local `base_url` lies
@@ -657,10 +658,10 @@ fn validate_agents(l: &mut Loader<'_>, defs: &Definitions) {
                 ),
             );
         }
-        if !a.spec.env.mcp.is_empty() && a.spec.env.network() == Network::None {
+        if !a.spec.env.reached().is_empty() && a.spec.env.network() == Network::None {
             l.err(
                 &path,
-                "`mcp` services are reached over the network; an agent with network = \"none\" cannot use them",
+                "`mcp` and `services` are reached over the network; an agent with network = \"none\" cannot use them",
             );
         }
         for (name, s) in &a.spec.env.mcp_stdio {
