@@ -46,6 +46,7 @@ pub mod trials;
 pub mod turns;
 pub mod uploads;
 pub mod web;
+pub mod webhooks;
 pub mod wire;
 
 pub use hub::{Hub, HubError};

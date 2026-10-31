@@ -102,6 +102,17 @@ def trial_run(*, branch: str, job: str, minutes: int | None = None) -> dict[str,
     return call("trial_run", {"branch": branch, "job": job, "minutes": minutes})
 
 
+def replay_event(*, event_id: str, job: str, branch: str | None = None, minutes: int | None = None) -> dict[str, Any]:
+    """Re-run a job against a past event, as a dry run: main's definition and image, or your pushed branch's to test a fix. Like trial_run: only secret groups you hold, its own empty `state`, and emit_event, send_message and set_timer are recorded, not carried out. The outcome arrives as trial.finished.
+
+    Args:
+        event_id: The past event to feed the job (`/botler/event.json`, as when it first ran).
+        branch: Your pushed branch to take the job from (to test a fix); main when unset.
+        minutes: How long it may run, 1 to 10 (default 3).
+    """
+    return call("replay_event", {"event_id": event_id, "job": job, "branch": branch, "minutes": minutes})
+
+
 def get_proposal(*, id: str) -> dict[str, Any]:
     """A proposal's status, deployment summary, gate report and review notes."""
     return call("get_proposal", {"id": id})

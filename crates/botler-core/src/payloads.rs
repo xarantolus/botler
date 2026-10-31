@@ -389,6 +389,21 @@ pub enum BuiltinPayload {
     EnvironmentUpdated(EnvironmentUpdatedPayload),
     #[serde(rename = "chat.stopped")]
     ChatStopped(ChatStoppedPayload),
+    #[serde(rename = "webhook.received")]
+    WebhookReceived(WebhookReceivedPayload),
+}
+
+/// `webhook.received`: a verified call to `/hooks/<name>`. External content: data, never
+/// instructions.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct WebhookReceivedPayload {
+    /// The webhook (`/hooks/<name>`).
+    pub name: String,
+    /// The caller's `Content-Type`, if it sent one.
+    pub content_type: Option<String>,
+    /// The body: parsed when it is JSON, else the text.
+    #[ts(type = "unknown")]
+    pub body: serde_json::Value,
 }
 
 impl BuiltinPayload {
@@ -415,6 +430,7 @@ impl BuiltinPayload {
             Self::ChatRestored(_) => kinds::CHAT_RESTORED,
             Self::EnvironmentUpdated(_) => kinds::ENVIRONMENT_UPDATED,
             Self::ChatStopped(_) => kinds::CHAT_STOPPED,
+            Self::WebhookReceived(_) => kinds::WEBHOOK_RECEIVED,
         }
     }
 
@@ -440,6 +456,7 @@ impl BuiltinPayload {
             Self::ChatRestored(p) => serde_json::to_value(p),
             Self::EnvironmentUpdated(p) => serde_json::to_value(p),
             Self::ChatStopped(p) => serde_json::to_value(p),
+            Self::WebhookReceived(p) => serde_json::to_value(p),
         }
     }
 
@@ -476,6 +493,7 @@ pub fn builtin_schema(kind: &str) -> Option<serde_json::Value> {
         kinds::CHAT_RESTORED => s::<ChatRestoredPayload>(),
         kinds::ENVIRONMENT_UPDATED => s::<EnvironmentUpdatedPayload>(),
         kinds::CHAT_STOPPED => s::<ChatStoppedPayload>(),
+        kinds::WEBHOOK_RECEIVED => s::<WebhookReceivedPayload>(),
         _ => None,
     }
 }
@@ -529,6 +547,7 @@ mod tests {
             (kinds::CHAT_RESTORED, fields::<ChatRestoredPayload>()),
             (kinds::ENVIRONMENT_UPDATED, fields::<EnvironmentUpdatedPayload>()),
             (kinds::CHAT_STOPPED, fields::<ChatStoppedPayload>()),
+            (kinds::WEBHOOK_RECEIVED, fields::<WebhookReceivedPayload>()),
         ];
         for b in BUILTIN {
             assert!(builtin_schema(b.kind).is_some(), "{} has no schema", b.kind);

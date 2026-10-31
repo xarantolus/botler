@@ -53,6 +53,7 @@ async fn message_wakes_botler_and_is_delivered_once() {
         [
             "propose_change",
             "trial_run",
+            "replay_event",
             "request_secrets",
             "request_access",
             "archive_ready",

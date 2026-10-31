@@ -71,7 +71,7 @@
   - `schedule` (cron/interval, in a file);
   - `timer` (a one-off, runtime row in SQLite);
   - `on` (an event subscription with a filter);
-  - `webhook` (later, but designed in now: `POST /hooks/<name>`, verified by a per-hook HMAC or token secret, payload becomes an event with `provenance=external`).
+  - `webhook`: `POST /hooks/<name>`, outside user auth, verified with the trigger's `webhook_secret` (`Authorization: Bearer <secret>`, or an HMAC-SHA256 of the body in `X-Hub-Signature-256: sha256=<hex>` or `X-Signature-256`), at most 1 MiB, rate limited per webhook (60/min). The body (parsed JSON, else text) becomes `webhook.received` with `provenance=external`, dispatched to the trigger's target.
 - **Targets** (what a trigger does):
   1. `resume`: deliver a message into an existing chat/instance (e.g. `botler`, or a named thread).
   2. `spawn`: start a fresh agent instance from an agent definition and environment (image, mounts, secrets) with a task prompt. It reports back via events and goes dormant or ends.
@@ -149,7 +149,7 @@ An agent messaging itself is refused with a hint (files in its home, `set_timer`
 **Rollback = git.** Reverting is just a revert commit on main through the same transaction path; the reconciler re-applies the state. If definitions@main fail to load at boot, the hub refuses to apply and stays on the last applied commit (recorded in SQLite), then alarms.
 
 **Debugging changes before merge.**
-- `replay_event(event_id, branch)` re-runs a job/spawn target against a past event, using the branch's definitions and images. Outbound actions are forced to dry-run, and results are returned to the agent.
+- `replay_event(event_id, job, branch?)` re-runs a job against a past event (`/botler/event.json`) with main's or the agent's own branch's definition and image, through the trial machinery: only secret groups the agent holds, its own empty `state`, `emit_event`/`send_message`/`set_timer` recorded instead of carried out, and the outcome as `trial.finished`.
 - `preview_change(branch)` returns a human-readable **deployment summary** against main. It covers every trigger in plain language (e.g. "at 07:00 on weekdays, Europe/Berlin") with its next five fire times, subscription matches, runnables added/removed/changed, new secret grants, tools and capabilities, and what will need your approval and why. The same summary is returned by `propose_change` and `botler validate`, and is shown to you in approval dialogs.
 - `get_run_logs(run)` and `validate(branch)`.
 

@@ -57,6 +57,7 @@ import type { ProposalDetail } from "./ProposalDetail";
 import type { ProposeChange } from "./ProposeChange";
 import type { Proposed } from "./Proposed";
 import type { ReadSession } from "./ReadSession";
+import type { ReplayEvent } from "./ReplayEvent";
 import type { RequestAccess } from "./RequestAccess";
 import type { RequestCancelled } from "./RequestCancelled";
 import type { RequestOpened } from "./RequestOpened";
@@ -109,6 +110,7 @@ export interface Ops {
   propose_change: { input: ProposeChange; output: Proposed };
   preview_change: { input: PreviewChange; output: ChangePreview };
   trial_run: { input: TrialRun; output: TrialStarted };
+  replay_event: { input: ReplayEvent; output: TrialStarted };
   get_proposal: { input: GetProposal; output: ProposalDetail };
   submit_review: { input: SubmitReview; output: ReviewRecorded };
   request_secrets: { input: SecretRequest; output: RequestOpened };

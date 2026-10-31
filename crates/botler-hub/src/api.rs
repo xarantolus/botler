@@ -84,6 +84,11 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         // The live stream authenticates itself (browsers cannot set headers on WebSockets).
         .route("/api/v1/live", get(crate::live::socket))
+        // Webhooks verify callers with their trigger's secret, never the user's token.
+        .route(
+            "/hooks/{name}",
+            post(crate::webhooks::receive).layer(axum::extract::DefaultBodyLimit::max(crate::webhooks::MAX_BODY)),
+        )
         .merge(authed)
         // The web app is public static content; every API call it makes carries the user token.
         .route("/legacy", get(crate::web::legacy))

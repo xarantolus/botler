@@ -34,9 +34,9 @@ async fn held_secret_groups(hub: &Hub, instance: &str) -> Result<Vec<String>> {
     Ok(def.map(|d| d.spec.env.secrets.clone()).unwrap_or_default())
 }
 
-/// Start a trial of `def` (from commit `head` of `branch`) for `instance`, stopped after `minutes`.
-/// The image builds in the background; the outcome arrives as `trial.finished`. Returns the run
-/// and the secret groups withheld.
+/// Start a trial of `def` (from commit `head` of `branch`) for `instance`, stopped after `minutes`,
+/// with `event` as its input (a replay) or none. The image builds in the background; the outcome
+/// arrives as `trial.finished`. Returns the run and the secret groups withheld.
 pub async fn start(
     hub: &Arc<Hub>,
     instance: &str,
@@ -44,6 +44,7 @@ pub async fn start(
     head: &str,
     def: &JobDef,
     minutes: u32,
+    event: Option<botler_core::Event>,
 ) -> Result<(Run, Vec<String>)> {
     if hub.paused().await? {
         return Err(HubError::Paused);
@@ -77,7 +78,7 @@ pub async fn start(
             runnable: def.name.clone(),
             kind: RunKind::Trial,
             trigger_id: None,
-            event_id: None,
+            event_id: event.as_ref().map(|e| e.id.to_string()),
             commit_id: Some(head.to_string()),
         })
         .await?;
@@ -86,7 +87,7 @@ pub async fn start(
     let (hub2, run2, job) = (hub.clone(), run.clone(), def.spec.clone());
     tokio::spawn(async move {
         let timeout = Duration::minutes(i64::from(minutes));
-        if let Err(e) = jobs::launch_job(&hub2, &run2, &job, &env, timeout, None).await {
+        if let Err(e) = jobs::launch_job(&hub2, &run2, &job, &env, timeout, event.as_ref()).await {
             tracing::warn!(run = %run2.id, error = %e, "trial could not start");
             if let Err(e2) =
                 finish(&hub2, &run2, TrialOutcome::Failed, None, Some(format!("could not start: {e}"))).await
