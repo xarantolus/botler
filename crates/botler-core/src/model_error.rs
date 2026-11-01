@@ -53,6 +53,10 @@ pub fn classify(error: &str) -> ErrorClass {
     ]) {
         return ErrorClass::ContextLength;
     }
+    // OpenRouter's 402 while other calls hold the remaining credits: retry once they settle.
+    if has(&["in_flight_budget", "in-flight requests settle"]) {
+        return ErrorClass::Transient;
+    }
     match status(&lower) {
         Some(401 | 403) => return ErrorClass::Auth,
         Some(402) => return ErrorClass::Billing,
@@ -109,6 +113,10 @@ mod tests {
         use ErrorClass::*;
         let cases = [
             ("Connection error.", Transient),
+            (
+                r#"402: {"message":"This request would exceed your available credits given your current in-flight requests. Retry after in-flight requests settle, or add credits.","code":402,"metadata":{"reason":"in_flight_budget_exhausted"}}"#,
+                Transient,
+            ),
             ("Request timed out.", Transient),
             ("429 Too Many Requests", Transient),
             ("Error: 503 Service Unavailable", Transient),

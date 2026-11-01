@@ -248,6 +248,19 @@ function setPush(on: boolean) {
                 @update:model-value="(v: string | number) => (draft!.agents[a.name]!.idle_timeout = String(v).trim() || null)"
               />
             </UFormField>
+            <UFormField
+              label="Compact at (tokens)"
+              help="Every model call resends the context, so a long one is what costs; coding agents may want more."
+              :error="errorsAt(errors, `agents.${a.name}.compact_at`).join('; ') || undefined"
+            >
+              <UInput
+                type="number"
+                :model-value="String(draft.agents[a.name]!.compact_at ?? '')"
+                :placeholder="`Default: ${String(defaults.compact_at)}`"
+                class="w-full max-w-xs"
+                @update:model-value="(v: string | number) => (draft!.agents[a.name]!.compact_at = String(v).trim() === '' ? null : Number(v))"
+              />
+            </UFormField>
           </div>
         </UCard>
       </template>

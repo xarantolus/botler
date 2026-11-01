@@ -2,6 +2,7 @@
 import type { Instance } from "./Instance";
 import type { QueuedMessage } from "./QueuedMessage";
 import type { SessionItem } from "./SessionItem";
+import type { SessionStartedPayload } from "./SessionStartedPayload";
 import type { ToolRender } from "./ToolRender";
 import type { WakePhase } from "./WakePhase";
 
@@ -35,4 +36,9 @@ sessions: Array<string>,
 /**
  * The session file shown.
  */
-file: string, };
+file: string, 
+/**
+ * The handover report waiting to open the current session (it lands when the agent next
+ * wakes); shown while the fresh session is still empty.
+ */
+handover: SessionStartedPayload | null, };

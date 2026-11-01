@@ -6,6 +6,7 @@ import ChatBanners from "../components/chat/ChatBanners.vue";
 import ChatComposer from "../components/chat/ChatComposer.vue";
 import ChatNavbar from "../components/chat/ChatNavbar.vue";
 import ChatTranscript from "../components/chat/ChatTranscript.vue";
+import MarkdownText from "../components/common/MarkdownText.vue";
 import { redirectChat } from "../lib/events";
 import { currentStatus, phaseBadge } from "../lib/phase";
 import { sessionOptions } from "../lib/sessions";
@@ -266,8 +267,28 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
           <p v-if="transcript.unresolvedLinks" class="mb-4 text-center text-xs text-dimmed">
             {{ transcript.unresolvedLinks }} older request(s) are not in the recent list.
           </p>
+          <div v-if="!transcript.messages.length && !earlier && session?.handover" class="my-auto space-y-3 text-sm">
+            <p class="flex items-center gap-2 font-medium text-highlighted">
+              <UIcon name="i-lucide-history" class="size-4" /> Continued in a fresh session
+            </p>
+            <p class="text-muted">
+              The agent starts it with this handover report from
+              <ULink class="underline" @click="showSession(session.handover.previous)">the previous session</ULink>; it reads it when it next wakes.
+            </p>
+            <div class="rounded-md border border-default p-3">
+              <MarkdownText :source="session.handover.summary" />
+              <template v-for="[label, list] in ([['Still open', session.handover.outstanding], ['State', session.handover.state]] as const)" :key="label">
+                <template v-if="list.length">
+                  <p class="mt-3 text-xs font-medium text-muted">{{ label }}</p>
+                  <ul class="ms-4 list-disc">
+                    <li v-for="(x, i) in list" :key="i">{{ x }}</li>
+                  </ul>
+                </template>
+              </template>
+            </div>
+          </div>
           <UEmpty
-            v-if="!transcript.messages.length"
+            v-else-if="!transcript.messages.length"
             icon="i-lucide-message-circle"
             title="No messages yet"
             description="Say hello: the agent wakes when your message arrives."

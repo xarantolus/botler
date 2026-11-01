@@ -46,3 +46,9 @@ const router = createRouter({
 });
 
 createApp(App).use(router).use(ui).mount("#app");
+
+// Makes the app installable (and shows a note instead of the browser's error while the hub is down).
+// Browsers allow it on https and on localhost only.
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register("/sw.js").catch((e: unknown) => console.error("service worker:", e));
+}

@@ -97,7 +97,9 @@ const skipped = computed(() => state.status?.skipped_definitions ?? []);
       :description="`${b.reason}. It does not wake until you resume it.`"
       orientation="horizontal"
     >
-      <template #actions><BreakerResume :subject="b.subject" size="xs" /></template>
+      <template #actions>
+        <BreakerResume :subject="b.subject" :kind="b.kind" size="xs" />
+      </template>
     </UAlert>
     <UAlert
       v-for="h in held"

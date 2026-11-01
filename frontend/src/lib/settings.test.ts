@@ -22,8 +22,8 @@ const settings: Settings = {
   models: { default: "a/x", models: [{ id: "a/x", note: "cheap" }] },
   routes: [],
   agents: [
-    { name: "chat", description: "", edit: { model: null, tools: ["web.*"], mcp: [], idle_timeout: null }, effective_model: "a/x", mcp_stdio: [] },
-    { name: "dev", description: "", edit: { model: "b/y", tools: [], mcp: [], idle_timeout: "30m" }, effective_model: "b/y", mcp_stdio: [] },
+    { name: "chat", description: "", edit: { model: null, tools: ["web.*"], mcp: [], idle_timeout: null, compact_at: null }, effective_model: "a/x", mcp_stdio: [] },
+    { name: "dev", description: "", edit: { model: "b/y", tools: [], mcp: [], idle_timeout: "30m", compact_at: null }, effective_model: "b/y", mcp_stdio: [] },
   ],
   defaults: { idle_timeout: "15m" },
   defaults_schema: {},
@@ -49,7 +49,7 @@ describe("changes", () => {
     const d = draftOf(settings);
     expect(changes(settings, d)).toBeNull();
     d.agents.dev!.idle_timeout = "1h";
-    expect(changes(settings, d)).toEqual({ commit: "c1", agents: { dev: { model: "b/y", tools: [], mcp: [], idle_timeout: "1h" } } });
+    expect(changes(settings, d)).toEqual({ commit: "c1", agents: { dev: { model: "b/y", tools: [], mcp: [], idle_timeout: "1h", compact_at: null } } });
     d.push = { ntfy_url: "https://ntfy.sh", topic_secret: "T" };
     expect(changes(settings, d)?.deployment).toEqual({ defaults: { idle_timeout: "15m" }, push: d.push });
     expect(settings.agents[1]!.edit.idle_timeout).toBe("30m"); // the loaded copy is untouched

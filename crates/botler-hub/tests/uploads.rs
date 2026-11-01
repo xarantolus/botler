@@ -297,7 +297,8 @@ async fn image_input_reaches_models_json() {
             .unwrap();
     let model = &models["providers"]["openrouter"]["modelOverrides"]["~anthropic/claude-sonnet-latest"];
     assert_eq!(model["input"], json!(["text", "image"]));
-    assert_eq!((model["maxTokens"].as_u64(), model["contextWindow"].as_u64()), (Some(16384), Some(1_000_000)));
+    // The catalog's 1M window, cut so pi compacts at `defaults.compact_at` (150k, plus pi's reserve).
+    assert_eq!((model["maxTokens"].as_u64(), model["contextWindow"].as_u64()), (Some(16384), Some(150_000 + 16_384)));
 }
 
 /// A blocking request pushes fixed text to `<ntfy_url>/<topic>`; the question stays home.

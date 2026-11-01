@@ -102,7 +102,7 @@ const items = computed((): DropdownMenuItem[][] => [
                 <div class="font-medium">{{ b.subject }} <span class="text-xs text-muted">({{ b.kind }})</span></div>
                 <div class="text-muted">{{ b.reason }}</div>
               </div>
-              <BreakerResume :subject="b.subject" size="xs" />
+              <BreakerResume :subject="b.subject" :kind="b.kind" size="xs" />
             </div>
           </div>
         </template>

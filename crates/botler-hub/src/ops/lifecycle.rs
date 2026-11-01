@@ -258,3 +258,61 @@ impl Op for RenameChat {
         Ok(ChatDone { chat: inst.name, note: format!("Renamed to {title}.") })
     }
 }
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+#[ts(optional_fields)]
+pub struct RaiseBudget {
+    /// The chat (name or slug).
+    pub chat: String,
+    /// Dollars more today.
+    #[serde(default)]
+    pub usd: Option<f64>,
+    /// Tokens more today (for a budget in tokens).
+    #[serde(default)]
+    pub tokens: Option<u64>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct BudgetRaised {
+    pub chat: String,
+    /// Today's budget now.
+    pub usd_per_day: Option<f64>,
+    pub tokens_per_day: Option<u64>,
+    pub spent_usd: f64,
+    pub used_tokens: i64,
+}
+
+impl Op for RaiseBudget {
+    const NAME: &'static str = "raise_budget";
+    const DESCRIPTION: &'static str = "Allow a chat more than its daily budget, for today only (the definition is unchanged), and resume it if the budget had stopped it.";
+    const WHO: Who = Who::User;
+    type Output = BudgetRaised;
+
+    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<BudgetRaised, OpError> {
+        let inst = chat_named(hub, &self.chat).await?;
+        let usd = self.usd.unwrap_or(0.0);
+        if !usd.is_finite() || usd < 0.0 {
+            return Err(OpError::BadRequest("usd must be a positive amount".into()));
+        }
+        let tokens =
+            i64::try_from(self.tokens.unwrap_or(0)).map_err(|_| OpError::BadRequest("too many tokens".into()))?;
+        let (_, _, day) = crate::agents::budget_today(hub, &inst.name).await?;
+        hub.store.add_budget_extra(&inst.name, &day, usd, tokens).await?;
+        let (budget, today, _) = crate::agents::budget_today(hub, &inst.name).await?;
+        let under = budget.usd_per_day.is_none_or(|b| today.cost_usd <= b)
+            && budget.tokens_per_day.is_none_or(|b| today.tokens <= i64::try_from(b).unwrap_or(i64::MAX));
+        if under {
+            let subject = format!("instance:{}", inst.name);
+            if hub.store.breaker(&subject).await?.is_some_and(|b| b.kind == "budget") {
+                crate::loops::clear_breaker(hub, &subject).await?;
+            }
+        }
+        Ok(BudgetRaised {
+            chat: inst.name,
+            usd_per_day: budget.usd_per_day,
+            tokens_per_day: budget.tokens_per_day,
+            spent_usd: today.cost_usd,
+            used_tokens: today.tokens,
+        })
+    }
+}

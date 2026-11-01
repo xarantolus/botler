@@ -1,12 +1,14 @@
 <script setup lang="ts">
-// Resume what a breaker paused: held messages of a pair are delivered.
+// Resume what a breaker paused: held messages of a pair are delivered. A chat stopped by its daily
+// budget would only trip again, so it gets "Allow more today" instead.
 import { ref } from "vue";
+import BudgetRaise from "./BudgetRaise.vue";
 import { call } from "../../api/client";
 import { confirm } from "../../confirm";
 import { notifyError, notifySuccess } from "../../notify";
 import { refreshStatus } from "../../store";
 
-const props = defineProps<{ subject: string; size?: "xs" | "sm" }>();
+const props = defineProps<{ subject: string; kind?: string; size?: "xs" | "sm" }>();
 const busy = ref(false);
 
 async function resume() {
@@ -32,7 +34,9 @@ async function resume() {
 </script>
 
 <template>
+  <BudgetRaise v-if="kind === 'budget' && subject.startsWith('instance:')" :chat="subject.slice('instance:'.length)" :size="size" />
   <UButton
+    v-else
     :size="size ?? 'sm'"
     color="warning"
     variant="solid"

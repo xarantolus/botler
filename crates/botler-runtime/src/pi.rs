@@ -243,6 +243,11 @@ impl PiClient {
         self.command(json!({ "type": "get_state" })).await
     }
 
+    /// Whether pi is compacting (it refuses prompts meanwhile).
+    pub async fn is_compacting(&self) -> Result<bool> {
+        Ok(self.state().await?.get("isCompacting").and_then(Value::as_bool).unwrap_or(false))
+    }
+
     /// Whether pi is currently running (streaming or compacting).
     pub async fn is_busy(&self) -> Result<bool> {
         let s = self.state().await?;

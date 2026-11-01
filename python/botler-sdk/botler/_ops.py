@@ -275,6 +275,17 @@ def clear_chat(*, chat: str) -> dict[str, Any]:
     return call("clear_chat", {"chat": chat})
 
 
+def raise_budget(*, chat: str, usd: float | None = None, tokens: int | None = None) -> dict[str, Any]:
+    """Allow a chat more than its daily budget, for today only (the definition is unchanged), and resume it if the budget had stopped it.
+
+    Args:
+        chat: The chat (name or slug).
+        usd: Dollars more today.
+        tokens: Tokens more today (for a budget in tokens).
+    """
+    return call("raise_budget", {"chat": chat, "usd": usd, "tokens": tokens})
+
+
 def pin_chat(*, chat: str, pinned: bool) -> dict[str, Any]:
     """Pin a chat to the top of the list (right after the front door), or unpin it.
 

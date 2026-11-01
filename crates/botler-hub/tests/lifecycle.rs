@@ -361,3 +361,64 @@ async fn an_agent_waits_through_the_hub_instead_of_a_shell() {
     let long = ops::call(&e.hub, &agent, "wait", json!({"in": "3d", "reason": "x"})).await;
     assert!(long.unwrap_err().to_string().contains("at most a day"));
 }
+
+#[tokio::test]
+async fn a_chat_that_was_quiet_for_long_is_compacted_before_its_next_turn() {
+    let e = setup().await;
+    let toml = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template/botler.toml")).unwrap();
+    let toml = toml.replace("[defaults]\n", "[defaults]\ncompact_after_idle = \"1s\"\n");
+    e.commit(&[("botler.toml", toml.as_str())]).await;
+    let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    user_says(&e, &chat, "hi").await;
+    pump(&e).await;
+    e.fake.set_context_tokens(&chat, 100_000);
+    user_says(&e, &chat, "right away").await;
+    pump(&e).await;
+    assert_eq!(e.fake.compactions(&chat), 0, "a chat in use is not compacted");
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    user_says(&e, &chat, "much later").await;
+    pump(&e).await;
+    assert_eq!(e.fake.compactions(&chat), 1);
+    assert!(e.hub.store.pending_deliveries(&chat).await.unwrap().is_empty(), "the message went in after it");
+    // A small context is left alone.
+    e.fake.set_context_tokens(&chat, 10_000);
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    user_says(&e, &chat, "again").await;
+    pump(&e).await;
+    assert_eq!(e.fake.compactions(&chat), 1);
+}
+
+#[tokio::test]
+async fn the_user_allows_a_chat_over_its_budget_more_for_today() {
+    let e = setup().await;
+    let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    // The template's default budget is $1 a day.
+    e.hub.store.record_usage(&chat, Utc::now(), "m", 0, 1.5).await.unwrap();
+    user_says(&e, &chat, "hi").await;
+    pump(&e).await;
+    let subject = format!("instance:{chat}");
+    assert_eq!(e.hub.store.breaker(&subject).await.unwrap().unwrap().kind, "budget");
+
+    let out = ops::call(&e.hub, &user(), "raise_budget", json!({"chat": chat, "usd": 0.2})).await.unwrap();
+    assert!((out["usd_per_day"].as_f64().unwrap() - 1.2).abs() < 1e-9);
+    assert!(e.hub.store.breaker(&subject).await.unwrap().is_some(), "still over: it stays stopped");
+    let out = ops::call(&e.hub, &user(), "raise_budget", json!({"chat": chat, "usd": 1.0})).await.unwrap();
+    assert!((out["usd_per_day"].as_f64().unwrap() - 2.2).abs() < 1e-9, "raises add up");
+    assert!(e.hub.store.breaker(&subject).await.unwrap().is_none(), "resumed");
+
+    user_says(&e, &chat, "go on").await;
+    pump(&e).await;
+    assert!(e.hub.store.breaker(&subject).await.unwrap().is_none());
+    assert!(e.hub.store.pending_deliveries(&chat).await.unwrap().is_empty());
+    // Only for today: the definition's budget is unchanged.
+    assert_eq!(e.hub.applied().await.defs.instance.defaults.budget.usd_per_day, Some(1.0));
+    let agent_caller = Caller {
+        principal: Principal::Agent { instance: chat.clone(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    assert!(
+        ops::call(&e.hub, &agent_caller, "raise_budget", json!({"chat": chat, "usd": 5.0})).await.is_err(),
+        "agents cannot"
+    );
+}

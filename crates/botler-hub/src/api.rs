@@ -685,7 +685,17 @@ async fn session(
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no chat {instance}")))?;
     let busy = hub.agents.get(&inst.name).await.is_some_and(|a| a.busy());
-    let pending = hub.store.pending_deliveries(&inst.name).await?.len();
+    let deliveries = hub.store.pending_deliveries(&inst.name).await?;
+    let pending = deliveries.len();
+    let mut handover = None;
+    for d in &deliveries {
+        let ev = hub.store.event(&d.event_id).await?;
+        if ev.kind == botler_core::event::kinds::SESSION_STARTED {
+            handover = Some(serde_json::from_value(ev.payload).map_err(|e| {
+                ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("handover report {} is unreadable: {e}", ev.id))
+            })?);
+        }
+    }
     let phase = hub.agents.phase(&inst.name).await;
     let items = crate::sessions::read(&hub, &inst.name, q.file.as_deref()).await?;
     let sessions = crate::sessions::files(&hub, &inst.name).await?;
@@ -693,7 +703,18 @@ async fn session(
     let tool_renders =
         hub.applied().await.defs.tools.values().filter_map(|t| Some((t.pi_name(), t.render.clone()?))).collect();
     let queued = queued(&hub, &inst.name, &items).await?;
-    Ok(Json(SessionView { instance: inst, busy, pending, phase, items, tool_renders, queued, sessions, file }))
+    Ok(Json(SessionView {
+        instance: inst,
+        busy,
+        pending,
+        phase,
+        items,
+        tool_renders,
+        queued,
+        sessions,
+        file,
+        handover,
+    }))
 }
 
 #[derive(Deserialize, ts_rs::TS)]

@@ -243,6 +243,17 @@ pub struct Defaults {
     /// their context exceeds this many tokens; 0 turns it off.
     #[serde(default = "Defaults::rollover_tokens")]
     pub rollover_tokens: u64,
+    /// Agents compact their context (summarize older turns) once it holds about this many tokens,
+    /// instead of near the model's full window: every call resends the context, so a long one is
+    /// what costs. 0 compacts only near the model's window.
+    #[serde(default = "Defaults::compact_at")]
+    pub compact_at: u64,
+    /// A chat whose last message is older than this is compacted before its next turn (its old
+    /// context is no longer cached, so every call of that turn would pay for it in full), or
+    /// `"never"`.
+    #[serde(default = "Defaults::compact_after_idle", with = "never_or_duration")]
+    #[schemars(with = "String")]
+    pub compact_after_idle: Option<HumanDuration>,
     /// ...or when their session has been compacted this many times; 0 turns it off.
     #[serde(default = "Defaults::rollover_compactions")]
     pub rollover_compactions: u32,
@@ -290,6 +301,12 @@ impl Defaults {
     fn rollover_tokens() -> u64 {
         150_000
     }
+    fn compact_at() -> u64 {
+        150_000
+    }
+    fn compact_after_idle() -> Option<HumanDuration> {
+        Some(HumanDuration::from_secs(4 * 3600))
+    }
     fn rollover_compactions() -> u32 {
         3
     }
@@ -308,6 +325,8 @@ impl Default for Defaults {
             auto_archive_after: Self::auto_archive_after(),
             reply_within: Self::reply_within(),
             rollover_tokens: Self::rollover_tokens(),
+            compact_at: Self::compact_at(),
+            compact_after_idle: Self::compact_after_idle(),
             rollover_compactions: Self::rollover_compactions(),
             memory_checkpoint: Self::memory_checkpoint(),
         }
@@ -364,6 +383,10 @@ pub struct Agent {
     pub env: Environment,
     #[serde(default)]
     pub idle_timeout: Option<HumanDuration>,
+    /// Compact at about this many tokens instead of `defaults.compact_at` (e.g. more for coding
+    /// agents that need to keep a lot in view); 0: near the model's window.
+    #[serde(default)]
+    pub compact_at: Option<u64>,
     /// Keep this agent's pi session running at all times (persistent agents only), e.g. `botler`.
     #[serde(default)]
     pub always_on: bool,

@@ -9,6 +9,7 @@ import type { ArchiveRequest } from "./ArchiveRequest";
 import type { BindingRevoked } from "./BindingRevoked";
 import type { BotlerEvent } from "./BotlerEvent";
 import type { BreakerCleared } from "./BreakerCleared";
+import type { BudgetRaised } from "./BudgetRaised";
 import type { Cancelled } from "./Cancelled";
 import type { CatalogView } from "./CatalogView";
 import type { ChannelsView } from "./ChannelsView";
@@ -70,6 +71,7 @@ import type { ProposalDetail } from "./ProposalDetail";
 import type { ProposalDiff } from "./ProposalDiff";
 import type { ProposalVerdict } from "./ProposalVerdict";
 import type { ProposalView } from "./ProposalView";
+import type { RaiseBudget } from "./RaiseBudget";
 import type { ReadDocument } from "./ReadDocument";
 import type { RenameChat } from "./RenameChat";
 import type { RestartService } from "./RestartService";
@@ -173,6 +175,7 @@ export interface Routes {
   handover: { method: "POST"; path: "/api/v1/ops/handover"; params: Record<string, never>; query: never; body: Handover; response: HandoverRequested };
   compact_chat: { method: "POST"; path: "/api/v1/ops/compact_chat"; params: Record<string, never>; query: never; body: CompactChat; response: ChatDone };
   clear_chat: { method: "POST"; path: "/api/v1/ops/clear_chat"; params: Record<string, never>; query: never; body: ClearChat; response: ChatDone };
+  raise_budget: { method: "POST"; path: "/api/v1/ops/raise_budget"; params: Record<string, never>; query: never; body: RaiseBudget; response: BudgetRaised };
   pin_chat: { method: "POST"; path: "/api/v1/ops/pin_chat"; params: Record<string, never>; query: never; body: PinChat; response: ChatDone };
   rename_chat: { method: "POST"; path: "/api/v1/ops/rename_chat"; params: Record<string, never>; query: never; body: RenameChat; response: ChatDone };
   list_documents: { method: "POST"; path: "/api/v1/ops/list_documents"; params: Record<string, never>; query: never; body: ListDocuments; response: Array<DocumentSummary> };
@@ -247,6 +250,7 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   handover: { method: "POST", path: "/api/v1/ops/handover" },
   compact_chat: { method: "POST", path: "/api/v1/ops/compact_chat" },
   clear_chat: { method: "POST", path: "/api/v1/ops/clear_chat" },
+  raise_budget: { method: "POST", path: "/api/v1/ops/raise_budget" },
   pin_chat: { method: "POST", path: "/api/v1/ops/pin_chat" },
   rename_chat: { method: "POST", path: "/api/v1/ops/rename_chat" },
   list_documents: { method: "POST", path: "/api/v1/ops/list_documents" },

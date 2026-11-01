@@ -28,5 +28,13 @@ watch(
   <UApp :toaster="{ position: 'bottom-right', duration: 6000 }" :tooltip="{ delayDuration: 250 }">
     <AppShell v-if="state.authed" />
     <LoginView v-else-if="state.authChecked" />
+    <UEmpty
+      v-else-if="state.unreachable"
+      icon="i-lucide-wifi-off"
+      title="Cannot reach the hub"
+      :description="`${state.unreachable}. Trying again…`"
+      variant="naked"
+      class="h-full"
+    />
   </UApp>
 </template>

@@ -32,6 +32,31 @@ impl Store {
         Ok(())
     }
 
+    /// Allow `instance` `usd` and `tokens` more on `day` (a local date); adds to earlier raises.
+    pub async fn add_budget_extra(&self, instance: &str, day: &str, usd: f64, tokens: i64) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO budget_extra (instance, day, usd, tokens) VALUES (?, ?, ?, ?) \
+             ON CONFLICT (instance, day) DO UPDATE SET usd = usd + excluded.usd, tokens = tokens + excluded.tokens",
+        )
+        .bind(instance)
+        .bind(day)
+        .bind(usd)
+        .bind(tokens)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// What the user allowed `instance` on top of its budget on `day`: (usd, tokens).
+    pub async fn budget_extra(&self, instance: &str, day: &str) -> Result<(f64, i64)> {
+        let r = sqlx::query("SELECT usd, tokens FROM budget_extra WHERE instance = ? AND day = ?")
+            .bind(instance)
+            .bind(day)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(r.map_or((0.0, 0), |r| (r.get("usd"), r.get("tokens"))))
+    }
+
     /// Totals since `since`, for one instance or (with `None`) for everything.
     pub async fn usage_since(&self, instance: Option<&str>, since: DateTime<Utc>) -> Result<UsageTotals> {
         const SELECT: &str =

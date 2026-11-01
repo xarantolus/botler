@@ -252,6 +252,9 @@ pub struct SessionView {
     pub sessions: Vec<String>,
     /// The session file shown.
     pub file: String,
+    /// The handover report waiting to open the current session (it lands when the agent next
+    /// wakes); shown while the fresh session is still empty.
+    pub handover: Option<botler_core::payloads::SessionStartedPayload>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -449,6 +452,7 @@ routes! {
         handover: Handover;
         compact_chat: crate::ops::CompactChat;
         clear_chat: crate::ops::ClearChat;
+        raise_budget: crate::ops::RaiseBudget;
         pin_chat: crate::ops::PinChat;
         rename_chat: crate::ops::RenameChat;
         list_documents: crate::ops::ListDocuments;

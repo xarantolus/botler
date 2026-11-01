@@ -54,7 +54,7 @@ onMounted(async () => {
       </div>
     </template>
     <template v-if="tripped" #actions>
-      <BreakerResume :subject="payload.subject" size="xs" />
+      <BreakerResume :subject="payload.subject" :kind="state.status?.breakers.find((b) => b.subject === payload!.subject)?.kind" size="xs" />
     </template>
   </UAlert>
 </template>

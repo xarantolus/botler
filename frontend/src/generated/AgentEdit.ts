@@ -11,4 +11,8 @@ model: string | null, tools: Array<string>, mcp: Array<string>,
 /**
  * e.g. "30m"; null: `defaults.idle_timeout`.
  */
-idle_timeout: string | null, };
+idle_timeout: string | null, 
+/**
+ * Tokens; null: `defaults.compact_at`.
+ */
+compact_at: number | null, };

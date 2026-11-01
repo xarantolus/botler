@@ -71,6 +71,8 @@ pub struct AgentEdit {
     pub mcp: Vec<String>,
     /// e.g. "30m"; null: `defaults.idle_timeout`.
     pub idle_timeout: Option<String>,
+    /// Tokens; null: `defaults.compact_at`.
+    pub compact_at: Option<u64>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -134,6 +136,7 @@ fn agent_edit(a: &botler_core::defs::Agent) -> AgentEdit {
         tools: a.env.tools.clone(),
         mcp: a.env.mcp.clone(),
         idle_timeout: a.idle_timeout.map(|d| d.to_string()),
+        compact_at: a.compact_at,
     }
 }
 

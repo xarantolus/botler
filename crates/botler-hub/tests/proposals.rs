@@ -264,14 +264,26 @@ async fn an_early_approval_of_another_patch_is_dropped_and_it_is_reviewed() {
     let p = wait_for(&e, &p.id, &[ProposalStatus::Reviewing, ProposalStatus::Merged]).await;
     assert_eq!(p.status, ProposalStatus::Reviewing);
     assert_eq!(p.approved_patch, None);
-    e.route().await;
-    let updates = e
-        .hub
-        .store
-        .events(&botler_store::EventQuery { kind: Some("proposal.updated".into()), limit: 20, ..Default::default() })
-        .await
-        .unwrap();
-    assert!(updates.iter().any(|u| u.payload["detail"].as_str().unwrap().contains("does not carry over")));
+    // The status moves before the update is journaled.
+    let mut said = false;
+    for _ in 0..50 {
+        let updates = e
+            .hub
+            .store
+            .events(&botler_store::EventQuery {
+                kind: Some("proposal.updated".into()),
+                limit: 20,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        said = updates.iter().any(|u| u.payload["detail"].as_str().unwrap().contains("does not carry over"));
+        if said {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(said);
     // The reviewer decides again.
     approve(&e, &p).await;
     assert_eq!(wait_for(&e, &p.id, &[ProposalStatus::Merged]).await.status, ProposalStatus::Merged);

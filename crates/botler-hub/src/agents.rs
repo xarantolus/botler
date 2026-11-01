@@ -271,6 +271,13 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
         agent.changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(notes);
         agent.mounts_reported.store(true, Ordering::SeqCst);
     }
+    // pi refuses prompts while it compacts: the deliveries wait for the loop's next round.
+    if agent.pi.is_compacting().await? {
+        return Ok(());
+    }
+    if compact_if_idle(hub, &agent).await? {
+        return Ok(());
+    }
     // A turn this loop started may not show as busy yet: queued messages wait for it too.
     let mut started = false;
     let changes = std::mem::take(&mut *agent.changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
@@ -287,6 +294,40 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
         started |= deliver_one(hub, &agent, &d, started).await?;
     }
     Ok(())
+}
+
+/// Below this, compacting saves next to nothing (pi keeps the recent ~20k tokens anyway).
+const IDLE_COMPACT_FLOOR: u64 = 40_000;
+
+/// Compact a chat that wakes for a turn after `defaults.compact_after_idle` without messages:
+/// that turn would resend its whole old context, no longer cached, on every call. Returns whether
+/// pi is still compacting (the deliveries then wait for it).
+async fn compact_if_idle(hub: &Hub, agent: &LiveAgent) -> Result<bool> {
+    let Some(after) = hub.applied().await.defs.instance.defaults.compact_after_idle else { return Ok(false) };
+    if !hub.store.pending_deliveries(&agent.instance).await?.iter().any(|d| !d.quiet) || agent.pi.is_busy().await? {
+        return Ok(false);
+    }
+    let Some(last) = hub.store.last_delivered(&agent.instance).await?.and_then(|d| d.delivered_at) else {
+        return Ok(false);
+    };
+    if Utc::now() - last < after.as_chrono() {
+        return Ok(false);
+    }
+    let stats = agent.pi.session_stats().await?;
+    let tokens = stats.pointer("/contextUsage/tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    if tokens < IDLE_COMPACT_FLOOR {
+        return Ok(false);
+    }
+    tracing::info!(instance = %agent.instance, tokens, %after, "idle chat: compacting before its next turn");
+    match agent.pi.compact().await {
+        Ok(()) => Ok(false),
+        Err(PiError::Timeout { .. }) => Ok(true),
+        // The turn goes ahead on the full context.
+        Err(e) => {
+            tracing::warn!(instance = %agent.instance, error = %e, "could not compact the idle chat");
+            Ok(false)
+        }
+    }
 }
 
 /// A message the user queued: held (pending, cancellable) until the agent's whole run ends. One
@@ -746,7 +787,9 @@ async fn container_spec(
     if let Some(u) = &route.base_url {
         provider.insert("baseUrl".into(), json!(u));
     }
-    let model = crate::model_catalog::pi_model(&route, crate::model_catalog::known(hub, &route).await.as_ref());
+    let known = crate::model_catalog::known(hub, &route).await;
+    let compact_at = def.spec.compact_at.unwrap_or(applied.defs.instance.defaults.compact_at);
+    let model = crate::model_catalog::pi_model(&route, known.as_ref(), compact_at);
     provider.insert("modelOverrides".into(), json!({ route.id.clone(): model }));
     let models = json!({ "providers": { route.provider.clone(): provider } });
     let mut servers = serde_json::Map::new();
@@ -1006,25 +1049,34 @@ async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
     Ok(())
 }
 
-/// Record usage and stop the agent when it exceeds its budget (stop and report, never truncate).
-async fn meter(hub: &Hub, agent: &LiveAgent, u: &botler_runtime::Usage) -> Result<()> {
+/// A chat's budget for today (its own or the default, plus what the user allowed on top today),
+/// what it used today, and today's local date.
+pub async fn budget_today(hub: &Hub, instance: &str) -> Result<(Budget, botler_store::UsageTotals, String)> {
     let now = Utc::now();
-    hub.store.record_usage(&agent.instance, now, &u.model, u.total_tokens, u.cost_usd).await?;
-    let instance = hub.store.instance(&agent.instance).await?;
+    let inst = hub.store.instance(instance).await?;
     let applied = hub.applied().await;
-    let budget: Budget = applied
+    let mut budget: Budget = applied
         .defs
         .agents
-        .get(&instance.definition)
+        .get(&inst.definition)
         .and_then(|d| d.spec.budget.clone())
         .unwrap_or_else(|| applied.defs.instance.defaults.budget.clone());
-    let day_start = now
-        .with_timezone(&applied.defs.timezone)
-        .date_naive()
+    let local = now.with_timezone(&applied.defs.timezone).date_naive();
+    let day_start = local
         .and_hms_opt(0, 0, 0)
         .and_then(|t| t.and_local_timezone(applied.defs.timezone).earliest())
         .map_or(now - Duration::hours(24), |t| t.with_timezone(&Utc));
-    let today = hub.store.usage_since(Some(&agent.instance), day_start).await?;
+    let day = local.to_string();
+    let (usd, tokens) = hub.store.budget_extra(instance, &day).await?;
+    budget.usd_per_day = budget.usd_per_day.map(|b| b + usd);
+    budget.tokens_per_day = budget.tokens_per_day.map(|b| b + u64::try_from(tokens).unwrap_or(0));
+    Ok((budget, hub.store.usage_since(Some(instance), day_start).await?, day))
+}
+
+/// Record usage and stop the agent when it exceeds its budget (stop and report, never truncate).
+async fn meter(hub: &Hub, agent: &LiveAgent, u: &botler_runtime::Usage) -> Result<()> {
+    hub.store.record_usage(&agent.instance, Utc::now(), &u.model, u.total_tokens, u.cost_usd).await?;
+    let (budget, today, _) = budget_today(hub, &agent.instance).await?;
     let over = match (budget.usd_per_day, budget.tokens_per_day) {
         (Some(usd), _) if today.cost_usd > usd => {
             Some(format!("spent ${:.2} today (budget ${usd:.2})", today.cost_usd))
@@ -1043,7 +1095,10 @@ async fn meter(hub: &Hub, agent: &LiveAgent, u: &botler_runtime::Usage) -> Resul
         }
         alarm(
             hub,
-            &format!("Agent `{}` {reason} and was stopped. Clear its breaker to let it continue.", agent.instance),
+            &format!(
+                "Agent `{}` {reason} and was stopped. Allow it more for today, or raise its budget.",
+                agent.instance
+            ),
         )
         .await?;
     }

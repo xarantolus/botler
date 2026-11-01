@@ -25,6 +25,8 @@ export interface AppState {
   authed: boolean;
   /** Whether the start-up check for a session has finished (until then, show nothing). */
   authChecked: boolean;
+  /** Why the hub did not answer the sign-in check (it is retried), if it did not. */
+  unreachable: string | null;
   connection: Connection;
   status: HubStatus | null;
   usage: Usage | null;
@@ -54,6 +56,7 @@ const plainReactive = reactive as <T extends object>(target: T) => T;
 export const state = plainReactive<AppState>({
   authed: false,
   authChecked: false,
+  unreachable: null,
   connection: "connecting",
   status: null,
   usage: null,
@@ -254,15 +257,23 @@ export function refreshAll() {
   ]);
 }
 
-/** Whether this browser is signed in (a session cookie or a stored token): checked once at start. */
+/** Whether this browser is signed in (a session cookie or a stored token): checked at start. A
+ * hub that does not answer (restarting, or the network) is retried, not taken for signed out. */
 export async function checkSignedIn(): Promise<void> {
   try {
     state.status = await call("status", {});
     state.authed = true;
-  } catch {
-    state.authed = false;
-  } finally {
+    state.unreachable = null;
     state.authChecked = true;
+  } catch (e) {
+    if (e instanceof Unauthorized) {
+      state.authed = false;
+      state.unreachable = null;
+      state.authChecked = true;
+      return;
+    }
+    state.unreachable = e instanceof Error ? e.message : String(e);
+    setTimeout(() => void checkSignedIn(), 3000);
   }
 }
 

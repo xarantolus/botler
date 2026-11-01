@@ -864,6 +864,10 @@ async fn fail(hub: &Hub, id: &str, why: &str) -> Result<()> {
     update(hub, id, "failed", why).await
 }
 
+/// Steps on the way to an outcome: the proposing agent reads them with whatever wakes it next
+/// (each would otherwise be a whole turn over its context); outcomes wake it.
+const PROGRESS: [&str; 4] = ["reviewing", "gating", "approved", "awaiting_user"];
+
 /// Report progress to the proposing agent (and live viewers).
 async fn update(hub: &Hub, id: &str, status: &str, detail: &str) -> Result<()> {
     broadcast(hub, id).await?;
@@ -876,6 +880,9 @@ async fn update(hub: &Hub, id: &str, status: &str, detail: &str) -> Result<()> {
         summary: None,
         reason: p.decision_reason,
     });
+    if PROGRESS.contains(&status) {
+        return crate::router::note(hub, &p.instance, payload).await;
+    }
     let ev = crate::hub::builtin(payload, Source::Hub)?.to(p.instance.clone());
     hub.emit(ev).await?;
     Ok(())
