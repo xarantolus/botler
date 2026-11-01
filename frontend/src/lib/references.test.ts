@@ -28,7 +28,7 @@ describe("references in Markdown", () => {
       ["web-health", "/system?job=web-health", true],
       ["botler", "/chat/botler", true],
       ["claude-code", "/secrets", true],
-      ["dev", "/settings", true],
+      ["dev", "/settings?tab=agents&agent=dev", true],
     ]);
     expect(html).toContain('<a data-ref="" href="/chat/dev-3f2a"><code>dev-3f2a</code></a>');
   });

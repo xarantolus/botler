@@ -137,3 +137,71 @@ impl Op for Handover {
         Ok(HandoverRequested { chat, to, requested })
     }
 }
+
+#[derive(Debug, Serialize, TS)]
+pub struct ChatDone {
+    pub chat: String,
+    pub note: String,
+}
+
+async fn chat_named(hub: &Hub, chat: &str) -> Result<botler_store::Instance, OpError> {
+    let inst =
+        hub.store.resolve_instance(chat).await?.ok_or_else(|| OpError::BadRequest(format!("no chat named {chat}")))?;
+    if inst.state == botler_store::InstanceState::Archived {
+        return Err(OpError::BadRequest(format!("{} is archived; restore it first", inst.name)));
+    }
+    Ok(inst)
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct CompactChat {
+    /// The chat (name or slug).
+    pub chat: String,
+}
+
+impl Op for CompactChat {
+    const NAME: &'static str = "compact_chat";
+    const DESCRIPTION: &'static str = "Compact a chat's conversation now: pi summarizes the older part and the chat goes on from the summary (`/compact`).";
+    const WHO: Who = Who::User;
+    type Output = ChatDone;
+
+    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<ChatDone, OpError> {
+        let inst = chat_named(hub, &self.chat).await?;
+        let agent = crate::agents::ensure_awake(hub, &inst).await?;
+        if agent.busy() {
+            return Err(OpError::BadRequest("it is working; compact once its turn ends, or stop it".into()));
+        }
+        let note = match agent.pi.compact().await {
+            Ok(()) => "Compacted.".into(),
+            // pi keeps compacting; its compaction_end shows in the chat when it is done.
+            Err(botler_runtime::PiError::Timeout { .. }) => "Still compacting; the chat shows when it is done.".into(),
+            Err(e) => return Err(crate::hub::HubError::from(e).into()),
+        };
+        Ok(ChatDone { chat: inst.name, note })
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct ClearChat {
+    /// The chat (name or slug).
+    pub chat: String,
+}
+
+impl Op for ClearChat {
+    const NAME: &'static str = "clear_chat";
+    const DESCRIPTION: &'static str = "Start a chat over on an empty session, carrying nothing over (`/clear`). Its home, memory and the old session stay; `handover` instead carries a report over.";
+    const WHO: Who = Who::User;
+    type Output = ChatDone;
+
+    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<ChatDone, OpError> {
+        let inst = chat_named(hub, &self.chat).await?;
+        let report = botler_store::HandoverReport {
+            summary: "The user cleared the chat: a fresh start, nothing carried over from the previous session.".into(),
+            outstanding: Vec::new(),
+            state: Vec::new(),
+            handoff: None,
+        };
+        crate::handover::rollover(hub, &inst.name, &report).await?;
+        Ok(ChatDone { chat: inst.name, note: "Cleared: the chat continues on an empty session.".into() })
+    }
+}

@@ -38,7 +38,7 @@ export function references(k: Known): References {
   const prose = new Map<string, string>();
   // Later kinds win a name they share with an earlier one (a chat over its definition).
   for (const g of k.secretGroups) exact.set(g, "/secrets");
-  for (const a of k.agents) exact.set(a, "/settings");
+  for (const a of k.agents) exact.set(a, `/settings?tab=agents&agent=${encodeURIComponent(a)}`);
   for (const j of k.jobs) exact.set(j, `/system?job=${encodeURIComponent(j)}`);
   for (const d of k.dialogs) prose.set(d.id, "/requests");
   for (const p of k.proposals) prose.set(p.id, `/proposals/${encodeURIComponent(p.id)}`);

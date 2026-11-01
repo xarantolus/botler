@@ -255,3 +255,18 @@ async fn a_turn_the_hub_aborted_is_not_a_failure_to_retry() {
     assert!(!agent.busy());
     assert!(e.hub.store.turn_retry(&chat).await.unwrap().is_none(), "the abort is not retried");
 }
+
+#[tokio::test]
+async fn compact_and_clear_from_the_composer() {
+    let e = setup().await;
+    let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let out = ops::call(&e.hub, &user(), "compact_chat", json!({"chat": chat})).await.unwrap();
+    assert_eq!(out["note"], "Compacted.");
+    assert_eq!(e.fake.compactions(&chat), 1);
+
+    let before = e.hub.store.instance(&chat).await.unwrap().session_file;
+    ops::call(&e.hub, &user(), "clear_chat", json!({"chat": chat})).await.unwrap();
+    let after = e.hub.store.instance(&chat).await.unwrap().session_file;
+    assert_ne!(before, after, "a fresh session");
+    assert!(ops::call(&e.hub, &user(), "clear_chat", json!({"chat": "nope"})).await.is_err());
+}

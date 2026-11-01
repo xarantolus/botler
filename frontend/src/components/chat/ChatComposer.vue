@@ -6,12 +6,16 @@
 // restores it; one to a sleeping agent wakes it. Files attach with the paperclip, by dropping
 // them on the composer or by pasting (images): each uploads right away and goes with the message.
 // The draft and its uploaded files are kept per chat in this browser (lib/drafts.ts) until sent.
+// `/compact`, `/new` and `/clear` (lib/commands.ts) are run by the app instead of being sent.
 import { computed, reactive, ref, useTemplateRef, watch } from "vue";
 import { call, upload } from "../../api/client";
+import { handoverChat } from "../../chatActions";
+import { confirm } from "../../confirm";
+import { commandOf, suggestions, type Command } from "../../lib/commands";
 import type { SendMode } from "../../generated";
 import { loadDraft, saveDraft } from "../../lib/drafts";
 import { bytes } from "../../lib/time";
-import { notifyError } from "../../notify";
+import { notifyError, notifySuccess } from "../../notify";
 import { shell } from "../../shell";
 import { refreshSession } from "../../store";
 
@@ -100,8 +104,45 @@ function onPaste(e: ClipboardEvent) {
   attach(files.map((f) => (f.name && f.name !== "image.png" ? f : new File([f], `pasted-${stamp}.${f.type.split("/")[1] ?? "png"}`, { type: f.type }))));
 }
 
+const suggested = computed(() => (attachments.length ? [] : suggestions(draft.value)));
+function complete(c: Command) {
+  draft.value = `/${c.name}`;
+  prompt.value?.textareaRef?.focus();
+}
+
+/** Run a slash command for this chat. */
+async function run(c: Command) {
+  const chat = props.instance;
+  if (c.name === "new") {
+    draft.value = "";
+    return await handoverChat(chat);
+  }
+  if (c.name === "clear") {
+    const ok = await confirm({
+      title: "Clear this chat?",
+      description: "It continues on an empty session; nothing of this conversation is carried over. The old session stays readable, its home and memory stay.",
+      confirmLabel: "Clear",
+      color: "warning",
+    });
+    if (!ok) return;
+  }
+  sending.value = true;
+  try {
+    const r = await call(c.name === "clear" ? "clear_chat" : "compact_chat", { body: { chat } });
+    draft.value = "";
+    notifySuccess(c.name === "clear" ? "Cleared" : "Compact", r.note);
+    await refreshSession(chat);
+  } catch (e) {
+    notifyError(`Could not ${c.name}`, e);
+  } finally {
+    sending.value = false;
+  }
+}
+
 async function send(mode: SendMode) {
   if (!canSend.value || sending.value) return;
+  const command = attachments.length ? null : commandOf(draft.value);
+  if (command) return await run(command);
   const text = draft.value.trim();
   const files = attachments.flatMap((a) => (a.file ? [a.file] : []));
   const to = props.instance;
@@ -141,6 +182,18 @@ defineExpose({ focus: () => prompt.value?.textareaRef?.focus() });
     >
       Drop to attach
     </div>
+    <ul
+      v-if="suggested.length"
+      class="absolute inset-x-0 bottom-full z-10 mb-1 overflow-hidden rounded-md border border-default bg-default text-sm shadow-sm"
+      aria-label="Commands"
+    >
+      <li v-for="c in suggested" :key="c.name">
+        <button type="button" class="flex w-full items-baseline gap-2 px-3 py-1.5 text-start hover:bg-elevated" @click="complete(c)">
+          <span class="font-mono text-highlighted">/{{ c.name }}</span>
+          <span class="truncate text-muted">{{ c.description }}</span>
+        </button>
+      </li>
+    </ul>
     <UChatPrompt
       ref="prompt"
       v-model="draft"
@@ -153,6 +206,7 @@ defineExpose({ focus: () => prompt.value?.textareaRef?.focus() });
       @submit="send('steer')"
       @paste="onPaste"
       @keydown.enter.exact="sendFiles"
+      @keydown.tab.exact="(e: KeyboardEvent) => suggested.length && (e.preventDefault(), complete(suggested[0]!))"
       @keydown.enter.ctrl.exact.prevent="send('queue')"
       @keydown.enter.meta.exact.prevent="send('queue')"
     >

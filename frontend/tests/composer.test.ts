@@ -102,6 +102,20 @@ describe("ChatComposer drafts", () => {
   });
 });
 
+describe("ChatComposer slash commands", () => {
+  it("suggests commands and runs /compact instead of sending it", async () => {
+    const w = await mountInApp(ChatComposer, { instance: "botler", archived: false, busy: false });
+    await w.find("textarea").setValue("/c");
+    expect(w.find("[aria-label=Commands]").text()).toContain("/compact");
+    await w.find("textarea").setValue("/compact");
+    await w.find("form").trigger("submit");
+    await flushPromises();
+    expect(calls.map((c) => c.name)).toContain("compact_chat");
+    expect(calls.some((c) => c.name === "send_message")).toBe(false);
+    expect((w.find("textarea").element as HTMLTextAreaElement).value).toBe("");
+  });
+});
+
 describe("ChatComposer while the agent works", () => {
   const modes = () => calls.filter((c) => c.name === "send_message").map((c) => (c.args as { body: { mode: string } }).body.mode);
 

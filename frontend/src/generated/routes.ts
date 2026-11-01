@@ -13,12 +13,15 @@ import type { Cancelled } from "./Cancelled";
 import type { CatalogView } from "./CatalogView";
 import type { ChannelsView } from "./ChannelsView";
 import type { ChatCreated } from "./ChatCreated";
+import type { ChatDone } from "./ChatDone";
 import type { ChatForked } from "./ChatForked";
 import type { ChatRestored } from "./ChatRestored";
 import type { ChatsStopped } from "./ChatsStopped";
 import type { ClearBreaker } from "./ClearBreaker";
+import type { ClearChat } from "./ClearChat";
 import type { ClearChatCaches } from "./ClearChatCaches";
 import type { CollectGarbage } from "./CollectGarbage";
+import type { CompactChat } from "./CompactChat";
 import type { Connections } from "./Connections";
 import type { DeleteChat } from "./DeleteChat";
 import type { DeviceRevoked } from "./DeviceRevoked";
@@ -158,6 +161,8 @@ export interface Routes {
   restart_service: { method: "POST"; path: "/api/v1/ops/restart_service"; params: Record<string, never>; query: never; body: RestartService; response: ServiceRestarted };
   stop_chat: { method: "POST"; path: "/api/v1/ops/stop_chat"; params: Record<string, never>; query: never; body: StopChat; response: ChatsStopped };
   handover: { method: "POST"; path: "/api/v1/ops/handover"; params: Record<string, never>; query: never; body: Handover; response: HandoverRequested };
+  compact_chat: { method: "POST"; path: "/api/v1/ops/compact_chat"; params: Record<string, never>; query: never; body: CompactChat; response: ChatDone };
+  clear_chat: { method: "POST"; path: "/api/v1/ops/clear_chat"; params: Record<string, never>; query: never; body: ClearChat; response: ChatDone };
   session_tree: { method: "POST"; path: "/api/v1/ops/session_tree"; params: Record<string, never>; query: never; body: GetSessionTree; response: SessionTree };
   goto_entry: { method: "POST"; path: "/api/v1/ops/goto_entry"; params: Record<string, never>; query: never; body: GotoEntry; response: EntryDone };
   label_entry: { method: "POST"; path: "/api/v1/ops/label_entry"; params: Record<string, never>; query: never; body: LabelEntry; response: EntryDone };
@@ -224,6 +229,8 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   restart_service: { method: "POST", path: "/api/v1/ops/restart_service" },
   stop_chat: { method: "POST", path: "/api/v1/ops/stop_chat" },
   handover: { method: "POST", path: "/api/v1/ops/handover" },
+  compact_chat: { method: "POST", path: "/api/v1/ops/compact_chat" },
+  clear_chat: { method: "POST", path: "/api/v1/ops/clear_chat" },
   session_tree: { method: "POST", path: "/api/v1/ops/session_tree" },
   goto_entry: { method: "POST", path: "/api/v1/ops/goto_entry" },
   label_entry: { method: "POST", path: "/api/v1/ops/label_entry" },

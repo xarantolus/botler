@@ -447,6 +447,8 @@ routes! {
         restart_service: crate::ops::RestartService;
         stop_chat: StopChat;
         handover: Handover;
+        compact_chat: crate::ops::CompactChat;
+        clear_chat: crate::ops::ClearChat;
         session_tree: GetSessionTree;
         goto_entry: GotoEntry;
         label_entry: LabelEntry;

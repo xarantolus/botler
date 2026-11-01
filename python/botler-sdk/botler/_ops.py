@@ -222,6 +222,24 @@ def handover(*, chat: str, to: str | None = None, reason: str | None = None) -> 
     return call("handover", {"chat": chat, "to": to, "reason": reason})
 
 
+def compact_chat(*, chat: str) -> dict[str, Any]:
+    """Compact a chat's conversation now: pi summarizes the older part and the chat goes on from the summary (`/compact`).
+
+    Args:
+        chat: The chat (name or slug).
+    """
+    return call("compact_chat", {"chat": chat})
+
+
+def clear_chat(*, chat: str) -> dict[str, Any]:
+    """Start a chat over on an empty session, carrying nothing over (`/clear`). Its home, memory and the old session stay; `handover` instead carries a report over.
+
+    Args:
+        chat: The chat (name or slug).
+    """
+    return call("clear_chat", {"chat": chat})
+
+
 def session_tree(*, chat: str) -> dict[str, Any]:
     """A chat's current session as a tree of entries (ids, parents, labels, the active branch)."""
     return call("session_tree", {"chat": chat})

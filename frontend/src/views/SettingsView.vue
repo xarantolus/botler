@@ -3,7 +3,8 @@
 // agent's model, tools, MCP services and idle timeout, and deployment defaults and push. Saving
 // commits only what changed on main, as the user; problems come back per field.
 import type { TabsItem } from "@nuxt/ui";
-import { computed, onMounted, ref, shallowRef } from "vue";
+import { computed, nextTick, onMounted, ref, shallowRef } from "vue";
+import { useRoute } from "vue-router";
 import { call } from "../api/client";
 import ViewPanel from "../components/common/ViewPanel.vue";
 import ChannelsPanel from "../components/settings/ChannelsPanel.vue";
@@ -22,7 +23,10 @@ const errors = ref<FieldError[]>([]);
 const warnings = ref<FieldError[]>([]);
 const loading = ref(false);
 const saving = ref(false);
-const tab = ref("models");
+const route = useRoute();
+// `?tab=agents&agent=<name>` (a mention of an agent definition in a chat) opens its card.
+const tab = ref(typeof route.query.tab === "string" ? route.query.tab : "models");
+const focused = typeof route.query.agent === "string" ? route.query.agent : null;
 const tabs: TabsItem[] = [
   { label: "Models", value: "models", icon: "i-lucide-cpu" },
   { label: "Agents", value: "agents", icon: "i-lucide-bot" },
@@ -41,6 +45,7 @@ async function load() {
     draft.value = draftOf(s);
     errors.value = [];
     warnings.value = s.warnings;
+    if (focused) void nextTick(() => document.getElementById(`agent-${focused}`)?.scrollIntoView({ block: "start" }));
   } catch (e) {
     notifyError("Could not load the settings", e);
   } finally {
@@ -192,7 +197,7 @@ function setPush(on: boolean) {
       </template>
 
       <template v-else-if="tab === 'agents'">
-        <UCard v-for="a in loaded.agents" :key="a.name">
+        <UCard v-for="a in loaded.agents" :id="`agent-${a.name}`" :key="a.name" :class="a.name === focused && 'ring-2 ring-primary'">
           <template #header>
             <p class="font-semibold text-highlighted">{{ a.name }}</p>
             <p class="text-sm text-muted">{{ a.description }}</p>

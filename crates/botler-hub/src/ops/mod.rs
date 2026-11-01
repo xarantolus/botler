@@ -272,6 +272,8 @@ pub static OPS: &[OpSpec] = &[
     op::<CancelRequest>(),
     op::<HandoverReady>(),
     op::<Handover>(),
+    op::<CompactChat>(),
+    op::<ClearChat>(),
     op::<GetSessionTree>(),
     op::<GotoEntry>(),
     op::<LabelEntry>(),
