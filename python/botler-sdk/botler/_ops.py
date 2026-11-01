@@ -52,6 +52,16 @@ def set_timer(*, prompt: str, at: str | None = None, in_: str | None = None, ins
     return call("set_timer", {"prompt": prompt, "at": at, "in": in_, "instance": instance})
 
 
+def wait(*, in_: str, reason: str) -> dict[str, Any]:
+    """Wait instead of sleeping or polling in a shell: your turn ends now, and you wake when anything arrives for you (an event, a message, a trial.finished) or at the latest after `in`, reminded of `reason`. Your container may sleep meanwhile; nothing is lost.
+
+    Args:
+        in_: At most how long, e.g. `10m`, `2h` (up to a day).
+        reason: What you are waiting for, e.g. "the trial of mail-watch"; you are reminded of it.
+    """
+    return call("wait", {"in": in_, "reason": reason})
+
+
 def cancel_timer(*, id: str) -> dict[str, Any]:
     """Cancel a pending timer."""
     return call("cancel_timer", {"id": id})

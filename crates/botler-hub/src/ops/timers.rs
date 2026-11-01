@@ -129,3 +129,47 @@ impl Op for ListTimers {
         Ok(hub.store.pending_timers(mine.as_deref()).await?)
     }
 }
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct Wait {
+    /// At most how long, e.g. `10m`, `2h` (up to a day).
+    #[serde(rename = "in")]
+    pub after: String,
+    /// What you are waiting for, e.g. "the trial of mail-watch"; you are reminded of it.
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct Waiting {
+    pub timer_id: String,
+    pub wakes_at: String,
+    pub note: String,
+}
+
+impl Op for Wait {
+    const NAME: &'static str = "wait";
+    const DESCRIPTION: &'static str = "Wait instead of sleeping or polling in a shell: your turn ends now, and you wake when anything arrives for you (an event, a message, a trial.finished) or at the latest after `in`, reminded of `reason`. Your container may sleep meanwhile; nothing is lost.";
+    const WHO: Who = Who::UserAndAgents;
+    const ENDS_TURN: bool = true;
+    type Output = Waiting;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<Waiting, OpError> {
+        let instance = caller.agent("only agents wait")?.to_string();
+        let now = Utc::now();
+        let wake = parse_when(None, Some(&self.after), now)?;
+        if wake > now + chrono::Duration::days(1) {
+            return Err(OpError::BadRequest("wait at most a day; use set_timer for later".into()));
+        }
+        let prompt = format!(
+            "You waited (at most {}) for: {}. Check on it now; if it already arrived and you dealt with it, carry on.",
+            self.after, self.reason
+        );
+        let timer = SetTimer { at: None, after: Some(self.after.clone()), prompt, instance: Some(instance) };
+        let set = timer.call(hub, caller).await?;
+        Ok(Waiting {
+            timer_id: set.timer_id,
+            wakes_at: set.local.clone(),
+            note: format!("Waiting: you wake when something arrives, or at {} at the latest.", set.local),
+        })
+    }
+}

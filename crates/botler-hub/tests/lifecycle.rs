@@ -342,3 +342,22 @@ async fn the_user_pins_and_renames_chats_and_a_finished_chat_archives_itself() {
     let err = r.unwrap_err().to_string();
     assert!(err.contains("nobody asked"), "{err}");
 }
+
+#[tokio::test]
+async fn an_agent_waits_through_the_hub_instead_of_a_shell() {
+    let e = setup().await;
+    let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let agent = Caller {
+        principal: Principal::Agent { instance: chat.clone(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    let out = ops::call(&e.hub, &agent, "wait", json!({"in": "10m", "reason": "the mail-watch trial"})).await.unwrap();
+    assert!(out["note"].as_str().unwrap().contains("at the latest"));
+    assert!(botler_hub::ops::turn_ending().any(|op| op == "wait"));
+    let timers = e.hub.store.due_timers(Utc::now() + chrono::Duration::minutes(11)).await.unwrap();
+    let t = timers.iter().find(|t| t.id == out["timer_id"].as_str().unwrap()).unwrap();
+    assert!(t.prompt.as_deref().unwrap().contains("the mail-watch trial"));
+    let long = ops::call(&e.hub, &agent, "wait", json!({"in": "3d", "reason": "x"})).await;
+    assert!(long.unwrap_err().to_string().contains("at most a day"));
+}

@@ -64,6 +64,9 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          the user or working something out again, `search` for it: past conversations, memory, events \
          and the monorepo (`scope=\"self\"` finds what you said or read earlier, even after compaction).\n\n\
          ## Doing things later\n\
+         - Waiting for something (a build, a run, a reply, a page to update)? Call `wait(in, reason)`, \
+           never `sleep` or a polling loop in a shell: your turn ends, you wake when anything arrives or \
+           when the time is up, and a hub restart or your container sleeping loses nothing.\n\
          - `set_timer(at or in, prompt)` wakes you (or another chat) once, later.\n\
          - `subscribe(type, filter)` delivers events of a type to you (they wake you while asleep) until \
            `unsubscribe(id)`; find types with `list_event_types(query)` or `search(sources=[\"event_type\"])`.\n\

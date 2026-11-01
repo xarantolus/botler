@@ -305,6 +305,8 @@ export type * from "./UserMessage";
 export type * from "./Verdict";
 export type * from "./Via";
 export type * from "./VisitSpec";
+export type * from "./Wait";
+export type * from "./Waiting";
 export type * from "./WakePhase";
 export type * from "./WakeStep";
 export type * from "./WebhookReceivedPayload";

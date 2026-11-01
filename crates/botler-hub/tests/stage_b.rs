@@ -51,6 +51,7 @@ async fn message_wakes_botler_and_is_delivered_once() {
     assert_eq!(
         names,
         [
+            "wait",
             "propose_change",
             "trial_run",
             "replay_event",

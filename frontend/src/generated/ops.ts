@@ -120,6 +120,8 @@ import type { TrialStarted } from "./TrialStarted";
 import type { TrialStopped } from "./TrialStopped";
 import type { Unsubscribe } from "./Unsubscribe";
 import type { Unsubscribed } from "./Unsubscribed";
+import type { Wait } from "./Wait";
+import type { Waiting } from "./Waiting";
 
 /** Every hub op, called as `POST /api/v1/ops/{name}` with its input. */
 export interface Ops {
@@ -127,6 +129,7 @@ export interface Ops {
   attach_files: { input: AttachFiles; output: FilesAttached };
   emit_event: { input: EmitEvent; output: EventEmitted };
   set_timer: { input: SetTimer; output: TimerSet };
+  wait: { input: Wait; output: Waiting };
   cancel_timer: { input: CancelTimer; output: TimerCancelled };
   list_timers: { input: ListTimers; output: Array<Timer> };
   set_chat_title: { input: SetChatTitle; output: ChatTitled };

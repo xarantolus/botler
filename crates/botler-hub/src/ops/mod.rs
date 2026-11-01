@@ -252,6 +252,7 @@ pub static OPS: &[OpSpec] = &[
     op::<AttachFiles>(),
     op::<EmitEvent>(),
     op::<SetTimer>(),
+    op::<Wait>(),
     op::<CancelTimer>(),
     op::<ListTimers>(),
     op::<SetChatTitle>(),
