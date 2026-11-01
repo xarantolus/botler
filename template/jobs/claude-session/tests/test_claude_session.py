@@ -88,6 +88,53 @@ def test_github_token_reaches_git_through_a_credential_helper_only(tmp_path: Pat
     assert "username=x-access-token\npassword=ghp_secret\n" in fill.stdout
 
 
+def test_the_github_helper_keeps_the_hubs_monorepo_header(tmp_path: Path) -> None:
+    hub = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.x.extraHeader", "GIT_CONFIG_VALUE_0": "h"}
+    env = job.claude_env({"PATH": os.environ["PATH"], "GITHUB_TOKEN": "t", **hub}, tmp_path)
+    assert env["GIT_CONFIG_COUNT"] == "2" and env["GIT_CONFIG_KEY_0"] == "http.x.extraHeader"
+    assert env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
+
+
+def test_the_monorepo_is_cloned_from_the_hub_only_when_granted() -> None:
+    granted = {
+        "BOTLER_MONOREPO_URL": "http://127.0.0.1:7420/git/monorepo.git",
+        "BOTLER_PUSH_PREFIX": "agents/dev-1/",
+    }
+    assert job.clone_url("monorepo", granted) == granted["BOTLER_MONOREPO_URL"]
+    assert job.clone_url("https://github.com/a/b", {}) == "https://github.com/a/b"
+    with pytest.raises(ValueError, match="monorepo = true"):
+        job.clone_url("monorepo", {})
+    session = "0f1e2d3c-0000-4000-8000-000000000000"
+    assert job.monorepo_branch(session, granted) == "agents/dev-1/claude-0f1e2d3c"
+    assert job.monorepo_branch(session, {}) is None
+    assert "agents/dev-1/claude-0f1e2d3c" in job.started(session, "monorepo", granted)
+    assert "propose" in job.monorepo_prompt("agents/dev-1/claude-0f1e2d3c")
+    assert "do not push" in job.monorepo_prompt(None)
+
+
+def test_a_monorepo_session_works_on_its_branch(tmp_path: Path, claude: dict[str, str]) -> None:
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)  # noqa: S603, S607
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", "-q", str(origin), str(seed)], check=True)  # noqa: S603, S607
+    git = ["git", "-C", str(seed), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)  # noqa: S603
+    subprocess.run([*git, "push", "-q", "origin", "HEAD:main"], check=True)  # noqa: S603
+    environ = {**claude, "BOTLER_MONOREPO_URL": str(origin), "BOTLER_PUSH_PREFIX": "agents/dev-1/"}
+    fake = FakeHub()
+    data = tmp_path / "data"
+    job.serve("e1", SID, ClaudeSessionRequested(task="t", repo="monorepo"), "c", data, environ, fake.hub())
+    head = subprocess.run(  # noqa: S603
+        ["git", "-C", str(data / "sessions" / SID), "branch", "--show-current"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert head.stdout.strip() == f"agents/dev-1/claude-{SID[:8]}"
+    assert [e.ok for e in fake.emitted] == [True]
+    assert "propose" in runs(claude)[0][runs(claude)[0].index("--append-system-prompt") + 1]
+
+
 def test_claude_env_carries_the_git_defaults(tmp_path: Path) -> None:
     env = job.claude_env({"PATH": os.environ["PATH"]}, tmp_path / "home")
     assert env["HOME"] == str(tmp_path / "home")

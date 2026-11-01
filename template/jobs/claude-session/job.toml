@@ -9,6 +9,8 @@ timeout = "4h"
 # once the user has entered it: a group that is declared here but has no value stops the job from
 # starting.
 secrets = ["claude-code"]
+# `monorepo = true` (asks the user) lets sessions with `repo = "monorepo"` clone botler's monorepo
+# from the hub and push a branch for the requesting chat to propose. Off by default.
 # Claude Code's home (~/.claude, its sessions) and every session's working directory, so `resume`
 # continues where the last run stopped.
 volume = true

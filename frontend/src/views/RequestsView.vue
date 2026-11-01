@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from "vue";
 import DialogCard from "../components/common/DialogCard.vue";
 import ViewPanel from "../components/common/ViewPanel.vue";
 import { refreshDialogs, state } from "../store";
+import { useQueryParam } from "../lib/queryState";
 
 const loading = ref(false);
 async function load() {
@@ -15,7 +16,7 @@ onMounted(load);
 
 const open = computed(() => state.dialogs?.open ?? []);
 const closed = computed(() => (state.dialogs?.recent ?? []).filter((d) => d.status !== "open").slice(0, 30));
-const tab = ref<string | number>("open");
+const tab = useQueryParam("tab", "open");
 const tabs = computed(() => [
   { label: "Waiting", value: "open", icon: "i-lucide-inbox", badge: open.value.length ? String(open.value.length) : undefined },
   { label: "Earlier", value: "closed", icon: "i-lucide-history" },

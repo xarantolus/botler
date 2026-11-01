@@ -563,6 +563,9 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
                 l.err(&path, format!("`from = \"{image}\"` needs a version tag or digest, not `latest`"))
             }
             None if spec.command.is_empty() => l.err(&path, "command must not be empty"),
+            Some(_) if spec.monorepo && spec.command.is_empty() => {
+                l.err(&path, "`monorepo = true` needs `command` (the forwarder to the hub runs it)")
+            }
             _ => {}
         }
         if let Some(k) = spec.environment.keys().find(|k| k.starts_with("BOTLER_")) {

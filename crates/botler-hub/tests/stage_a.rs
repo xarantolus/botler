@@ -200,3 +200,59 @@ async fn paused_hub_fires_nothing() {
     scheduler::tick(&e.hub, Utc::now()).await.unwrap();
     assert_eq!(e.hub.store.pending_deliveries("botler").await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn a_monorepo_job_clones_through_the_hub_and_pushes_for_its_chat() {
+    let e = env().await;
+    e.commit(&refs(&job("coder", "command = [\"python\", \"-m\", \"coder\"]\nmonorepo = true\n"))).await;
+    let chat = botler_hub::router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let agent = botler_hub::ops::Caller {
+        principal: botler_hub::auth::Principal::Agent { instance: chat.clone(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    let started = botler_hub::ops::call(&e.hub, &agent, "run_job", serde_json::json!({"job": "coder"})).await.unwrap();
+    let run_id = started["run_id"].as_str().unwrap().to_string();
+    let name = jobs::container_name(&e.hub, &run_id);
+    let mut spec = None;
+    for _ in 0..200 {
+        if let Some(c) = e.fake.containers().get(&name) {
+            spec = Some(c.spec.clone());
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let spec = spec.expect("the run started");
+    assert_eq!(spec.command[..2], ["node".to_string(), botler_hub::agents::FORWARDER.to_string()]);
+    assert_eq!(spec.command[2..], ["python", "-m", "coder"]);
+    assert!(spec.env["BOTLER_MONOREPO_URL"].ends_with("/git/monorepo.git"));
+    assert_eq!(spec.env["BOTLER_PUSH_PREFIX"], format!("agents/{chat}/"));
+    assert!(spec.env["GIT_CONFIG_VALUE_0"].starts_with("Authorization: Bearer "));
+
+    // Its token reaches the hub's git endpoint; a job without `monorepo` is refused there.
+    let refs_of = |run: String| {
+        use tower::ServiceExt;
+        let token =
+            e.hub.tokens.issue(&botler_hub::auth::Principal::Run { run_id: run }, Duration::hours(1), Utc::now());
+        let req = axum::http::Request::get("/git/monorepo.git/info/refs?service=git-upload-pack")
+            .header("authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        botler_hub::api::router(e.hub.clone()).oneshot(req)
+    };
+    assert_eq!(refs_of(run_id.clone()).await.unwrap().status(), axum::http::StatusCode::OK);
+
+    // Without `monorepo`, a job has none of it, and turning it on asks the user.
+    e.commit(&refs(&job("plain", "command = [\"true\"]\n"))).await;
+    let applied = e.hub.applied().await;
+    assert!(!applied.defs.jobs["plain"].spec.monorepo);
+    let plain = botler_hub::ops::call(&e.hub, &agent, "run_job", serde_json::json!({"job": "plain"})).await.unwrap();
+    let refused = refs_of(plain["run_id"].as_str().unwrap().to_string()).await.unwrap();
+    assert_eq!(refused.status(), axum::http::StatusCode::FORBIDDEN);
+    let mut before = applied.defs.clone();
+    before.jobs.get_mut("coder").unwrap().spec.monorepo = false;
+    let esc = botler_core::change::preview(&before, &applied.defs, &[], Utc::now()).escalations;
+    assert!(
+        esc.iter().any(|x| matches!(x, botler_core::change::Escalation::MonorepoGranted { job } if job == "coder"))
+    );
+}

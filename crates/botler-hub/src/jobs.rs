@@ -182,6 +182,9 @@ pub(crate) async fn launch_job(
     let ttl = if service { Duration::days(3650) } else { timeout + Duration::minutes(5) };
     let what = Runnable::Run { run, ttl };
     let mut spec = environment::container_spec(hub, env, what, image, def.spec.command.clone(), &[]).await?;
+    if def.spec.monorepo {
+        monorepo_access(hub, run, &mut spec).await?;
+    }
     // An upstream image runs as its own user, which must own its volume (podman `U`).
     if def.spec.from.is_some() {
         for m in &mut spec.mounts {
@@ -415,4 +418,36 @@ pub(crate) async fn finalize_container(hub: &Hub, run: &Run) {
         tracing::error!(container = %name, error = %e, "could not remove finished container");
     }
     environment::cleanup_secrets(&hub.paths.root.join("runs").join(&run.id).join("secrets")).await;
+}
+
+/// The chat whose event started `run`: it pushes for that chat (`agents/<chat>/`).
+pub async fn requester(hub: &Hub, run: &Run) -> Result<Option<String>> {
+    let Some(id) = &run.event_id else { return Ok(None) };
+    Ok(match hub.store.event(id).await?.source {
+        botler_core::Source::Agent(chat) => Some(chat),
+        _ => None,
+    })
+}
+
+/// A `monorepo = true` job: the hub's git endpoint through the forwarder, as for agents (git
+/// speaks HTTP, not the socket), with the run's token; pushes go under the requesting chat.
+async fn monorepo_access(hub: &Hub, run: &Run, spec: &mut botler_runtime::ContainerSpec) -> Result<()> {
+    let url = &hub.config.container_url;
+    spec.command =
+        [vec!["node".to_string(), crate::agents::FORWARDER.into()], std::mem::take(&mut spec.command)].concat();
+    spec.mounts.push(Mount::Bind {
+        src: hub.paths.assets().join("forward"),
+        dst: "/botler/forward".into(),
+        read_only: true,
+    });
+    let token = spec.env.get("BOTLER_TOKEN").cloned().unwrap_or_default();
+    spec.env.insert("BOTLER_MONOREPO_URL".into(), format!("{url}/git/monorepo.git"));
+    spec.env.insert("GIT_CONFIG_COUNT".into(), "1".into());
+    spec.env.insert("GIT_CONFIG_KEY_0".into(), format!("http.{url}/git/.extraHeader"));
+    spec.env.insert("GIT_CONFIG_VALUE_0".into(), format!("Authorization: Bearer {token}"));
+    if let Some(chat) = requester(hub, run).await? {
+        spec.env.insert("BOTLER_PUSH_PREFIX".into(), format!("agents/{chat}/"));
+        spec.env.insert("BOTLER_REQUESTER".into(), chat);
+    }
+    Ok(())
 }

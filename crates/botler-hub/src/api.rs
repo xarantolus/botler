@@ -1258,6 +1258,19 @@ async fn git(
         Principal::Agent { instance, .. } => {
             return Err(ApiError(StatusCode::FORBIDDEN, format!("token belongs to a stopped session of {instance}")));
         }
+        // A `monorepo = true` job's run pushes for the chat that started it.
+        Principal::Run { run_id } => {
+            let run = hub.store.run(run_id).await?;
+            let granted = hub.applied().await.defs.jobs.get(&run.runnable).is_some_and(|j| j.spec.monorepo);
+            if !granted || run.status.is_terminal() {
+                return Err(ApiError(StatusCode::FORBIDDEN, format!("job {} has no monorepo access", run.runnable)));
+            }
+            match crate::jobs::requester(&hub, &run).await? {
+                Some(chat) => chat,
+                // Started by no chat: it may read, and push nowhere a chat would propose from.
+                None => format!("run-{}", run.id),
+            }
+        }
         _ => return Err(ApiError(StatusCode::FORBIDDEN, "git access is for agents".into())),
     };
     let method = req.method().to_string();

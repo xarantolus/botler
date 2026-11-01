@@ -488,6 +488,11 @@ pub struct Job {
     /// with a tag or `@sha256:` digest; never `latest`): a service from a compose file.
     #[serde(default)]
     pub from: Option<String>,
+    /// Its runs may clone the monorepo from the hub (`$BOTLER_MONOREPO_URL`, git over HTTP with
+    /// the run's token, no keys) and push branches under `agents/<chat>/` for the chat whose event
+    /// started the run, which then proposes them. Off by default; turning it on asks the user.
+    #[serde(default)]
+    pub monorepo: bool,
     /// Plain environment variables (not secrets: those are `secrets` groups), e.g. what a compose
     /// file's `environment:` sets.
     #[serde(default)]

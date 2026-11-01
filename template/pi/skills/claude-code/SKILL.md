@@ -26,6 +26,15 @@ Claude Code sessions on your subscription")`. When `dialog.answered` says it was
 to memory that the Claude Code token is set up (and the date: it expires after a year). Without
 the token the job cannot start, and the failure goes to `triage`, not to you.
 
+## Botler's own monorepo (optional, the user decides)
+
+A session can work on this monorepo itself, through the hub (no SSH key, no GitHub). It is off
+until the user wants it: propose `monorepo = true` in `jobs/claude-session/job.toml`, which asks
+them. Then emit `claude_session.requested` with `repo = "monorepo"`: the session clones main from
+the hub onto a branch of yours, `agents/<your chat>/claude-<session>`, and pushes it when done.
+You then `propose_change` that branch like your own work (review, gate, the user's approval), so
+its proposal and its outcome are yours. Check the branch with `git fetch` before proposing.
+
 ## GitHub (optional: private repos, pushes, PRs)
 
 Public repos clone without either. There are two ways in, and both can be set up. Each is a

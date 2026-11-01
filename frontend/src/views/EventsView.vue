@@ -13,16 +13,17 @@ import { eventIcon, eventSummary, sourceLabel } from "../lib/events";
 import { provenanceColor, runStatusColor } from "../lib/runs";
 import { notifyError } from "../notify";
 import { state } from "../store";
+import { useQueryList, useQueryParam } from "../lib/queryState";
 
 const route = useRoute();
 const router = useRouter();
 
-const typeFilter = ref<string[]>([]);
-const chatFilter = ref<string | null | undefined>(typeof route.query.chat === "string" ? route.query.chat : undefined);
-watch(
-  () => route.query.chat,
-  (c) => (chatFilter.value = typeof c === "string" ? c : chatFilter.value),
-);
+const typeFilter = useQueryList("type");
+const chatParam = useQueryParam("chat", "");
+const chatFilter = computed<string | null | undefined>({
+  get: () => chatParam.value || undefined,
+  set: (v) => (chatParam.value = v ?? ""),
+});
 
 const typeOptions = computed(() => [...new Set(state.events.map((e) => e.type))].sort());
 const chatOptions = computed(() =>

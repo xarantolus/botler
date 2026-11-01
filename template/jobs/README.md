@@ -54,3 +54,8 @@ its plain settings (secrets stay in `secrets` groups). Such an image cannot call
 container instead: each success is a heartbeat. Its volume is handed to the image's own user at
 start, so images that do not run as root can write it. Skill `compose-apps` translates a
 docker-compose file.
+
+`monorepo = true` (the user approves it once) lets a job's runs clone this monorepo from the hub
+(`$BOTLER_MONOREPO_URL`, plain git over HTTP with the run's token) and push branches under
+`$BOTLER_PUSH_PREFIX` (`agents/<chat>/`, the chat whose event started the run), which that chat
+then proposes. The job needs a `command` and `node` in its image (the hub's forwarder runs it).

@@ -45,9 +45,9 @@
     "type": "claude_session.finished"
   },
   {
-    "description": "Start a Claude Code session on the user's subscription (jobs/claude-session, skill\n`claude-code`), or send one a message: `resume` is its id, and the message reaches it even while\nit works; `interrupt` stops its current work first. `repo` is cloned into a new session's\nworking directory; `notify` is the chat that hears back (default: the emitter).",
+    "description": "Start a Claude Code session on the user's subscription (jobs/claude-session, skill\n`claude-code`), or send one a message: `resume` is its id, and the message reaches it even while\nit works; `interrupt` stops its current work first. `repo` is cloned into a new session's\nworking directory (`monorepo`: botler's own, with `monorepo = true` on the job; the session\npushes `agents/<chat>/claude-\u2026` for the requesting chat to propose);\n`notify` is the chat that hears back (default: the emitter).",
     "schema": {
-      "description": "Start a Claude Code session on the user's subscription (jobs/claude-session, skill\n`claude-code`), or send one a message: `resume` is its id, and the message reaches it even while\nit works; `interrupt` stops its current work first. `repo` is cloned into a new session's\nworking directory; `notify` is the chat that hears back (default: the emitter).",
+      "description": "Start a Claude Code session on the user's subscription (jobs/claude-session, skill\n`claude-code`), or send one a message: `resume` is its id, and the message reaches it even while\nit works; `interrupt` stops its current work first. `repo` is cloned into a new session's\nworking directory (`monorepo`: botler's own, with `monorepo = true` on the job; the session\npushes `agents/<chat>/claude-\u2026` for the requesting chat to propose);\n`notify` is the chat that hears back (default: the emitter).",
       "properties": {
         "interrupt": {
           "default": false,

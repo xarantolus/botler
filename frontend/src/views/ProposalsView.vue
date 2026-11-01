@@ -15,6 +15,7 @@ import { proposalStatusColor, proposalStatusLabel } from "../lib/runs";
 import { notifyError, notifySuccess } from "../notify";
 import { useNow } from "../now";
 import { refreshProposals, refreshStatus, state } from "../store";
+import { useQueryParam } from "../lib/queryState";
 
 const router = useRouter();
 const loading = ref(false);
@@ -28,7 +29,7 @@ async function load() {
 onMounted(load);
 
 const current = computed(() => (state.proposals ?? []).filter(inFlight));
-const tab = ref<string | number>("current");
+const tab = useQueryParam("tab", "current");
 const tabs = computed(() => [
   { label: "Current", value: "current", icon: "i-lucide-git-pull-request-arrow", badge: current.value.length ? String(current.value.length) : undefined },
   { label: "History", value: "history", icon: "i-lucide-history" },

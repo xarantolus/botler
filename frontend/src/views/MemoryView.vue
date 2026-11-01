@@ -10,6 +10,7 @@ import ViewPanel from "../components/common/ViewPanel.vue";
 import type { MemoryCommit, MemoryEntry, MemoryFile } from "../generated";
 import { byNamespace } from "../lib/memory";
 import { notifyError, notifySuccess, notifyWarning } from "../notify";
+import { useQueryParam } from "../lib/queryState";
 
 const files = shallowRef<MemoryEntry[] | null>(null);
 const loading = ref(false);
@@ -34,7 +35,12 @@ async function load() {
     loading.value = false;
   }
 }
-onMounted(load);
+// `?file=` is the file open, so a reload keeps it.
+const opened = useQueryParam("file", "");
+onMounted(async () => {
+  await load();
+  if (opened.value) await open(opened.value);
+});
 
 type FileItem = TreeItem & { path?: string };
 const tree = computed((): FileItem[] =>
@@ -55,6 +61,7 @@ async function open(path: string) {
   newPath.value = null;
   conflict.value = null;
   history.value = null;
+  opened.value = path;
   try {
     file.value = await call("memory_read", { body: { path } });
   } catch (e) {
@@ -72,6 +79,7 @@ async function showHistory() {
 }
 
 function startNew() {
+  opened.value = "";
   file.value = null;
   history.value = null;
   conflict.value = null;

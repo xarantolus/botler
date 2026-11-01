@@ -65,6 +65,10 @@ pub enum Escalation {
         job: String,
         model: String,
     },
+    /// A job's runs may clone the monorepo and push branches for the chat that started them.
+    MonorepoGranted {
+        job: String,
+    },
     /// A service gets (or changes) a UI the user opens inside botler.
     AppAdded {
         job: String,
@@ -137,6 +141,9 @@ impl Escalation {
             Self::ServiceAdded { job } => format!("adds always-on service `{job}`"),
             Self::ModelsGranted { job, model } => format!("lets job `{job}` call model `{model}` (spends money)"),
             Self::AppAdded { job } => format!("shows service `{job}`'s web UI as an app in botler"),
+            Self::MonorepoGranted { job } => {
+                format!("lets job `{job}` read the monorepo and push branches for the chat that started it")
+            }
             Self::ServiceReached { job, service } => format!("lets job `{job}` reach service `{service}`"),
             Self::PortPublished { job, reach } => format!("makes service `{job}` reachable from {reach}"),
             Self::McpStdioAdded { agent, server, command } => {
@@ -351,6 +358,9 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
                     operation: "usd_per_day".into(),
                 });
             }
+        }
+        if j.spec.monorepo && !prev.is_some_and(|p| p.spec.monorepo) {
+            esc.insert(Escalation::MonorepoGranted { job: j.name.clone() });
         }
         if j.spec.app.is_some() && !prev.is_some_and(|p| p.spec.app.is_some()) {
             esc.insert(Escalation::AppAdded { job: j.name.clone() });

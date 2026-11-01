@@ -100,7 +100,43 @@ def read_request(event: Mapping[str, Any] | None) -> tuple[ClaudeSessionRequeste
     return request, request.notify or emitter or "botler"
 
 
-def command(session_id: str, resume: bool, mcp_config: Path) -> list[str]:
+# `repo = "monorepo"`: a clone of botler's own monorepo from the hub (job.toml `monorepo = true`).
+MONOREPO = "monorepo"
+
+
+def clone_url(repo: str, environ: Mapping[str, str]) -> str:
+    """What `repo` clones from; the monorepo only when the hub granted it."""
+    if repo != MONOREPO:
+        return repo
+    url = environ.get("BOTLER_MONOREPO_URL")
+    if not url:
+        raise ValueError(
+            "this job has no monorepo access: `monorepo = true` in jobs/claude-session/job.toml "
+            "(the user approves it once)"
+        )
+    return url
+
+
+def monorepo_branch(session_id: str, environ: Mapping[str, str]) -> str | None:
+    """The branch a monorepo session pushes, under the requesting chat's own (`agents/<chat>/`)."""
+    prefix = environ.get("BOTLER_PUSH_PREFIX")
+    return f"{prefix}claude-{session_id[:8]}" if prefix else None
+
+
+def monorepo_prompt(branch: str | None) -> str:
+    push = (
+        f"Commit your work and `git push origin HEAD` (branch {branch}); the chat that asked you "
+        "proposes it through botler's review, so say in your final reply that it is pushed."
+        if branch
+        else "Nobody can propose from this session: do not push."
+    )
+    return (
+        "\n\nThe working directory is botler's own monorepo (agents, jobs, skills), cloned from the "
+        f"hub. {push} Run ./gate/run before pushing."
+    )
+
+
+def command(session_id: str, resume: bool, mcp_config: Path, extra: str = "") -> list[str]:
     """The `claude` invocation; messages go on stdin, so they are never parsed as options."""
     session = ["--resume", session_id] if resume else ["--session-id", session_id]
     return [
@@ -117,7 +153,7 @@ def command(session_id: str, resume: bool, mcp_config: Path) -> list[str]:
         str(mcp_config),
         "--strict-mcp-config",
         "--append-system-prompt",
-        SYSTEM_PROMPT,
+        SYSTEM_PROMPT + extra,
         *session,
     ]
 
@@ -143,10 +179,12 @@ def claude_env(environ: Mapping[str, str], home: Path) -> dict[str, str]:
             '!f() { test "$1" = get && '
             """printf 'username=x-access-token\\npassword=%s\\n' "$GITHUB_TOKEN"; }; f"""
         )
+        # After the entries the hub set (the monorepo's auth header, with `monorepo = true`).
+        n = int(env.get("GIT_CONFIG_COUNT", "0"))
         env |= {
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
-            "GIT_CONFIG_VALUE_0": helper,
+            "GIT_CONFIG_COUNT": str(n + 1),
+            f"GIT_CONFIG_KEY_{n}": "credential.https://github.com.helper",
+            f"GIT_CONFIG_VALUE_{n}": helper,
         }
     return env
 
@@ -391,23 +429,44 @@ def run_claude(
     home.mkdir(parents=True, exist_ok=True)
     env = claude_env(environ, home)
     workdir.mkdir(parents=True, exist_ok=not new)
+    branch = monorepo_branch(session_id, environ)
     if new and repo:
+        try:
+            url = clone_url(repo, environ)
+        except ValueError as e:
+            failed = Outcome(False, session_id, str(e))
+            for m in live.take():
+                on_turn(failed, m)
+            return
         # The URL is an argument after `--`, never an option; the container is the boundary.
         clone = subprocess.run(  # noqa: S603
-            ["git", "clone", "--", repo, str(workdir)],  # noqa: S607
+            ["git", "clone", "--", url, str(workdir)],  # noqa: S607
             capture_output=True,
             text=True,
             env=env,
         )
+        if clone.returncode == 0 and repo == MONOREPO and branch:
+            clone = subprocess.run(  # noqa: S603
+                ["git", "-C", str(workdir), "checkout", "-b", branch],  # noqa: S607
+                capture_output=True,
+                text=True,
+                env=env,
+            )
         if clone.returncode != 0:
             failed = Outcome(False, session_id, f"git clone {repo} failed: {clone.stderr.strip()}")
             for m in live.take():
                 on_turn(failed, m)
             return
+    is_monorepo = repo == MONOREPO or (
+        (workdir / ".git").exists()
+        and bool(environ.get("BOTLER_MONOREPO_URL"))
+        and origin(workdir, env) == environ["BOTLER_MONOREPO_URL"]
+    )
     with tempfile.TemporaryDirectory() as tmp, open(Path(tmp) / "stderr", "w+", encoding="utf-8") as err:
         config = Path(tmp) / "mcp.json"
         config.write_text(json.dumps(mcp_config(session_id, live.notify_file, environ)))
-        claude = Claude(command(session_id, not new, config), workdir, env, err)
+        extra = monorepo_prompt(branch) if is_monorepo else ""
+        claude = Claude(command(session_id, not new, config, extra), workdir, env, err)
         unanswered = converse(claude, live, session_id, deadline, on_turn)
         code = claude.proc.wait()
         if unanswered:
@@ -459,7 +518,7 @@ def serve(
                             )
                         continue
                     if new:
-                        hub.send(notify, started(session_id, request.repo))
+                        hub.send(notify, started(session_id, request.repo, environ))
                     run_claude(session_id, new, request.repo, live, data, environ, deadline, on_turn)
                     new = False
             finally:
@@ -467,8 +526,22 @@ def serve(
                     hub.cancel_timer(timer)
 
 
-def started(session_id: str, repo: str | None) -> str:
+def origin(workdir: Path, env: Mapping[str, str]) -> str:
+    """The clone's `origin` URL ("" if it has none)."""
+    r = subprocess.run(  # noqa: S603
+        ["git", "-C", str(workdir), "remote", "get-url", "origin"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        env=dict(env),
+    )
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def started(session_id: str, repo: str | None, environ: Mapping[str, str] | None = None) -> str:
     clone = f" in a clone of {repo}" if repo else ""
+    branch = monorepo_branch(session_id, environ or {}) if repo == MONOREPO else None
+    if branch:
+        clone += f", on branch {branch}: once it says it pushed, propose that branch with propose_change"
     return (
         f"Claude Code session {session_id} started{clone}. To send it more while it works, emit "
         f'claude_session.requested with resume="{session_id}" (add "interrupt": true to stop its '

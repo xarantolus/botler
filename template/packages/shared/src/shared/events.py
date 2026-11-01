@@ -52,7 +52,9 @@ class ClaudeSessionRequested(botler.Event):
     """Start a Claude Code session on the user's subscription (jobs/claude-session, skill
     `claude-code`), or send one a message: `resume` is its id, and the message reaches it even while
     it works; `interrupt` stops its current work first. `repo` is cloned into a new session's
-    working directory; `notify` is the chat that hears back (default: the emitter)."""
+    working directory (`monorepo`: botler's own, with `monorepo = true` on the job; the session
+    pushes `agents/<chat>/claude-…` for the requesting chat to propose);
+    `notify` is the chat that hears back (default: the emitter)."""
 
     type: ClassVar[str] = "claude_session.requested"
     task: str

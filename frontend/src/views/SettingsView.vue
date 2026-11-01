@@ -15,6 +15,7 @@ import TimeAgo from "../components/common/TimeAgo.vue";
 import type { CatalogView, FieldError, Settings } from "../generated";
 import { changes, draftOf, errorsAt, generalErrors, usedBy, type Draft, type Schema } from "../lib/settings";
 import { notifyError, notifySuccess } from "../notify";
+import { useQueryParam } from "../lib/queryState";
 
 const loaded = shallowRef<Settings | null>(null);
 const catalog = shallowRef<CatalogView | null>(null);
@@ -25,7 +26,7 @@ const loading = ref(false);
 const saving = ref(false);
 const route = useRoute();
 // `?tab=agents&agent=<name>` (a mention of an agent definition in a chat) opens its card.
-const tab = ref(typeof route.query.tab === "string" ? route.query.tab : "models");
+const tab = useQueryParam("tab", "models");
 const focused = typeof route.query.agent === "string" ? route.query.agent : null;
 const tabs: TabsItem[] = [
   { label: "Models", value: "models", icon: "i-lucide-cpu" },
