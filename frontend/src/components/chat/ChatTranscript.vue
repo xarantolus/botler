@@ -3,12 +3,14 @@
 // right, agent turns and incoming events on the left, "working…" while the agent works.
 // Not UChatMessages: ChatView does all the scrolling, and the kit's list deep-watches every
 // message on each streamed chunk (and would scroll to the last user message when the agent gets
-// busy). Each message is its own component (TranscriptEntry), so a chunk re-renders only the
+// busy). While pi compacts the conversation, a line says so and for how long. Each message is its own component (TranscriptEntry), so a chunk re-renders only the
 // message it changes. A long chat renders its latest PAGE messages; "Show earlier" adds more (the
 // view's scroll anchoring keeps the reader's place).
 import type { ChatStatus } from "ai";
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { elapsed } from "../../lib/time";
 import type { TranscriptMessage } from "../../lib/transcript";
+import { state } from "../../store";
 import TranscriptEntry from "./TranscriptEntry.vue";
 
 const props = defineProps<{
@@ -28,6 +30,16 @@ watch(
 );
 const hidden = computed(() => Math.max(0, props.messages.length - shown.value));
 const visible = computed(() => (hidden.value ? props.messages.slice(hidden.value) : props.messages));
+
+const now = ref(Date.now());
+const timer = window.setInterval(() => (now.value = Date.now()), 1000);
+onBeforeUnmount(() => window.clearInterval(timer));
+const compacting = computed(() => {
+  const c = state.compacting;
+  if (!c) return null;
+  const why = c.reason === "overflow" ? "it no longer fit the model's context" : c.reason === "manual" ? "asked to" : "it got long";
+  return `Compacting the conversation (${why})… ${elapsed(now.value - c.since)}`;
+});
 </script>
 
 <template>
@@ -50,7 +62,11 @@ const visible = computed(() => (hidden.value ? props.messages.slice(hidden.value
       :queued-note="props.queuedNote"
       :instance="props.instance"
     />
-    <UChatMessage v-if="props.status === 'submitted'" id="indicator" role="assistant" side="left" variant="naked" :parts="[]">
+    <div v-if="compacting" class="flex items-center gap-2 py-1 text-sm" role="status">
+      <UIcon name="i-lucide-fold-vertical" class="size-4 animate-pulse text-muted" />
+      <UChatShimmer :text="compacting" />
+    </div>
+    <UChatMessage v-else-if="props.status === 'submitted'" id="indicator" role="assistant" side="left" variant="naked" :parts="[]">
       <template #content>
         <div class="flex items-center gap-2 py-1 text-sm">
           <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin text-muted" />

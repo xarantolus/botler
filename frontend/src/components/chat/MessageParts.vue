@@ -1,8 +1,10 @@
 <script setup lang="ts">
 // The parts of one transcript message (lib/transcript.ts), each with the kit's chat element for
-// it: reasoning, text (Markdown), tool calls, and botler's own parts as cards.
+// it: reasoning, text (Markdown), tool calls, and botler's own parts as cards. A turn's steps
+// before its last text fold into one line (lib/steps.ts).
 import { computed } from "vue";
 import type { TranscriptMessage } from "../../lib/transcript";
+import { foldOf, folded } from "../../lib/steps";
 import { toolRunning } from "../../lib/transcript";
 import DialogCard from "../common/DialogCard.vue";
 import EnvelopeCard from "../common/EnvelopeCard.vue";
@@ -15,6 +17,9 @@ import ToolCall from "./ToolCall.vue";
 const props = defineProps<{ message: TranscriptMessage; busy: boolean }>();
 /** The message's stable key (an agent turn keeps it from streamed to persisted). */
 const key = computed(() => props.message.metadata?.key ?? props.message.id);
+const fold = computed(() => (props.message.role === "assistant" ? foldOf(props.message.parts) : null));
+const firstFolded = computed(() => props.message.parts.findIndex((_, i) => folded(props.message.parts, fold.value, i)));
+const stepsOpen = computed(() => shell.open[`${key.value}:steps`] ?? false);
 
 /** The user toggled a thinking block: it is theirs now, never closed automatically. */
 function onReasoningClick(e: MouseEvent, id: string) {
@@ -26,6 +31,17 @@ function onReasoningClick(e: MouseEvent, id: string) {
   <div class="flex min-w-0 flex-col gap-2.5">
     <!-- Keyed by position: a streamed message and its persisted copy have the same parts. -->
     <template v-for="(part, i) in message.parts" :key="i">
+      <button
+        v-if="fold && i === firstFolded"
+        type="button"
+        class="flex w-fit items-center gap-1.5 rounded text-sm text-muted hover:text-default focus-visible:outline-2 focus-visible:outline-primary"
+        :aria-expanded="stepsOpen"
+        @click="shell.open[`${key}:steps`] = !stepsOpen"
+      >
+        <UIcon :name="stepsOpen ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4" />
+        {{ fold.summary }}
+      </button>
+      <template v-if="stepsOpen || !folded(message.parts, fold, i)">
       <!-- A closed thinking block is not mounted: each measures its scroll shadow, which lays out
            the whole chat, so a long chat would open slowly. -->
       <UChatReasoning
@@ -100,6 +116,7 @@ function onReasoningClick(e: MouseEvent, id: string) {
         title="The model returned an error"
         :description="part.data.text"
       />
+      </template>
     </template>
     <MessageFiles
       v-if="message.metadata?.files?.length"

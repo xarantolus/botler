@@ -43,6 +43,8 @@ export interface AppState {
   sessionError: string | null;
   /** The assistant message streaming in for the viewed chat. */
   streaming: LiveMessage;
+  /** The viewed chat's conversation is being compacted (pi's compaction_start): since when, why. */
+  compacting: { since: number; reason: string } | null;
   showArchived: boolean;
 }
 
@@ -65,6 +67,7 @@ export const state = plainReactive<AppState>({
   session: null,
   sessionError: null,
   streaming: noLive(),
+  compacting: null,
   showArchived: false,
 });
 

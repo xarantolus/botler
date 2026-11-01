@@ -45,6 +45,7 @@ function send(msg: ClientMessage) {
 export function watch(instance: string | null) {
   watched = instance;
   state.streaming = noLive();
+  state.compacting = null;
   send({ type: "watch", instance });
 }
 
@@ -86,6 +87,15 @@ export function onPi(instance: string, ev: Record<string, unknown>) {
   if (type === "message_start" && message?.role === "assistant") {
     // A new message replaces the last one (which the session has by now, or will have).
     state.streaming = { ...noLive(), ts: typeof message.timestamp === "number" ? message.timestamp : null };
+    return;
+  }
+  if (type === "compaction_start") {
+    state.compacting = { since: Date.now(), reason: typeof ev.reason === "string" ? ev.reason : "threshold" };
+    return;
+  }
+  if (type === "compaction_end") {
+    state.compacting = null;
+    soon("session", () => refreshSession(instance));
     return;
   }
   if (type === "message_update") {

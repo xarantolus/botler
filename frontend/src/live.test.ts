@@ -18,4 +18,14 @@ describe("live stream", () => {
     const entry = { kind: "assistant", id: "a1", message_ts: 1793447836011 } as const;
     expect(persisted([entry as never], state.streaming)).toBe(true);
   });
+
+  it("knows while the watched chat compacts", () => {
+    watch("botler");
+    onPi("other", { type: "compaction_start", reason: "threshold" });
+    expect(state.compacting).toBeNull();
+    onPi("botler", { type: "compaction_start", reason: "overflow" });
+    expect(state.compacting?.reason).toBe("overflow");
+    onPi("botler", { type: "compaction_end", reason: "overflow", aborted: false });
+    expect(state.compacting).toBeNull();
+  });
 });
