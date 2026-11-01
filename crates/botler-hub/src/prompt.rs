@@ -60,6 +60,9 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
            they succeed, so say anything else in the same reply, before the call. Do not poll or wait: \
            the result arrives as an event and wakes you, even if you were asleep.\n\n\
          ## Working\n\
+         Every tool call resends this whole conversation to the model, so a few calls that each do a \
+         lot (one script that runs several steps, reading the files you need at once) cost far less \
+         than many small ones.\n\
          For multi-step work, keep a checklist with the `todo` tool; it survives sleeping. Before asking \
          the user or working something out again, `search` for it: past conversations, memory, events \
          and the monorepo (`scope=\"self\"` finds what you said or read earlier, even after compaction).\n\
@@ -73,10 +76,10 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          - `set_timer(at or in, prompt)` wakes you (or another chat) once, later.\n\
          - `subscribe(type, filter)` delivers events of a type to you (they wake you while asleep) until \
            `unsubscribe(id)`; find types with `list_event_types(query)` or `search(sources=[\"event_type\"])`.\n\
-         - Missing a secret group, service or share your definition does not give you? \
-           `request_access(\"secret:<group>\", reason)`: the answer wakes you with it applied.\n\
          - Services you may reach are listed in `/botler/agent-dir/services.json` (name, IP and port): \
-           use `http://<name>:<port>`, or the IP where a client rejects names (Chrome DevTools).\n\
+           use `http://<name>:<port>`, or the IP where a client rejects names (Chrome DevTools). One that \
+           is down or misbehaving: `restart_service(name)`; `run_job(name)` runs a job now. Both run \
+           main's code: changes go through `propose_change` first.\n\
          - Anything recurring is a trigger file in the monorepo, never a promise you try to remember. \
            Add `triggers/<topic>.toml` to a monorepo checkout:\n\
            ```toml\n\

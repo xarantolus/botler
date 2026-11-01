@@ -200,15 +200,32 @@ function connect() {
   };
 }
 
+/** Back from the background (a phone, the installed app) or online again: reconnect now instead
+ * of after the backoff, and catch up. */
+function wakeUp() {
+  if (stopped || document.hidden) return;
+  if (socket) {
+    void refreshAll();
+    return;
+  }
+  window.clearTimeout(reconnectTimer);
+  backoff = 1000;
+  connect();
+}
+
 export function startLive() {
   stopped = false;
   state.connection = "connecting";
   startPolling();
   connect();
+  document.addEventListener("visibilitychange", wakeUp);
+  window.addEventListener("online", wakeUp);
 }
 
 export function stopLive() {
   stopped = true;
+  document.removeEventListener("visibilitychange", wakeUp);
+  window.removeEventListener("online", wakeUp);
   window.clearTimeout(reconnectTimer);
   stopPolling();
   socket?.close();

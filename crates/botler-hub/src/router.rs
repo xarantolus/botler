@@ -237,7 +237,11 @@ pub async fn send_task(
 /// Journal a built-in event for `to` and queue it as a quiet note: added to its session without a
 /// turn, read with whatever wakes it next.
 pub async fn note(hub: &Hub, to: &str, payload: BuiltinPayload) -> Result<()> {
-    let ev = builtin(payload, Source::Hub)?.to(to);
+    note_event(hub, to, builtin(payload, Source::Hub)?.to(to)).await
+}
+
+/// [`note`] for an event already built (its own source and thread).
+pub async fn note_event(hub: &Hub, to: &str, ev: Event) -> Result<()> {
     hub.store.append_event(&ev).await?;
     hub.store.mark_routed(&ev.id.to_string()).await?;
     hub.store.enqueue_delivery_with(&ev.id.to_string(), to, None, None, true, None).await?;

@@ -1040,10 +1040,17 @@ async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
         slug: instance.slug.clone(),
         last_reply,
     });
-    let mut ev = builtin(idle, Source::Agent(instance.name.clone()))?.to(parent);
+    let mut ev = builtin(idle, Source::Agent(instance.name.clone()))?.to(parent.clone());
+    let mut by_user = false;
     if let Some(d) = turn_start(hub, agent).await? {
         let started = hub.store.event(&d.event_id).await?;
+        by_user = started.source == Source::User;
         ev = ev.in_reply_to(&started);
+    }
+    // The user talked with the chat directly: the parent reads how it went when it next wakes
+    // (waking it for each of those turns costs a turn over its whole context).
+    if by_user {
+        return crate::router::note_event(hub, &parent, ev).await;
     }
     hub.emit(ev).await?;
     Ok(())

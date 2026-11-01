@@ -422,3 +422,27 @@ async fn the_user_allows_a_chat_over_its_budget_more_for_today() {
         "agents cannot"
     );
 }
+
+#[tokio::test]
+async fn a_turn_the_user_started_in_a_child_tells_the_parent_quietly() {
+    let e = setup().await;
+    let parent = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let child = router::spawn(&e.hub, "dev", Some(&parent), Some("build it"), None, None).await.unwrap();
+    pump(&e).await;
+    // Whether each end-of-turn notice to the parent woke it, oldest first.
+    let notices = || async {
+        let q = botler_store::EventQuery { kind: Some(kinds::AGENT_IDLE.into()), limit: 10, ..Default::default() };
+        let mut out = Vec::new();
+        for ev in e.hub.store.events(&q).await.unwrap().into_iter().rev() {
+            for d in e.hub.store.deliveries_for_event(&ev.id.to_string()).await.unwrap() {
+                assert_eq!(d.instance, parent);
+                out.push(!d.quiet);
+            }
+        }
+        out
+    };
+    assert_eq!(notices().await, [true], "the parent's task: its end wakes the parent");
+    user_says(&e, &child, "also add tests").await;
+    pump(&e).await;
+    assert_eq!(notices().await, [true, false], "the user's own turn: a quiet note");
+}

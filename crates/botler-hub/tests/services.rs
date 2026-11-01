@@ -367,3 +367,32 @@ async fn a_changed_service_keeps_serving_while_its_new_image_builds() {
     }
     panic!("never swapped to the new image");
 }
+
+#[tokio::test]
+async fn a_service_missing_a_secret_value_asks_the_user_once_instead_of_an_incident() {
+    let e = common::env().await;
+    let secrets = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template/secrets.toml")).unwrap()
+        + "\n[[group]]\nname = \"bot\"\nclass = \"container\"\n[[group.secret]]\nname = \"BOT_TOKEN\"\n";
+    let mut files = job("app", &format!("{SVC}secrets = [\"bot\"]\n"));
+    files.push(("secrets.toml".into(), secrets));
+    e.commit(&refs(&files)).await;
+    let t0 = Utc::now();
+    services::reconcile_at(&e.hub, t0).await.unwrap();
+    assert_eq!(current(&e).await.status, RunStatus::Failed);
+    // Retried later: still one request.
+    services::reconcile_at(&e.hub, t0 + Duration::hours(1)).await.unwrap();
+    assert_eq!(runs(&e).await.len(), 2, "it tried again");
+    let asks: Vec<_> = e
+        .hub
+        .store
+        .open_dialogs()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.about.contains(&"secret-group:bot".to_string()))
+        .collect();
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    assert_eq!(asks[0].instance, "botler");
+    assert!(asks[0].detail.as_deref().unwrap().contains("`app` cannot start"));
+    assert!(e.hub.store.incidents_for("app", 5).await.unwrap().is_empty(), "nothing to triage");
+}

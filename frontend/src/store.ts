@@ -203,13 +203,16 @@ export function showSessionFile(name: string, file: string | null) {
   return refreshSession(name);
 }
 
+let sessionSeq = 0;
 export function refreshSession(name: string) {
   if (sessionFor !== name) sessionFile = null;
   sessionFor = name;
+  const seq = ++sessionSeq;
   return guarded(`Loading chat ${name}`, async () => {
     try {
       const s = await call("session", { params: { instance: name }, query: { file: sessionFile ?? undefined } });
-      if (sessionFor !== name) return; // the user moved on
+      // The user moved on, or a later refresh was sent (an answer may overtake an older one).
+      if (sessionFor !== name || seq !== sessionSeq) return;
       state.session = s;
       // The session has the streamed message now: show it from there.
       if (persisted(s.items, state.streaming)) state.streaming = noLive();

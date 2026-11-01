@@ -98,11 +98,52 @@ pub async fn launch(hub: &Hub, run: &Run, event: Option<&Event>) -> Result<()> {
         Err(e) => {
             tracing::error!(run = %run.id, job = %run.runnable, error = %e, "could not start job");
             if hub.store.finish_run(&run.id, RunStatus::Failed, None, Some(&e.to_string())).await? {
-                failures::report(hub, failure(run, "start", None, e.to_string())).await?;
+                match &e {
+                    // Only the user can fix this: ask them for it (once), no triage.
+                    HubError::MissingSecret(name) => ask_for_secret(hub, run, name).await?,
+                    _ => failures::report(hub, failure(run, "start", None, e.to_string())).await?,
+                }
             }
             Ok(())
         }
     }
+}
+
+/// Ask the user (through the front door) to enter `secret`, which `run`'s job needs to start,
+/// unless that is asked already. Entering it answers the request; services retry on their own.
+async fn ask_for_secret(hub: &Hub, run: &Run, secret: &str) -> Result<()> {
+    let job = run.runnable.as_str();
+    let applied = hub.applied().await;
+    let Some(group) = applied.defs.secret_groups.values().find(|g| g.secrets.iter().any(|s| s == secret)) else {
+        return failures::report(hub, failure(run, "start", None, format!("secret {secret} is not declared"))).await;
+    };
+    let about = format!("secret-group:{}", group.name);
+    let asked = hub.store.open_dialogs().await?.into_iter().any(|d| {
+        d.kind == botler_store::DialogKind::Credentials
+            && d.about.contains(&about)
+            && d.spec
+                .as_ref()
+                .and_then(|s| s.get("fill"))
+                .and_then(|f| f.as_array())
+                .is_some_and(|f| f.iter().any(|n| n == secret))
+    });
+    if asked {
+        return Ok(());
+    }
+    let req = crate::secret_requests::SecretRequest {
+        group: group.name.clone(),
+        reason: format!("`{job}` cannot start without it."),
+        description: None,
+        class: None,
+        add: vec![],
+        fill: vec![secret.to_string()],
+        remove: vec![],
+    };
+    crate::secret_requests::open(hub, botler_core::FRONT_DOOR, &req)
+        .await
+        .map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+    tracing::info!(job, secret, "asked the user for a missing secret");
+    Ok(())
 }
 
 /// Where a runnable finds its settings.
