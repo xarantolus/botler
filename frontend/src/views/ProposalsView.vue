@@ -1,15 +1,16 @@
 <script setup lang="ts">
 // Changes agents proposed to the monorepo and their status (live). A row opens its review page;
-// merged ones can be reverted. A table on wide screens, stacked rows on a phone.
+// merged ones can be reverted. "Current" holds those still in flight, "History" the decided ones.
+// A table on wide screens, stacked rows on a phone.
 import type { TableColumn, TableRow } from "@nuxt/ui";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { call } from "../api/client";
 import TimeAgo from "../components/common/TimeAgo.vue";
 import ViewPanel from "../components/common/ViewPanel.vue";
 import { confirm } from "../confirm";
 import type { Proposal } from "../generated";
-import { stageSummary } from "../lib/proposals";
+import { inFlight, stageSummary } from "../lib/proposals";
 import { proposalStatusColor, proposalStatusLabel } from "../lib/runs";
 import { notifyError, notifySuccess } from "../notify";
 import { useNow } from "../now";
@@ -25,6 +26,14 @@ async function load() {
   loading.value = false;
 }
 onMounted(load);
+
+const current = computed(() => (state.proposals ?? []).filter(inFlight));
+const tab = ref<string | number>("current");
+const tabs = computed(() => [
+  { label: "Current", value: "current", icon: "i-lucide-git-pull-request-arrow", badge: current.value.length ? String(current.value.length) : undefined },
+  { label: "History", value: "history", icon: "i-lucide-history" },
+]);
+const shown = computed(() => (tab.value === "current" ? current.value : (state.proposals ?? []).filter((p) => !inFlight(p))));
 
 async function revert(commit: string, title: string) {
   const ok = await confirm({
@@ -43,11 +52,15 @@ async function revert(commit: string, title: string) {
   }
 }
 
-const empty = {
-  icon: "i-lucide-git-pull-request-arrow",
-  title: "No proposals yet",
-  description: "When an agent proposes a change to the monorepo, it shows up here for review.",
-};
+const empty = computed(() =>
+  tab.value === "current"
+    ? {
+        icon: "i-lucide-git-pull-request-arrow",
+        title: "Nothing in flight",
+        description: "When an agent proposes a change to the monorepo, it shows up here for review. Decided ones are under History.",
+      }
+    : { icon: "i-lucide-history", title: "No decided proposals yet", description: "Merged, rejected and failed proposals end up here." },
+);
 
 const columns: TableColumn<Proposal>[] = [
   { accessorKey: "title", header: "Title" },
@@ -69,14 +82,15 @@ function onSelect(_e: Event, row: TableRow<Proposal>) {
     <template #right>
       <UButton icon="i-lucide-refresh-cw" color="neutral" variant="ghost" aria-label="Refresh" :loading="loading" @click="load" />
     </template>
+    <UTabs v-model="tab" :items="tabs" :content="false" variant="link" size="sm" class="px-4 pt-2 sm:px-6" />
     <!-- Phone: one stacked row each; the title's link covers the row. -->
     <div class="xl:hidden">
       <div v-if="loading && !state.proposals" class="space-y-3 p-4">
         <USkeleton v-for="i in 3" :key="i" class="h-12 w-full" />
       </div>
-      <UEmpty v-else-if="!state.proposals?.length" v-bind="empty" variant="naked" class="p-4" />
+      <UEmpty v-else-if="!shown.length" v-bind="empty" variant="naked" class="p-4" />
       <ul v-else class="divide-y divide-default">
-        <li v-for="p in state.proposals" :key="p.id" class="relative px-4 py-3 hover:bg-elevated/50">
+        <li v-for="p in shown" :key="p.id" class="relative px-4 py-3 hover:bg-elevated/50">
           <ULink
             :to="{ name: 'proposal', params: { id: p.id } }"
             class="block font-medium break-words text-highlighted after:absolute after:inset-0"
@@ -103,7 +117,7 @@ function onSelect(_e: Event, row: TableRow<Proposal>) {
       </ul>
     </div>
     <UTable
-      :data="state.proposals ?? []"
+      :data="shown"
       :columns="columns"
       :loading="loading && !state.proposals"
       sticky
