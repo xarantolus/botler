@@ -187,7 +187,12 @@ pub(crate) async fn launch_job(
         }
         _ => e.into(),
     })?;
-    hub.store.start_run(&run.id, &cid).await?;
+    if !hub.store.start_run(&run.id, &cid).await? {
+        tracing::info!(run = %run.id, job = %run.runnable, "run ended while its container started; stopping it");
+        hub.containers.stop(&spec.name, 10).await?;
+        finalize_container(hub, run).await;
+        return Ok(());
+    }
     tracing::info!(run = %run.id, job = %run.runnable, "job started");
     Ok(())
 }

@@ -100,6 +100,7 @@ import type { StateGet } from "./StateGet";
 import type { StateSet } from "./StateSet";
 import type { StateValue } from "./StateValue";
 import type { StopChat } from "./StopChat";
+import type { StopTrial } from "./StopTrial";
 import type { StorageOverview } from "./StorageOverview";
 import type { StorageUsage } from "./StorageUsage";
 import type { SubmitReview } from "./SubmitReview";
@@ -111,6 +112,7 @@ import type { TimerCancelled } from "./TimerCancelled";
 import type { TimerSet } from "./TimerSet";
 import type { TrialRun } from "./TrialRun";
 import type { TrialStarted } from "./TrialStarted";
+import type { TrialStopped } from "./TrialStopped";
 import type { Unsubscribe } from "./Unsubscribe";
 import type { Unsubscribed } from "./Unsubscribed";
 
@@ -128,6 +130,7 @@ export interface Ops {
   propose_change: { input: ProposeChange; output: Proposed };
   preview_change: { input: PreviewChange; output: ChangePreview };
   trial_run: { input: TrialRun; output: TrialStarted };
+  stop_trial: { input: StopTrial; output: TrialStopped };
   replay_event: { input: ReplayEvent; output: TrialStarted };
   get_proposal: { input: GetProposal; output: ProposalDetail };
   submit_review: { input: SubmitReview; output: ReviewRecorded };

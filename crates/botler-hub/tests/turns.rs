@@ -80,7 +80,11 @@ async fn transient_error_is_retried_with_backoff_and_succeeds() {
     assert_eq!(idle[0].to.as_deref(), Some("botler"));
     let p = prompts(&e, &child);
     assert_eq!(p.len(), 2, "the task, then one retry");
-    assert!(p[1].contains("transient provider error (Connection error. (calling fake/model via openrouter))"), "{}", p[1]);
+    assert!(
+        p[1].contains("transient provider error (Connection error. (calling fake/model via openrouter))"),
+        "{}",
+        p[1]
+    );
     assert!(e.hub.store.turn_retry(&child).await.unwrap().is_none(), "retries forgotten once it succeeds");
     assert!(events(&e, kinds::AGENT_TURN_FAILED).await.is_empty());
     assert!(e.hub.store.open_incidents().await.unwrap().is_empty());

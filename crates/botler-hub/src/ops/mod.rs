@@ -260,6 +260,7 @@ pub static OPS: &[OpSpec] = &[
     op::<ProposeChange>(),
     op::<PreviewChange>(),
     op::<TrialRun>(),
+    op::<StopTrial>(),
     op::<ReplayEvent>(),
     op::<GetProposal>(),
     op::<SubmitReview>(),

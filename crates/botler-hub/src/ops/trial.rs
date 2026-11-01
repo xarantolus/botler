@@ -132,3 +132,35 @@ impl Op for TrialRun {
         })
     }
 }
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+#[ts(optional_fields)]
+pub struct StopTrial {
+    /// The trial's run id (from trial_run); your running trial when unset.
+    #[serde(default)]
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct TrialStopped {
+    pub run_id: String,
+    pub note: String,
+}
+
+impl Op for StopTrial {
+    const NAME: &'static str = "stop_trial";
+    const DESCRIPTION: &'static str = "Stop your running trial (from trial_run or replay_event), e.g. when it hangs or you have seen enough. Its trial.finished, with the logs tail and recorded effects, follows.";
+    const WHO: Who = Who::UserAndAgents;
+    type Output = TrialStopped;
+
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<TrialStopped, OpError> {
+        let instance = caller.agent("only agents stop their trials")?;
+        let run = trials::stop(hub, instance, self.run_id.as_deref()).await?.ok_or_else(|| {
+            OpError::BadRequest(match &self.run_id {
+                Some(id) => format!("trial {id} is not one of your running trials"),
+                None => "you have no running trial".into(),
+            })
+        })?;
+        Ok(TrialStopped { run_id: run.id, note: "Stopped; its trial.finished event follows.".into() })
+    }
+}

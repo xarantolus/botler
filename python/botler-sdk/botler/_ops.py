@@ -112,6 +112,15 @@ def trial_run(*, job: str, branch: str, minutes: int | None = None) -> dict[str,
     return call("trial_run", {"job": job, "branch": branch, "minutes": minutes})
 
 
+def stop_trial(*, run_id: str | None = None) -> dict[str, Any]:
+    """Stop your running trial (from trial_run or replay_event), e.g. when it hangs or you have seen enough. Its trial.finished, with the logs tail and recorded effects, follows.
+
+    Args:
+        run_id: The trial's run id (from trial_run); your running trial when unset.
+    """
+    return call("stop_trial", {"run_id": run_id})
+
+
 def replay_event(*, event_id: str, job: str, branch: str | None = None, minutes: int | None = None) -> dict[str, Any]:
     """Re-run a job against a past event, as a dry run: main's definition and image, or your pushed branch's to test a fix. Like trial_run: only secret groups you hold, its own empty `state`, and emit_event, send_message and set_timer are recorded, not carried out. The outcome arrives as trial.finished.
 

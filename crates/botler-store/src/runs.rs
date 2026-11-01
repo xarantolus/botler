@@ -103,14 +103,18 @@ impl Store {
         row(&r.ok_or_else(|| crate::not_found("run", id))?)
     }
 
-    pub async fn start_run(&self, id: &str, container_id: &str) -> Result<()> {
-        sqlx::query("UPDATE runs SET status = 'running', container_id = ?, started_at = ? WHERE id = ?")
-            .bind(container_id)
-            .bind(ts(Utc::now()))
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+    /// Mark a queued run running. Returns false if it ended while its container was starting
+    /// (stopped, swept, the kill switch).
+    pub async fn start_run(&self, id: &str, container_id: &str) -> Result<bool> {
+        let r = sqlx::query(
+            "UPDATE runs SET status = 'running', container_id = ?, started_at = ? WHERE id = ? AND status = 'queued'",
+        )
+        .bind(container_id)
+        .bind(ts(Utc::now()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() == 1)
     }
 
     /// Record a service's health heartbeat. Returns false if the run is no longer running.

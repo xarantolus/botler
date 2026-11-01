@@ -176,10 +176,43 @@ pub async fn sweep(hub: &Hub, run: &Run, now: DateTime<Utc>) -> Result<()> {
             finish(hub, run, TrialOutcome::TimeUp, None, Some(why)).await
         }
         RunStatus::Queued if now - run.created_at > START_DEADLINE => {
-            finish(hub, run, TrialOutcome::Failed, None, Some("never started (hub restarted?)".into())).await
+            finish(hub, run, TrialOutcome::Failed, None, Some("never started".into())).await
         }
         _ => Ok(()),
     }
+}
+
+/// Stop `instance`'s running trial (`run_id`, or its only one), if it has one. Its
+/// trial.finished follows.
+pub async fn stop(hub: &Hub, instance: &str, run_id: Option<&str>) -> Result<Option<Run>> {
+    for run in hub.store.active_runs().await?.into_iter().filter(|r| r.kind == RunKind::Trial) {
+        if run_id.is_some_and(|id| id != run.id)
+            || !hub.store.trial(&run.id).await?.is_some_and(|t| t.instance == instance)
+        {
+            continue;
+        }
+        finish(hub, &run, TrialOutcome::Failed, None, Some("stopped by the agent that started it".into())).await?;
+        return Ok(Some(run));
+    }
+    Ok(None)
+}
+
+/// After a restart: a trial still queued was being launched by a task of the old hub, so it never
+/// starts. End it, so its agent hears and can start it again.
+pub async fn end_unstarted_on_boot(hub: &Hub) -> Result<()> {
+    for run in
+        hub.store.active_runs().await?.into_iter().filter(|r| r.kind == RunKind::Trial && r.status == RunStatus::Queued)
+    {
+        finish(
+            hub,
+            &run,
+            TrialOutcome::Failed,
+            None,
+            Some("the hub restarted before it started; start it again".into()),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// Stop every trial (the kill switch): they run code nobody has reviewed yet.

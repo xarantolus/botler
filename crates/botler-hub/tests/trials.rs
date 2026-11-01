@@ -185,6 +185,44 @@ async fn a_failing_trial_reports_back_without_an_incident() {
 }
 
 #[tokio::test]
+async fn an_agent_stops_its_trial_and_a_restart_ends_one_that_never_started() {
+    let s = setup(WATCH).await;
+    let none = ops::call(&s.e.hub, &s.agent, "stop_trial", json!({})).await.unwrap_err();
+    assert!(none.to_string().contains("no running trial"), "{none}");
+
+    let run = start(&s, 5).await;
+    let out = ops::call(&s.e.hub, &s.agent, "stop_trial", json!({})).await.unwrap();
+    assert_eq!(out["run_id"], run.id);
+    assert_eq!(s.e.hub.store.run(&run.id).await.unwrap().status, RunStatus::Failed);
+    assert!(s.e.fake.containers().is_empty());
+    let done = finished(&s).await;
+    assert_eq!(done[0].1.reason.as_deref(), Some("stopped by the agent that started it"));
+
+    // A trial the old hub was still launching: the new one ends it, so another can start.
+    let queued =
+        s.e.hub
+            .store
+            .create_run(&botler_store::NewRun {
+                runnable: "watch".into(),
+                kind: botler_store::RunKind::Trial,
+                trigger_id: None,
+                event_id: None,
+                commit_id: None,
+            })
+            .await
+            .unwrap();
+    s.e.hub.store.create_trial(&queued.id, &s.instance, &s.branch, 5, &[]).await.unwrap();
+    botler_hub::trials::end_unstarted_on_boot(&s.e.hub).await.unwrap();
+    assert_eq!(s.e.hub.store.run(&queued.id).await.unwrap().status, RunStatus::Failed);
+    assert!(finished(&s).await.iter().any(|(_, p)| p.run_id == queued.id
+        && p.reason.as_deref() == Some("the hub restarted before it started; start it again")));
+    start(&s, 1).await;
+
+    // A run that ended while its container was starting does not come back to life.
+    assert!(!s.e.hub.store.start_run(&queued.id, "ctr").await.unwrap());
+}
+
+#[tokio::test]
 async fn trials_are_checked() {
     let s = setup(WATCH).await;
     let call = |input: Value| ops::call(&s.e.hub, &s.agent, "trial_run", input);
