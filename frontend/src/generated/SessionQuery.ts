@@ -4,4 +4,8 @@ export type SessionQuery = {
 /**
  * An older session file of the chat (from `sessions`); default the current one.
  */
-file?: string, };
+file?: string, 
+/**
+ * Only the last this many items (`earlier` says how many come before); default all.
+ */
+last?: number, };

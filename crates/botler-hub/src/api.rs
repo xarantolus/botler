@@ -670,6 +670,9 @@ pub struct SessionQuery {
     /// An older session file of the chat (from `sessions`); default the current one.
     #[ts(optional)]
     file: Option<String>,
+    /// Only the last this many items (`earlier` says how many come before); default all.
+    #[ts(optional)]
+    last: Option<usize>,
 }
 
 async fn session(
@@ -697,7 +700,7 @@ async fn session(
         }
     }
     let phase = hub.agents.phase(&inst.name).await;
-    let items = crate::sessions::read(&hub, &inst.name, q.file.as_deref()).await?;
+    let (items, earlier) = crate::sessions::read(&hub, &inst.name, q.file.as_deref(), q.last).await?;
     let sessions = crate::sessions::files(&hub, &inst.name).await?;
     let file = q.file.unwrap_or_else(|| inst.session_file.clone());
     let tool_renders =
@@ -709,6 +712,7 @@ async fn session(
         pending,
         phase,
         items,
+        earlier,
         tool_renders,
         queued,
         sessions,

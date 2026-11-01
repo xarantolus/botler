@@ -53,7 +53,7 @@ def set_timer(*, prompt: str, at: str | None = None, in_: str | None = None, ins
 
 
 def wait(*, in_: str, reason: str) -> dict[str, Any]:
-    """Wait instead of sleeping or polling in a shell: your turn ends now, and you wake when anything arrives for you (an event, a message, a trial.finished) or at the latest after `in`, reminded of `reason`. Your container may sleep meanwhile; nothing is lost.
+    """Wait for something nothing will tell you about (an outside page or process), instead of sleeping or polling in a shell: your turn ends now, and you wake when anything arrives for you or at the latest after `in`, reminded of `reason`. Not for answers, approvals, grants, proposals, trials or children: those wake you by themselves, so just end your turn. A new wait replaces the last one, and anything arriving ends it.
 
     Args:
         in_: At most how long, e.g. `10m`, `2h` (up to a day).
@@ -98,7 +98,7 @@ def list_timers() -> list[dict[str, Any]]:
 
 
 def set_chat_title(*, title: str, slug: str) -> dict[str, Any]:
-    """Name your chat so the user can find it: a short title and a unique slug like `groundstation-antenna-fix` (lowercase words joined by dashes, project or topic first). Others can then message you by the slug. Do this after the first message of a new chat, and again if the topic changes.
+    """Name your chat so the user can find it: a short title and a unique slug like `groundstation-antenna-fix` (lowercase words joined by dashes, project or topic first). The slug is the chat's name in its link and for messages. Do this after the first message of a new chat (unless your spawner named it), again if the topic changes, and when the user asks you to rename yourself. A title the user gave stays; the slug still changes.
 
     Args:
         slug: Lowercase words joined by dashes, 3 to 60 characters.
@@ -106,14 +106,16 @@ def set_chat_title(*, title: str, slug: str) -> dict[str, Any]:
     return call("set_chat_title", {"title": title, "slug": slug})
 
 
-def spawn_agent(*, definition: str, task: str, env: Any = None) -> dict[str, Any]:
-    """Start a new instance of an agent definition with a task. It reports back to you by message; if it has not by `reply_within` (botler.toml, default 20m), you get a `reply.overdue` event. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user. Give the child the access its task needs; never tell it to work around missing access.
+def spawn_agent(*, definition: str, task: str, slug: str | None = None, title: str | None = None, env: Any = None) -> dict[str, Any]:
+    """Start a new instance of an agent definition with a task. It reports back to you by message; if it has not by `reply_within` (botler.toml, default 20m), you get a `reply.overdue` event. Name it with `slug` (e.g. `mattermost-websocket-bridge`) so the user can tell chats apart. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user. Give the child the access its task needs; never tell it to work around missing access.
 
     Args:
         definition: Agent definition under `agents/`, e.g. `dev`.
+        slug: The new chat's name in links and messages, like `mattermost-websocket-bridge` (see `set_chat_title`); without one it is `<definition>-<random>` until the chat names itself.
+        title: Its title (default: from the slug).
         env: What the new chat gets beyond its definition.
     """
-    return call("spawn_agent", {"definition": definition, "task": task, "env": env})
+    return call("spawn_agent", {"definition": definition, "task": task, "slug": slug, "title": title, "env": env})
 
 
 def list_chats() -> dict[str, Any]:

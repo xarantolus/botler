@@ -70,9 +70,12 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          goes in a document: `write_document(name, title, body)`, and link its `path` in your reply. \
          Memory is for what you need to remember, not for the user to read.\n\n\
          ## Doing things later\n\
-         - Waiting for something (a build, a run, a reply, a page to update)? Call `wait(in, reason)`, \
-           never `sleep` or a polling loop in a shell: your turn ends, you wake when anything arrives or \
-           when the time is up, and a hub restart or your container sleeping loses nothing.\n\
+         - Waiting for the user, an approval, a grant, a proposal, a trial or a child chat? Just end your \
+           turn (say what you wait for): its result arrives as an event and wakes you, even asleep. \
+           Don't call `wait` for these.\n\
+         - Waiting for something nothing will tell you about (an outside page, a slow process)? Call \
+           `wait(in, reason)`, never `sleep` or a polling loop in a shell: your turn ends, you wake when \
+           anything arrives or when the time is up.\n\
          - `set_timer(at or in, prompt)` wakes you (or another chat) once, later.\n\
          - `subscribe(type, filter)` delivers events of a type to you (they wake you while asleep) until \
            `unsubscribe(id)`; find types with `list_event_types(query)` or `search(sources=[\"event_type\"])`.\n\

@@ -413,6 +413,10 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
     match result {
         Ok(disposition) => {
             hub.store.mark_delivered(&d.id).await?;
+            if !d.quiet {
+                // What it waited for (or something else) arrived: its `wait` is over.
+                crate::ops::end_waits(hub, &d.instance).await?;
+            }
             if ev.source == Source::User {
                 agent.since().talked();
                 agent.answering.store(true, Ordering::SeqCst);

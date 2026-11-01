@@ -4,7 +4,7 @@ import type { CommandPaletteGroup, CommandPaletteItem } from "@nuxt/ui";
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { handoverChat, stopChat } from "../../chatActions";
-import { chatTitle } from "../../lib/events";
+import { chatName, chatTitle } from "../../lib/events";
 import { sections } from "../../navigation";
 import { shell } from "../../shell";
 import { BUILTIN_SHORTCUTS, SHORTCUTS } from "../../shortcuts";
@@ -15,7 +15,11 @@ const route = useRoute();
 const currentInstance = computed(() => state.instances.find((i) => i.name === currentChat.value) ?? null);
 /** The chat on screen, if any. */
 const currentChat = computed(() =>
-  route.name === "chat" && typeof route.params.instance === "string" ? route.params.instance : route.name === "home" ? frontDoorName.value : null,
+  route.name === "chat" && typeof route.params.instance === "string"
+    ? chatName(route.params.instance, state.instances, frontDoorName.value)
+    : route.name === "home"
+      ? frontDoorName.value
+      : null,
 );
 const searchTerm = computed({ get: () => shell.paletteTerm, set: (v: string) => (shell.paletteTerm = v) });
 
@@ -30,7 +34,7 @@ const groups = computed((): CommandPaletteGroup<CommandPaletteItem>[] => {
       suffix: i.name === chatTitle(i, door) ? i.definition : i.name,
       icon: i.name === door ? "i-lucide-star" : "i-lucide-message-square",
       chip: waitingByInstance.value[i.name] ? { color: "warning" as const } : undefined,
-      to: `/chat/${encodeURIComponent(i.name)}`,
+      to: `/chat/${encodeURIComponent(i.slug ?? i.name)}`,
     }));
   const requests = (state.dialogs?.open ?? []).map((d) => ({
     id: `dialog:${d.id}`,

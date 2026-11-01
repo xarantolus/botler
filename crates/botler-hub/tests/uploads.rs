@@ -217,7 +217,7 @@ async fn agents_send_files_from_their_home() {
         "[from {chat} | provenance: trusted | message | delivery d | event {}]\nthe report", ev.id)}});
     std::fs::create_dir_all(e.hub.paths.sessions(&other)).unwrap();
     std::fs::write(e.hub.paths.sessions(&other).join(session), format!("{entry}\n")).unwrap();
-    let items = botler_hub::sessions::read(&e.hub, &other, None).await.unwrap();
+    let items = botler_hub::sessions::read(&e.hub, &other, None, None).await.unwrap().0;
     let botler_hub::sessions::Item::User { files, message_text, .. } = &items[0] else { panic!("{items:?}") };
     assert_eq!((files.len(), files[0].file.as_str(), files[0].mime), (1, file.as_str(), "application/pdf"));
     assert_eq!(*message_text, None, "only the user's own text replaces the delivered text");

@@ -469,11 +469,12 @@ pub async fn image(
 }
 
 /// The active branch of one of an instance's sessions (default: the current one), oldest first.
-pub async fn read(hub: &Hub, instance: &str, file: Option<&str>) -> Result<Vec<Item>> {
+/// The session's items, at most the `last` ones (all without), and how many come before them.
+pub async fn read(hub: &Hub, instance: &str, file: Option<&str>, last: Option<usize>) -> Result<(Vec<Item>, usize)> {
     let path = session_path(hub, instance, file).await?;
     let raw = match tokio::fs::read_to_string(&path).await {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
         Err(e) => return Err(HubError::Io(e)),
     };
     let entries: Vec<Value> = raw.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
@@ -487,9 +488,11 @@ pub async fn read(hub: &Hub, instance: &str, file: Option<&str>) -> Result<Vec<I
     }
     branch.reverse();
 
+    let items: Vec<Item> = branch.into_iter().filter_map(parse_entry).collect();
+    let earlier = last.map_or(0, |n| items.len().saturating_sub(n));
+    // Only the items shown are completed from the events (a query each).
     let mut out = Vec::new();
-    for e in branch {
-        let Some(mut item) = parse_entry(e) else { continue };
+    for mut item in items.into_iter().skip(earlier) {
         if let Item::User { event: Some(ev), message_text, files, .. } = &mut item
             && let Some((text, attached)) = message_of(hub, ev).await?
         {
@@ -513,7 +516,7 @@ pub async fn read(hub: &Hub, instance: &str, file: Option<&str>) -> Result<Vec<I
         }
         out.push(item);
     }
-    Ok(out)
+    Ok((out, earlier))
 }
 
 #[cfg(test)]

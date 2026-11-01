@@ -130,6 +130,22 @@ impl Op for ListTimers {
     }
 }
 
+/// How a `wait`'s timer prompt starts.
+const WAITED: &str = "You waited (at most";
+
+/// Cancel `instance`'s pending `wait`s: something arrived (or it waits anew), so they would only
+/// wake it again for nothing.
+pub async fn end_waits(hub: &Hub, instance: &str) -> crate::hub::Result<()> {
+    for t in hub.store.pending_timers(None).await? {
+        if t.target == Target::Resume(instance.to_string())
+            && t.prompt.as_deref().is_some_and(|p| p.starts_with(WAITED))
+        {
+            hub.store.set_timer_status(&t.id, TimerStatus::Cancelled).await?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, JsonSchema, TS)]
 pub struct Wait {
     /// At most how long, e.g. `10m`, `2h` (up to a day).
@@ -148,7 +164,7 @@ pub struct Waiting {
 
 impl Op for Wait {
     const NAME: &'static str = "wait";
-    const DESCRIPTION: &'static str = "Wait instead of sleeping or polling in a shell: your turn ends now, and you wake when anything arrives for you (an event, a message, a trial.finished) or at the latest after `in`, reminded of `reason`. Your container may sleep meanwhile; nothing is lost.";
+    const DESCRIPTION: &'static str = "Wait for something nothing will tell you about (an outside page or process), instead of sleeping or polling in a shell: your turn ends now, and you wake when anything arrives for you or at the latest after `in`, reminded of `reason`. Not for answers, approvals, grants, proposals, trials or children: those wake you by themselves, so just end your turn. A new wait replaces the last one, and anything arriving ends it.";
     const WHO: Who = Who::UserAndAgents;
     const ENDS_TURN: bool = true;
     type Output = Waiting;
@@ -160,8 +176,10 @@ impl Op for Wait {
         if wake > now + chrono::Duration::days(1) {
             return Err(OpError::BadRequest("wait at most a day; use set_timer for later".into()));
         }
+        // One wait at a time: this one replaces any still pending.
+        end_waits(hub, &instance).await?;
         let prompt = format!(
-            "You waited (at most {}) for: {}. Check on it now; if it already arrived and you dealt with it, carry on.",
+            "{WAITED} {}) for: {}. Check on it now; if it already arrived and you dealt with it, carry on.",
             self.after, self.reason
         );
         let timer = SetTimer { at: None, after: Some(self.after.clone()), prompt, instance: Some(instance) };

@@ -134,15 +134,19 @@ export function chatTitle(i: Pick<Instance, "name" | "title" | "slug">, frontDoo
   return i.title || i.slug || i.name;
 }
 
-/**
- * Where a chat link should go: the front door used to be called `main`, so a remembered
- * `main` (bookmark, history) opens the front door unless a chat by that name exists.
- */
-export function redirectChat(name: string, instances: Pick<Instance, "name">[], frontDoor: string | null): string | null {
-  if (name === "main" && frontDoor && frontDoor !== "main" && !instances.some((i) => i.name === "main")) {
-    return frontDoor;
-  }
-  return null;
+/** The chat a link names (its name, its slug, or a remembered `main` for the front door): the
+ * instance name, or the link itself while the chats are not loaded. */
+export function chatName(link: string, instances: Pick<Instance, "name" | "slug">[], frontDoor: string | null): string {
+  const hit = instances.find((i) => i.name === link) ?? instances.find((i) => i.slug === link);
+  if (hit) return hit.name;
+  if (link === "main" && frontDoor) return frontDoor;
+  return link;
+}
+
+/** The link path of a chat: by its slug once it has one, so the address reads like its topic. */
+export function chatPath(name: string, instances: Pick<Instance, "name" | "slug">[]): string {
+  const slug = instances.find((i) => i.name === name)?.slug;
+  return `/chat/${encodeURIComponent(slug ?? name)}`;
 }
 
 /** The dialog a tool result opened, directly or through its proposal's approval. */

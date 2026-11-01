@@ -7,6 +7,15 @@ export type SpawnAgent = {
  */
 definition: string, task: string, 
 /**
+ * The new chat's name in links and messages, like `mattermost-websocket-bridge` (see
+ * `set_chat_title`); without one it is `<definition>-<random>` until the chat names itself.
+ */
+slug?: string, 
+/**
+ * Its title (default: from the slug).
+ */
+title?: string, 
+/**
  * What the new chat gets beyond its definition.
  */
 env?: SpawnEnv, };

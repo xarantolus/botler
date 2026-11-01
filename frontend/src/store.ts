@@ -195,22 +195,37 @@ export function refreshEvents() {
 let sessionFor: string | null = null;
 /** An earlier session file of that chat being viewed (from a handover), or null for the current. */
 let sessionFile: string | null = null;
+/** Session items a chat loads at first, and how many more "Show earlier" adds. */
+export const SESSION_PAGE = 200;
+/** How many of the latest items of the chat on screen are loaded (null: all). */
+let sessionLast: number | null = SESSION_PAGE;
+
+/** Load more of the chat on screen, further back (all of it with `all`, e.g. to reach a link). */
+export function showEarlier(name: string, all = false) {
+  const shown = state.session?.instance.name === name ? state.session.items.length : 0;
+  sessionLast = all ? null : shown + SESSION_PAGE;
+  return refreshSession(name);
+}
 
 /** View one of the chat's session files (null: the current one). */
 export function showSessionFile(name: string, file: string | null) {
   sessionFor = name; // so refreshSession keeps the file
   sessionFile = file;
+  sessionLast = SESSION_PAGE;
   return refreshSession(name);
 }
 
 let sessionSeq = 0;
 export function refreshSession(name: string) {
-  if (sessionFor !== name) sessionFile = null;
+  if (sessionFor !== name) {
+    sessionFile = null;
+    sessionLast = SESSION_PAGE;
+  }
   sessionFor = name;
   const seq = ++sessionSeq;
   return guarded(`Loading chat ${name}`, async () => {
     try {
-      const s = await call("session", { params: { instance: name }, query: { file: sessionFile ?? undefined } });
+      const s = await call("session", { params: { instance: name }, query: { file: sessionFile ?? undefined, last: sessionLast ?? undefined } });
       // The user moved on, or a later refresh was sent (an answer may overtake an older one).
       if (sessionFor !== name || seq !== sessionSeq) return;
       state.session = s;

@@ -59,7 +59,7 @@ const items = computed((): ChatItem[] =>
     const door = i.name === frontDoorName.value;
     return {
       label: chatTitle(i, frontDoorName.value),
-      to: `/chat/${encodeURIComponent(i.name)}`,
+      to: `/chat/${encodeURIComponent(i.slug ?? i.name)}`,
       active: i.name === selected.value,
       icon: door ? "i-lucide-star" : i.pinned ? "i-lucide-pin" : i.state === "archived" ? "i-lucide-archive" : "i-lucide-message-square",
       chip: waitingByInstance.value[i.name] ? { color: "warning" as const, size: "md" as const } : undefined,

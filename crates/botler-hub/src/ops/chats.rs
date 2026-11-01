@@ -29,34 +29,49 @@ pub struct ChatTitled {
 
 impl Op for SetChatTitle {
     const NAME: &'static str = "set_chat_title";
-    const DESCRIPTION: &'static str = "Name your chat so the user can find it: a short title and a unique slug like `groundstation-antenna-fix` (lowercase words joined by dashes, project or topic first). Others can then message you by the slug. Do this after the first message of a new chat, and again if the topic changes.";
+    const DESCRIPTION: &'static str = "Name your chat so the user can find it: a short title and a unique slug like `groundstation-antenna-fix` (lowercase words joined by dashes, project or topic first). The slug is the chat's name in its link and for messages. Do this after the first message of a new chat (unless your spawner named it), again if the topic changes, and when the user asks you to rename yourself. A title the user gave stays; the slug still changes.";
     const WHO: Who = Who::UserAndAgents;
     type Output = ChatTitled;
 
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<ChatTitled, OpError> {
         let instance = caller.agent("only agents name chats")?;
-        if hub.store.instance(instance).await?.titled_by_user {
-            return Err(OpError::BadRequest("the user named this chat; keep its title".into()));
-        }
-        let slug_ok = (3..=60).contains(&self.slug.len())
-            && botler_core::defs::valid_name(&self.slug)
-            && !self.slug.ends_with('-')
-            && !self.slug.contains("--");
-        if !slug_ok {
-            return Err(OpError::BadRequest(
-                "slug must be 3-60 lowercase letters/digits in dash-separated words".into(),
-            ));
-        }
-        let title = self.title.trim();
-        if title.is_empty() || title.len() > 120 {
-            return Err(OpError::BadRequest("title must be 1-120 characters".into()));
-        }
-        hub.store.set_instance_title(instance, title, &self.slug).await.map_err(|e| match e {
-            botler_store::Error::SlugTaken(s) => OpError::BadRequest(format!("{s} is taken; pick another slug")),
-            other => other.into(),
-        })?;
-        Ok(ChatTitled { instance: instance.into(), title: title.into(), slug: self.slug })
+        check_slug(&self.slug)?;
+        let current = hub.store.instance(instance).await?;
+        // The user's title stays; the slug (the chat's name in links and messages) still changes.
+        let title = match current.title.filter(|_| current.titled_by_user) {
+            Some(t) => t,
+            None => check_title(&self.title)?,
+        };
+        name_chat(hub, instance, &title, &self.slug).await?;
+        Ok(ChatTitled { instance: instance.into(), title, slug: self.slug })
     }
+}
+
+/// A slug: 3 to 60 lowercase letters and digits in dash-separated words.
+fn check_slug(slug: &str) -> Result<(), OpError> {
+    let ok = (3..=60).contains(&slug.len())
+        && botler_core::defs::valid_name(slug)
+        && !slug.ends_with('-')
+        && !slug.contains("--");
+    if !ok {
+        return Err(OpError::BadRequest("slug must be 3-60 lowercase letters/digits in dash-separated words".into()));
+    }
+    Ok(())
+}
+
+fn check_title(title: &str) -> Result<String, OpError> {
+    let title = title.trim();
+    if title.is_empty() || title.len() > 120 {
+        return Err(OpError::BadRequest("title must be 1-120 characters".into()));
+    }
+    Ok(title.into())
+}
+
+async fn name_chat(hub: &Hub, instance: &str, title: &str, slug: &str) -> Result<(), OpError> {
+    hub.store.set_instance_title(instance, title, slug).await.map_err(|e| match e {
+        botler_store::Error::SlugTaken(s) => OpError::BadRequest(format!("{s} is taken; pick another slug")),
+        other => other.into(),
+    })
 }
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]
@@ -65,6 +80,13 @@ pub struct SpawnAgent {
     /// Agent definition under `agents/`, e.g. `dev`.
     pub definition: String,
     pub task: String,
+    /// The new chat's name in links and messages, like `mattermost-websocket-bridge` (see
+    /// `set_chat_title`); without one it is `<definition>-<random>` until the chat names itself.
+    #[serde(default)]
+    pub slug: Option<String>,
+    /// Its title (default: from the slug).
+    #[serde(default)]
+    pub title: Option<String>,
     /// What the new chat gets beyond its definition.
     #[serde(default)]
     pub env: Option<SpawnEnv>,
@@ -86,6 +108,8 @@ pub struct SpawnEnv {
 #[derive(Debug, Serialize, TS)]
 pub struct AgentSpawned {
     pub instance: String,
+    /// Its name in links and messages, if given.
+    pub slug: Option<String>,
     /// Resources it holds from the start (`secret:<group>`, `mount:<name>`).
     pub granted: Vec<String>,
     /// Access requests the user decides; the new chat is woken with each answer.
@@ -94,7 +118,7 @@ pub struct AgentSpawned {
 
 impl Op for SpawnAgent {
     const NAME: &'static str = "spawn_agent";
-    const DESCRIPTION: &'static str = "Start a new instance of an agent definition with a task. It reports back to you by message; if it has not by `reply_within` (botler.toml, default 20m), you get a `reply.overdue` event. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user. Give the child the access its task needs; never tell it to work around missing access.";
+    const DESCRIPTION: &'static str = "Start a new instance of an agent definition with a task. It reports back to you by message; if it has not by `reply_within` (botler.toml, default 20m), you get a `reply.overdue` event. Name it with `slug` (e.g. `mattermost-websocket-bridge`) so the user can tell chats apart. `env = {secrets: [...], mounts: [...]}` gives it secret groups and shares beyond its definition: what you hold yourself or policy allows is granted at once, the rest is asked of the user. Give the child the access its task needs; never tell it to work around missing access.";
     const WHO: Who = Who::UserAndAgents;
     type Output = AgentSpawned;
 
@@ -118,8 +142,22 @@ impl Op for SpawnAgent {
         for r in &wanted {
             crate::grants::check(&applied.defs, def, r, None)?;
         }
+        if let Some(slug) = &self.slug {
+            check_slug(slug)?;
+            if hub.store.resolve_instance(slug).await?.is_some() {
+                return Err(OpError::BadRequest(format!("{slug} is taken; pick another slug")));
+            }
+        }
+        let title = match (&self.title, &self.slug) {
+            (Some(t), _) => Some(check_title(t)?),
+            (None, Some(s)) => Some(capitalized(&s.replace('-', " "))),
+            (None, None) => None,
+        };
         let parent = caller.instance();
         let instance = router::new_instance(hub, &self.definition, parent, Some(&self.task)).await?;
+        if let (Some(slug), Some(title)) = (&self.slug, &title) {
+            name_chat(hub, &instance, title, slug).await?;
+        }
         let (mut granted, mut requested) = (Vec::new(), Vec::new());
         for r in &wanted {
             // The user decides directly; a parent passes on what it holds; policy may allow it.
@@ -148,8 +186,13 @@ impl Op for SpawnAgent {
         if let Some(me) = parent {
             crate::turns::expect_reply(hub, me, &instance, None, None).await?;
         }
-        Ok(AgentSpawned { instance, granted, requested })
+        Ok(AgentSpawned { instance, slug: self.slug, granted, requested })
     }
+}
+
+fn capitalized(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]

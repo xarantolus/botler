@@ -186,14 +186,14 @@ async fn botler_rolls_over_to_a_fresh_session_seeded_with_its_report() {
         ),
     )
     .unwrap();
-    let items = botler_hub::sessions::read(&e.hub, "botler", None).await.unwrap();
+    let items = botler_hub::sessions::read(&e.hub, "botler", None, None).await.unwrap().0;
     assert!(
         matches!(&items[0], botler_hub::sessions::Item::SessionStarted { previous, .. } if previous == "botler.jsonl")
     );
     let files = botler_hub::sessions::files(&e.hub, "botler").await.unwrap();
     assert_eq!(files.last(), Some(&file));
     assert!(files.contains(&"botler.jsonl".to_string()));
-    assert!(botler_hub::sessions::read(&e.hub, "botler", Some("../../etc/passwd")).await.is_err());
+    assert!(botler_hub::sessions::read(&e.hub, "botler", Some("../../etc/passwd"), None).await.is_err());
 }
 
 #[tokio::test]
@@ -324,8 +324,25 @@ async fn the_user_pins_and_renames_chats_and_a_finished_chat_archives_itself() {
         capabilities: vec![],
         runnable: None,
     };
+    // It may still rename its slug (when the user asks), and the user's title stays.
     let r = ops::call(&e.hub, &agent, "set_chat_title", json!({"title": "Other", "slug": "other-topic"})).await;
-    assert!(r.unwrap_err().to_string().contains("the user named this chat"));
+    assert_eq!(r.unwrap()["title"], "Flat search");
+    let i = e.hub.store.resolve_instance("other-topic").await.unwrap().unwrap();
+    assert_eq!((i.name.as_str(), i.title.as_deref()), (chat.as_str(), Some("Flat search")));
+
+    // A spawned chat is named by its spawner; a taken slug is refused before anything starts.
+    let spawned =
+        ops::call(&e.hub, &agent, "spawn_agent", json!({"definition": "chat", "task": "t", "slug": "flat-photos"}))
+            .await
+            .unwrap();
+    let child = e.hub.store.resolve_instance("flat-photos").await.unwrap().unwrap();
+    assert_eq!(
+        (child.name.as_str(), child.title.as_deref()),
+        (spawned["instance"].as_str().unwrap(), Some("Flat photos"))
+    );
+    let taken =
+        ops::call(&e.hub, &agent, "spawn_agent", json!({"definition": "chat", "task": "t", "slug": "other-topic"}));
+    assert!(taken.await.unwrap_err().to_string().contains("taken"));
     ops::call(&e.hub, &agent, "handover_ready", json!({"summary": "Found three flats and sent them to the user."}))
         .await
         .unwrap();
@@ -360,6 +377,21 @@ async fn an_agent_waits_through_the_hub_instead_of_a_shell() {
     assert!(t.prompt.as_deref().unwrap().contains("the mail-watch trial"));
     let long = ops::call(&e.hub, &agent, "wait", json!({"in": "3d", "reason": "x"})).await;
     assert!(long.unwrap_err().to_string().contains("at most a day"));
+
+    // A new wait replaces the last one, and anything arriving ends it.
+    let waits = |e: &Env| {
+        let hub = e.hub.clone();
+        async move { hub.store.pending_timers(None).await.unwrap().len() }
+    };
+    ops::call(&e.hub, &agent, "wait", json!({"in": "20m", "reason": "the page"})).await.unwrap();
+    assert_eq!(waits(&e).await, 1);
+    let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+        .to(&chat)
+        .payload(json!({"text": "it is up"}));
+    e.hub.emit(ev).await.unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    assert_eq!(waits(&e).await, 0);
 }
 
 #[tokio::test]

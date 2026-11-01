@@ -2,6 +2,10 @@
 
 export type AgentSpawned = { instance: string, 
 /**
+ * Its name in links and messages, if given.
+ */
+slug: string | null, 
+/**
  * Resources it holds from the start (`secret:<group>`, `mount:<name>`).
  */
 granted: Array<string>, 

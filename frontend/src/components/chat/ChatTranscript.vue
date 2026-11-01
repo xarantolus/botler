@@ -3,14 +3,16 @@
 // right, agent turns and incoming events on the left, "working…" while the agent works.
 // Not UChatMessages: ChatView does all the scrolling, and the kit's list deep-watches every
 // message on each streamed chunk (and would scroll to the last user message when the agent gets
-// busy). While pi compacts the conversation, a line says so and for how long. Each message is its own component (TranscriptEntry), so a chunk re-renders only the
-// message it changes. A long chat renders its latest PAGE messages; "Show earlier" adds more (the
-// view's scroll anchoring keeps the reader's place).
+// busy). While pi compacts the conversation, a line says so and for how long. Each message is its
+// own component (TranscriptEntry), so a chunk re-renders only the message it changes.
+// Virtual: only the messages near the viewport are in the page (the panel body scrolls them), each
+// measured once rendered. The hub sends the latest part of a long chat; "Show earlier" asks for more.
+import { useVirtualizer } from "@tanstack/vue-virtual";
 import type { ChatStatus } from "ai";
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, useTemplateRef } from "vue";
 import { elapsed } from "../../lib/time";
 import type { TranscriptMessage } from "../../lib/transcript";
-import { state } from "../../store";
+import { showEarlier, state } from "../../store";
 import TranscriptEntry from "./TranscriptEntry.vue";
 
 const props = defineProps<{
@@ -20,16 +22,38 @@ const props = defineProps<{
   queuedNote: string | null;
   /** The chat (to refresh after taking a message back). */
   instance: string;
+  /** Session items before these, not loaded. */
+  earlier: number;
 }>();
 
-const PAGE = 150;
-const shown = ref(PAGE);
-watch(
-  () => props.instance,
-  () => (shown.value = PAGE),
+const list = useTemplateRef<HTMLElement>("list");
+/** Space between messages, px. */
+const GAP = 20;
+const virtualizer = useVirtualizer(
+  computed(() => ({
+    count: props.messages.length,
+    getScrollElement: () => list.value?.closest<HTMLElement>("[data-slot=body]") ?? null,
+    estimateSize: () => 120,
+    gap: GAP,
+    overscan: 6,
+    // Where the list starts within the scrolling panel (the handover note and such sit above).
+    scrollMargin: list.value?.offsetTop ?? 0,
+    getItemKey: (i: number) => props.messages[i]?.metadata?.key ?? props.messages[i]?.id ?? i,
+  })),
 );
-const hidden = computed(() => Math.max(0, props.messages.length - shown.value));
-const visible = computed(() => (hidden.value ? props.messages.slice(hidden.value) : props.messages));
+const rows = computed(() => virtualizer.value.getVirtualItems());
+function measure(el: unknown) {
+  if (el instanceof Element) virtualizer.value.measureElement(el);
+}
+
+/** Scroll message `id` into the page (it may not be rendered yet); false if it is not loaded. */
+function scrollToMessage(id: string): boolean {
+  const i = props.messages.findIndex((m) => m.id === id || m.metadata?.delivery === id);
+  if (i < 0) return false;
+  virtualizer.value.scrollToIndex(i, { align: "center" });
+  return true;
+}
+defineExpose({ scrollToMessage });
 
 const now = ref(Date.now());
 const timer = window.setInterval(() => (now.value = Date.now()), 1000);
@@ -45,23 +69,32 @@ const compacting = computed(() => {
 <template>
   <div :data-status="props.status" class="flex w-full flex-1 flex-col gap-5">
     <UButton
-      v-if="hidden"
+      v-if="props.earlier"
       class="self-center"
       color="neutral"
       variant="soft"
       size="sm"
       icon="i-lucide-chevrons-up"
-      :label="`Show ${Math.min(hidden, PAGE)} earlier (${hidden} in all)`"
-      @click="shown += PAGE"
+      :label="`Show earlier (${props.earlier} more)`"
+      @click="showEarlier(props.instance)"
     />
-    <TranscriptEntry
-      v-for="m in visible"
-      :key="m.metadata?.key ?? m.id"
-      :message="m"
-      :busy="props.status !== 'ready'"
-      :queued-note="props.queuedNote"
-      :instance="props.instance"
-    />
+    <div ref="list" class="relative w-full" :style="{ height: `${virtualizer.getTotalSize()}px` }">
+      <div
+        v-for="row in rows"
+        :key="String(row.key)"
+        :ref="measure"
+        :data-index="row.index"
+        class="absolute inset-x-0 top-0"
+        :style="{ transform: `translateY(${row.start - virtualizer.options.scrollMargin}px)` }"
+      >
+        <TranscriptEntry
+          :message="props.messages[row.index]!"
+          :busy="props.status !== 'ready'"
+          :queued-note="props.queuedNote"
+          :instance="props.instance"
+        />
+      </div>
+    </div>
     <div v-if="compacting" class="flex items-center gap-2 py-1 text-sm" role="status">
       <UIcon name="i-lucide-fold-vertical" class="size-4 animate-pulse text-muted" />
       <UChatShimmer :text="compacting" />

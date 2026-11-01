@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BotlerEvent, Dialog } from "../generated";
-import { asBuiltin, chatTitle, eventIcon, eventSummary, linkedDialog, redirectChat } from "./events";
+import { asBuiltin, chatName, chatPath, chatTitle, eventIcon, eventSummary, linkedDialog } from "./events";
 
 const ev = (type: string, payload: unknown): BotlerEvent => ({
   id: "e",
@@ -32,10 +32,14 @@ describe("events", () => {
   });
 
   it("sends a remembered main chat to the front door", () => {
-    expect(redirectChat("main", [{ name: "botler" }], "botler")).toBe("botler");
-    expect(redirectChat("main", [{ name: "main" }, { name: "botler" }], "botler")).toBeNull();
-    expect(redirectChat("x", [{ name: "botler" }], "botler")).toBeNull();
-    expect(redirectChat("main", [], null)).toBeNull();
+    const chats = [{ name: "botler", slug: null }, { name: "dev-1a2b", slug: "mattermost-ws" }];
+    expect(chatName("main", chats, "botler")).toBe("botler");
+    expect(chatName("main", [{ name: "main", slug: null }, ...chats], "botler")).toBe("main");
+    expect(chatName("mattermost-ws", chats, "botler")).toBe("dev-1a2b");
+    expect(chatName("dev-1a2b", chats, "botler")).toBe("dev-1a2b");
+    expect(chatName("x", [], null)).toBe("x");
+    expect(chatPath("dev-1a2b", chats)).toBe("/chat/mattermost-ws");
+    expect(chatPath("botler", chats)).toBe("/chat/botler");
   });
 
   it("names the front door", () => {

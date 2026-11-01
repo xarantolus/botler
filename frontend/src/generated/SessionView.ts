@@ -20,6 +20,10 @@ pending: number,
  */
 phase: WakePhase | null, items: Array<SessionItem>, 
 /**
+ * Items of this session before `items` (`last` left them out).
+ */
+earlier: number, 
+/**
  * Render hints of the Python tools that declare one, by the name pi calls them (`web_search`).
  */
 tool_renders: { [key in string]: ToolRender }, 

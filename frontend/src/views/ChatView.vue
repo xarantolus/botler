@@ -7,7 +7,7 @@ import ChatComposer from "../components/chat/ChatComposer.vue";
 import ChatNavbar from "../components/chat/ChatNavbar.vue";
 import ChatTranscript from "../components/chat/ChatTranscript.vue";
 import MarkdownText from "../components/common/MarkdownText.vue";
-import { redirectChat } from "../lib/events";
+import { chatName, chatPath } from "../lib/events";
 import { currentStatus, phaseBadge } from "../lib/phase";
 import { sessionOptions } from "../lib/sessions";
 import { noLive, sessionTranscript, withInFlight } from "../lib/transcript";
@@ -18,6 +18,7 @@ import {
   clearSession,
   frontDoorName,
   refreshSession,
+  showEarlier,
   showSessionFile,
   state,
   waitingByInstance,
@@ -30,7 +31,7 @@ const router = useRouter();
 // A remembered `main` resolves to the front door right away (no fetch of a missing chat).
 const name = computed(() =>
   props.instance
-    ? (redirectChat(props.instance, state.instances, frontDoorName.value) ?? props.instance)
+    ? chatName(props.instance, state.instances, frontDoorName.value)
     : frontDoorName.value,
 );
 const session = computed(() => (state.session?.instance.name === name.value ? state.session : null));
@@ -38,10 +39,13 @@ const inst = computed(() => session.value?.instance ?? state.instances.find((i) 
 
 // Open the front door when no chat is named, and for a remembered `main`.
 watch(
-  [frontDoorName, () => props.instance, () => state.instances.length],
+  [frontDoorName, () => props.instance, () => state.instances.map((i) => i.slug ?? i.name).join()],
   ([door]) => {
-    const to = props.instance ? redirectChat(props.instance, state.instances, door) : door;
-    if (to && to !== props.instance) void router.replace(`/chat/${encodeURIComponent(to)}`);
+    // Every chat's address is its slug once it has one; its name and `main` lead there.
+    const target = props.instance ? chatName(props.instance, state.instances, door) : door;
+    if (!target || !state.instances.some((i) => i.name === target)) return;
+    const to = chatPath(target, state.instances);
+    if (to !== `/chat/${encodeURIComponent(props.instance ?? "")}`) void router.replace({ path: to, query: route.query });
   },
   { immediate: true },
 );
@@ -111,6 +115,7 @@ const queuedNote = computed(() => (badge.value?.type === "error" ? "the agent ca
 // grows, an end stays the end; anywhere else the position stays put (the browser's scroll
 // anchoring holds it when content above changes). The kit's own scrolling is off (ChatTranscript).
 const body = useTemplateRef<HTMLElement>("body");
+const transcriptView = useTemplateRef<{ scrollToMessage: (id: string) => boolean }>("transcriptView");
 /** The panel body, which scrolls the transcript. */
 const scroller = () => body.value?.closest<HTMLElement>("[data-slot=body]") ?? null;
 /** Within this of the end counts as at the end. */
@@ -118,11 +123,25 @@ const NEAR_END = 48;
 const atBottom = ref(true);
 /** The transcript grew while the user read further up. */
 const unseen = ref(false);
+/** When the user last scrolled themselves (wheel, touch, keys, the scrollbar). */
+let userScrolled = 0;
+const USER_SCROLL = ["wheel", "touchmove", "keydown", "pointerdown"] as const;
+function onUserScroll() {
+  userScrolled = Date.now();
+}
 function onScroll() {
   const el = scroller();
   if (!el) return;
-  atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_END;
-  if (atBottom.value) unseen.value = false;
+  const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_END;
+  if (near) {
+    atBottom.value = true;
+    unseen.value = false;
+  } else if (Date.now() - userScrolled < 1000) {
+    atBottom.value = false;
+  } else if (atBottom.value) {
+    // Not the user: rendered messages got their real height. The end stays the end.
+    el.scrollTop = el.scrollHeight;
+  }
 }
 watch(body, (el, _, onCleanup) => {
   const s = el?.closest<HTMLElement>("[data-slot=body]");
@@ -135,9 +154,11 @@ watch(body, (el, _, onCleanup) => {
   });
   grown.observe(el);
   s.addEventListener("scroll", onScroll, { passive: true });
+  for (const e of USER_SCROLL) s.addEventListener(e, onUserScroll, { passive: true });
   onCleanup(() => {
     grown.disconnect();
     s.removeEventListener("scroll", onScroll);
+    for (const e of USER_SCROLL) s.removeEventListener(e, onUserScroll);
   });
 });
 async function toBottom(smooth = false) {
@@ -172,14 +193,31 @@ watch(
     const t = transcript.value;
     if (!t) return;
     let selector: string | null = null;
+    let message: string | undefined;
     const call = typeof entry === "string" ? t.toolOf[entry] : undefined;
-    if (typeof delivery === "string") selector = `[data-delivery="${CSS.escape(delivery)}"]`;
-    else if (call) {
+    if (typeof delivery === "string") {
+      selector = `[data-delivery="${CSS.escape(delivery)}"]`;
+      message = t.messages.find((m) => m.metadata?.delivery === delivery)?.id;
+    } else if (call) {
       // A hit in a tool call or its result: that call, opened.
       shell.open[call] = true;
       selector = `[data-tool-call="${CSS.escape(call)}"]`;
-    } else if (typeof entry === "string" && t.messageOf[entry]) selector = `[data-message="${CSS.escape(t.messageOf[entry])}"]`;
-    if (selector && (await reveal(selector))) void router.replace({ query: {} });
+      message = t.messageOf[entry as string];
+    } else if (typeof entry === "string" && t.messageOf[entry]) {
+      message = t.messageOf[entry];
+      selector = `[data-message="${CSS.escape(message)}"]`;
+    }
+    if (!selector) return;
+    if (!message) {
+      // Further back than what is loaded: load the whole chat, and this runs again.
+      if (session.value?.earlier) void showEarlier(session.value.instance.name, true);
+      return;
+    }
+    // Only messages near the viewport are rendered: scroll it there first.
+    atBottom.value = false;
+    transcriptView.value?.scrollToMessage(message);
+    for (let i = 0; i < 20 && !body.value?.querySelector(selector); i++) await new Promise(requestAnimationFrame);
+    if (await reveal(selector)) void router.replace({ query: {} });
   },
   { immediate: true },
 );
@@ -297,7 +335,9 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
           />
           <ChatTranscript
             v-else
+            ref="transcriptView"
             :key="name"
+            :earlier="session?.earlier ?? 0"
             :messages="transcript.messages"
             :status="transcript.status"
             :queued-note="queuedNote"

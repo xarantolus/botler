@@ -99,7 +99,7 @@ async fn goto_and_label_go_through_the_extension_only_while_idle() {
     let nav =
         json!({"type": "custom", "customType": "botler.nav", "id": "n1", "parentId": "a2", "data": {"target": "a2"}});
     std::fs::write(&path, format!("{}{nav}\n", session())).unwrap();
-    let items = botler_hub::sessions::read(&e.hub, "botler", None).await.unwrap();
+    let items = botler_hub::sessions::read(&e.hub, "botler", None, None).await.unwrap().0;
     let texts: Vec<String> = items
         .iter()
         .filter_map(|i| match i {
@@ -108,6 +108,10 @@ async fn goto_and_label_go_through_the_extension_only_while_idle() {
         })
         .collect();
     assert_eq!(texts, ["Here is a plan.", "Trains booked."]);
+    // Paged: the last items only, and how many come before them.
+    let (last, earlier) = botler_hub::sessions::read(&e.hub, "botler", None, Some(1)).await.unwrap();
+    assert_eq!((last.len(), earlier), (1, items.len() - 1));
+    assert!(matches!(&last[0], botler_hub::sessions::Item::Assistant { text, .. } if text == "Trains booked."));
     assert_eq!(call(&e, "session_tree", json!({"chat": "botler"})).await.unwrap()["leaf"], "n1");
     assert!(matches!(
         call(&e, "goto_entry", json!({"chat": "botler", "entry": "nope"})).await,
@@ -145,7 +149,7 @@ async fn forking_copies_the_branch_up_to_an_assistant_entry_into_a_new_chat() {
         text.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()["id"].as_str().unwrap().to_string()).collect();
     assert_eq!(&ids[1..], ["u1", "a1", "u2", "a2"]);
     assert_ne!(ids[0], "s-old", "a session of its own");
-    let items = botler_hub::sessions::read(&e.hub, fork, None).await.unwrap();
+    let items = botler_hub::sessions::read(&e.hub, fork, None, None).await.unwrap().0;
     assert_eq!(items.len(), 4);
     // The original is untouched.
     assert_eq!(call(&e, "session_tree", json!({"chat": "botler"})).await.unwrap()["leaf"], "a3");
