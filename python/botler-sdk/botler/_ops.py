@@ -530,12 +530,12 @@ def collect_garbage(*, logs_older_than: str | None = None) -> dict[str, Any]:
 
 
 def run_job(*, job: str) -> dict[str, Any]:
-    """Start a oneshot job now, with a `manual` event. Honours pause and the overlap policy of the job's trigger (skip by default)."""
+    """Start a oneshot job (main's code) now, with a `manual` event: e.g. to check a fix that was merged. Honours pause and the overlap policy of the job's trigger (skip by default). Its outcome arrives as runnable.finished or runnable.failed."""
     return call("run_job", {"job": job})
 
 
 def restart_service(*, service: str) -> dict[str, Any]:
-    """Stop a service; the reconciler starts it again right away."""
+    """Restart a service (main's code): it is stopped and started again right away, e.g. when it hangs or its tools are missing. Chats that use it reconnect by themselves once it is back."""
     return call("restart_service", {"service": service})
 
 

@@ -49,7 +49,14 @@ impl Op for Health {
         let run = hub.store.run(run_id).await?;
         if run.kind == RunKind::Trial && !self.ok {
             let reason = format!("reported unhealthy: {}", self.reason.as_deref().unwrap_or("no reason given"));
-            crate::trials::finish(hub, &run, TrialOutcome::Failed, None, Some(reason)).await?;
+            // Detached: finishing stops this run's container, which closes the connection this
+            // request came on, and the request (with whatever it was awaiting) is dropped.
+            let hub = hub.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::trials::finish(&hub, &run, TrialOutcome::Failed, None, Some(reason)).await {
+                    tracing::error!(run = %run.id, error = %e, "could not finish the unhealthy trial");
+                }
+            });
             return Ok(HealthRecorded::Stopping { stopping: true });
         }
         if !matches!(run.kind, RunKind::Service | RunKind::Trial) {
@@ -60,7 +67,13 @@ impl Op for Health {
             return Ok(HealthRecorded::Heartbeat { ok: recorded });
         }
         let reason = self.reason.unwrap_or_else(|| "reported unhealthy without a reason".into());
-        crate::services::unhealthy(hub, &run, &format!("the service reported: {reason}")).await?;
+        // Detached, like a trial's: stopping the service drops this request.
+        let hub = hub.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::services::unhealthy(&hub, &run, &format!("the service reported: {reason}")).await {
+                tracing::error!(run = %run.id, error = %e, "could not handle the unhealthy service");
+            }
+        });
         Ok(HealthRecorded::Stopping { stopping: true })
     }
 }

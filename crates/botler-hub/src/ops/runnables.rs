@@ -26,8 +26,8 @@ pub struct JobStarted {
 
 impl Op for RunJob {
     const NAME: &'static str = "run_job";
-    const DESCRIPTION: &'static str = "Start a oneshot job now, with a `manual` event. Honours pause and the overlap policy of the job's trigger (skip by default).";
-    const WHO: Who = Who::User;
+    const DESCRIPTION: &'static str = "Start a oneshot job (main's code) now, with a `manual` event: e.g. to check a fix that was merged. Honours pause and the overlap policy of the job's trigger (skip by default). Its outcome arrives as runnable.finished or runnable.failed.";
+    const WHO: Who = Who::UserAndAgents;
     type Output = JobStarted;
 
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<JobStarted, OpError> {
@@ -82,11 +82,11 @@ pub struct ServiceRestarted {
 
 impl Op for RestartService {
     const NAME: &'static str = "restart_service";
-    const DESCRIPTION: &'static str = "Stop a service; the reconciler starts it again right away.";
-    const WHO: Who = Who::User;
+    const DESCRIPTION: &'static str = "Restart a service (main's code): it is stopped and started again right away, e.g. when it hangs or its tools are missing. Chats that use it reconnect by themselves once it is back.";
+    const WHO: Who = Who::UserAndAgents;
     type Output = ServiceRestarted;
 
-    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<ServiceRestarted, OpError> {
+    async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<ServiceRestarted, OpError> {
         if hub.paused().await? {
             return Err(HubError::Paused.into());
         }
@@ -97,7 +97,11 @@ impl Op for RestartService {
         let run = hub.store.runs_for(&self.service, 1).await?.into_iter().next();
         let stopped = match run.filter(|r| r.status == RunStatus::Running) {
             Some(r) => {
-                crate::services::stop(hub, &r, "restarted by the user").await?;
+                let by = match caller.agent("") {
+                    Ok(agent) => format!("restarted by {agent}"),
+                    Err(_) => "restarted by the user".into(),
+                };
+                crate::services::stop(hub, &r, &by).await?;
                 Some(r.id)
             }
             None => None,

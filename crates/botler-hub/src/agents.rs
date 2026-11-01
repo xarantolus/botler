@@ -1355,9 +1355,53 @@ pub async fn keep_always_on(hub: &Arc<Hub>) -> Result<()> {
     Ok(())
 }
 
+/// A chat that woke while a service it uses was down has none of that service's tools: pi
+/// connects its MCP servers once, at start, and `services.json` has no address for it. Once the
+/// service is back (running, and heartbeating if it declares `[health]`), restart such a chat
+/// when it is idle; always-on ones come right back, others with their next message.
+pub async fn reconnect_services(hub: &Hub) -> Result<()> {
+    let applied = hub.applied().await;
+    let ready: Vec<String> = hub
+        .store
+        .active_runs()
+        .await?
+        .into_iter()
+        .filter(|r| r.kind == botler_store::RunKind::Service && r.status == botler_store::RunStatus::Running)
+        .filter(|r| {
+            applied.defs.jobs.get(&r.runnable).is_some_and(|j| j.spec.health.is_none()) || r.heartbeat_at.is_some()
+        })
+        .map(|r| r.runnable)
+        .collect();
+    for agent in hub.agents.all().await {
+        if agent.busy() || agent.stopping() {
+            continue;
+        }
+        let file = hub.paths.agent_dir(&agent.instance).join("services.json");
+        let text = match tokio::fs::read_to_string(&file).await {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
+        let listed: Vec<serde_json::Value> = serde_json::from_str(&text).map_err(|e| HubError::Io(e.into()))?;
+        let back = listed
+            .iter()
+            .filter(|s| s["ip"].is_null())
+            .filter_map(|s| s["name"].as_str())
+            .find(|n| ready.iter().any(|r| r == n));
+        if let Some(service) = back {
+            tracing::info!(instance = %agent.instance, service, "a service it uses is back; restarting it to connect");
+            agent.stop().await;
+        }
+    }
+    Ok(())
+}
+
 /// Run forever: deliver when woken, keep always-on agents up, reap idle agents periodically.
 pub async fn run(hub: Arc<Hub>) {
     loop {
+        if let Err(e) = reconnect_services(&hub).await {
+            tracing::error!(error = %e, "service reconnect check failed");
+        }
         if let Err(e) = keep_always_on(&hub).await {
             tracing::error!(error = %e, "always-on check failed");
         }

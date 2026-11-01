@@ -94,3 +94,50 @@ async fn a_job_reaches_a_service_it_lists() {
     let c = &e.fake.containers()[&botler_hub::jobs::container_name(&e.hub, &run)];
     assert_eq!(c.spec.network, NetworkMode::Named(e.hub.network()));
 }
+
+#[tokio::test]
+async fn a_chat_that_woke_while_its_service_was_down_reconnects_when_it_is_back() {
+    let e = common::env().await;
+    e.hub.store.set_secret(&e.hub.secret_key, "OPENROUTER_API_KEY", "sk").await.unwrap();
+    let files = common::job("browser", BROWSER);
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    e.commit(&refs).await;
+    // Not reconciled yet: the service is down while the chat wakes.
+    let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    grants::give(&e.hub, &chat, &Resource::new(ResourceKind::Service, "browser"), None, "user", false).await.unwrap();
+    let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+        .to(chat.clone())
+        .payload(json!({"text": "open the page"}));
+    e.hub.emit(ev).await.unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    let services_json = e.hub.paths.agent_dir(&chat).join("services.json");
+    let listed: Value = serde_json::from_str(&std::fs::read_to_string(&services_json).unwrap()).unwrap();
+    assert!(listed[0]["ip"].is_null(), "{listed}");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await; // the turn ends
+
+    agents::reconnect_services(&e.hub).await.unwrap();
+    assert!(e.hub.agents.get(&chat).await.is_some(), "still down: nothing to reconnect to");
+    services::reconcile(&e.hub).await.unwrap();
+    agents::reconnect_services(&e.hub).await.unwrap();
+    let mut reconnected = false;
+    for _ in 0..100 {
+        if e.hub.agents.get(&chat).await.is_none() {
+            reconnected = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(reconnected, "the chat kept its session without the service");
+
+    // An agent may restart the service itself.
+    let agent = botler_hub::ops::Caller {
+        principal: botler_hub::auth::Principal::Agent { instance: chat.clone(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    let out = botler_hub::ops::call(&e.hub, &agent, "restart_service", json!({"service": "browser"})).await.unwrap();
+    let stopped = out["stopped"].as_str().unwrap().to_string();
+    let run = e.hub.store.run(&stopped).await.unwrap();
+    assert_eq!(run.reason.as_deref(), Some(format!("restarted by {chat}").as_str()));
+}

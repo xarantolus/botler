@@ -26,12 +26,12 @@ pub fn container_name(hub: &Hub, service: &str) -> String {
 }
 
 /// Converge the running services with the applied definitions, now.
-pub async fn reconcile(hub: &Hub) -> Result<()> {
+pub async fn reconcile(hub: &Arc<Hub>) -> Result<()> {
     reconcile_at(hub, Utc::now()).await
 }
 
 /// [`reconcile`] at `now` (tests move the clock).
-pub async fn reconcile_at(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
+pub async fn reconcile_at(hub: &Arc<Hub>, now: DateTime<Utc>) -> Result<()> {
     let applied = hub.applied().await;
     let paused = hub.paused().await?;
     for run in hub.store.active_runs().await?.into_iter().filter(|r| r.kind == RunKind::Service) {
@@ -51,9 +51,15 @@ pub async fn reconcile_at(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
         // Only a change of the image's inputs restarts a service, never an unrelated merge.
         if let Some(commit) = run.commit_id.as_deref().filter(|c| *c != applied.commit) {
             let recipe = Recipe::job(&run.runnable);
-            if images::tag(hub, &recipe, commit).await? != images::tag(hub, &recipe, &applied.commit).await? {
-                stop(hub, &run, "its definition or code changed").await?;
-                continue;
+            let next = images::tag(hub, &recipe, &applied.commit).await?;
+            if images::tag(hub, &recipe, commit).await? != next {
+                if hub.containers.image_id(&next).await?.is_none() {
+                    // Build the new image while this one keeps serving; the swap follows it.
+                    prebuild(hub, &run, &applied.commit, next).await;
+                } else {
+                    stop(hub, &run, "its definition or code changed").await?;
+                    continue;
+                }
             }
         }
         check_heartbeat(hub, def, &run, now).await?;
@@ -238,6 +244,35 @@ pub async fn status(hub: &Hub) -> Result<Vec<ServiceStatus>> {
         });
     }
     Ok(out)
+}
+
+/// Image tags being built for a changed service (one build each), by hub.
+static PREBUILDS: std::sync::LazyLock<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Build the image of `run`'s service at `commit` in the background, then reconcile again. A
+/// failed build is reported and not retried for this tag: the old one keeps serving.
+async fn prebuild(hub: &Arc<Hub>, run: &Run, commit: &str, tag: String) {
+    let key = format!("{} {tag}", hub.id);
+    if !PREBUILDS.lock().await.insert(key.clone()) {
+        return;
+    }
+    tracing::info!(service = %run.runnable, %tag, "building the changed service's image; the running one serves until then");
+    let (hub, run, commit) = (hub.clone(), run.clone(), commit.to_string());
+    tokio::spawn(async move {
+        match images::ensure_job_image(&hub, &run.runnable, &commit).await {
+            Ok(_) => {
+                PREBUILDS.lock().await.remove(&key);
+                hub.reconcile_notify.notify_one();
+            }
+            Err(e) => {
+                let why = format!("its new image did not build, so it keeps running the old one: {e}");
+                if let Err(e2) = failures::report(&hub, jobs::failure(&run, "build", None, why)).await {
+                    tracing::error!(service = %run.runnable, error = %e2, "could not report the failed build");
+                }
+            }
+        }
+    });
 }
 
 /// Reconcile forever: when woken (apply, resume, a service exit) and every few seconds.

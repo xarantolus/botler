@@ -170,7 +170,15 @@ async fn a_failing_trial_reports_back_without_an_incident() {
     let run = start(&s, 5).await;
     let me = Caller::resolve(&s.e.hub, Principal::Run { run_id: run.id.clone() }).await.unwrap();
     ops::call(&s.e.hub, &me, "health", json!({"ok": false, "reason": "imap login failed"})).await.unwrap();
-    let done = finished(&s).await;
+    // Finished apart from the request (stopping the trial drops the request it came on).
+    let mut done = finished(&s).await;
+    for _ in 0..100 {
+        if done.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        done = finished(&s).await;
+    }
     assert_eq!(done.len(), 2);
     assert!(done.iter().any(|(_, p)| p.reason.as_deref().is_some_and(|r| r.contains("imap login failed"))));
     assert!(s.e.hub.store.open_incidents().await.unwrap().is_empty());

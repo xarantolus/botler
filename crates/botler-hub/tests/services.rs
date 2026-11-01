@@ -113,7 +113,17 @@ async fn missing_or_failed_heartbeats_are_unhealthy() {
     assert_eq!(run.status, RunStatus::Running);
     let caller = ops::Caller::resolve(&e.hub, Principal::Run { run_id: run.id.clone() }).await.unwrap();
     ops::call(&e.hub, &caller, "health", json!({"ok": false, "reason": "database gone"})).await.unwrap();
-    let ended = e.hub.store.run(&run.id).await.unwrap();
+    // Handled apart from the request (stopping the service drops the request it came on).
+    let mut ended = e.hub.store.run(&run.id).await.unwrap();
+    for _ in 0..100 {
+        if ended.status != RunStatus::Running
+            && !e.fake.containers().contains_key(&services::container_name(&e.hub, "app"))
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        ended = e.hub.store.run(&run.id).await.unwrap();
+    }
     assert!(ended.status == RunStatus::Failed && ended.reason.unwrap().contains("database gone"));
     assert!(!e.fake.containers().contains_key(&services::container_name(&e.hub, "app")));
 }
@@ -143,8 +153,16 @@ async fn only_changes_to_its_inputs_restart_it_and_removal_stops_it() {
     assert_eq!(current(&e).await.id, first.id, "an unrelated merge leaves it alone");
 
     e.commit(&[("jobs/app/app.py", "print('v2')\n")]).await;
-    services::reconcile(&e.hub).await.unwrap();
-    let second = current(&e).await;
+    // Its new image builds first (the old one serving meanwhile), then it is swapped.
+    let mut second = current(&e).await;
+    for _ in 0..100 {
+        services::reconcile(&e.hub).await.unwrap();
+        second = current(&e).await;
+        if second.id != first.id {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
     assert_ne!(second.id, first.id);
     assert_eq!(e.hub.store.run(&first.id).await.unwrap().status, RunStatus::Cancelled);
     assert_eq!(second.status, RunStatus::Running);
@@ -326,4 +344,26 @@ async fn podman_service_is_reachable_by_name_and_on_its_host_port() {
 
     assert!(logs.contains("service 200"), "{logs}");
     assert!(from_host.starts_with("HTTP/1.0 200"), "{from_host}");
+}
+
+#[tokio::test]
+async fn a_changed_service_keeps_serving_while_its_new_image_builds() {
+    let e = with_service(SVC).await;
+    services::reconcile(&e.hub).await.unwrap();
+    let first = current(&e).await;
+    e.fake.set_slow_builds("job-app", std::time::Duration::from_millis(600));
+    e.commit(&[("jobs/app/app.py", "print('v2')\n")]).await;
+    services::reconcile(&e.hub).await.unwrap();
+    assert_eq!(current(&e).await.id, first.id, "the old one serves while the new image builds");
+    assert_eq!(current(&e).await.status, RunStatus::Running);
+    for _ in 0..100 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        services::reconcile(&e.hub).await.unwrap();
+        let now = current(&e).await;
+        if now.id != first.id {
+            assert_eq!(now.status, RunStatus::Running);
+            return;
+        }
+    }
+    panic!("never swapped to the new image");
 }
