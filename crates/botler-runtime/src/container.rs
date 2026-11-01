@@ -635,7 +635,9 @@ impl Containers for Cli {
     }
 
     async fn remove(&self, name: &str) -> Result<()> {
-        match run(&self.info.binary, &["rm", "--force", name]).await {
+        // `--volumes` takes the anonymous volumes an image's VOLUME lines made with it, which
+        // would pile up on every restart; named ones (a job's `/data`) are never removed.
+        match run(&self.info.binary, &["rm", "--force", "--volumes", name]).await {
             Err(ContainerError::Command { stderr, .. }) if stderr.to_lowercase().contains("no such container") => {
                 Ok(())
             }
