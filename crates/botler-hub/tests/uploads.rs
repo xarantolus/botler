@@ -297,8 +297,12 @@ async fn image_input_reaches_models_json() {
             .unwrap();
     let model = &models["providers"]["openrouter"]["modelOverrides"]["~anthropic/claude-sonnet-latest"];
     assert_eq!(model["input"], json!(["text", "image"]));
-    // The catalog's 1M window, cut so pi compacts at `defaults.compact_at` (150k, plus pi's reserve).
-    assert_eq!((model["maxTokens"].as_u64(), model["contextWindow"].as_u64()), (Some(16384), Some(150_000 + 16_384)));
+    assert_eq!((model["maxTokens"].as_u64(), model["contextWindow"].as_u64()), (Some(16384), Some(1_000_000)));
+    // pi compacts at `defaults.compact_at` (150k) by reserving the rest of the window.
+    let settings: Value =
+        serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir("looker").join("settings.json")).unwrap())
+            .unwrap();
+    assert_eq!(settings, json!({ "compaction": { "reserveTokens": 850_000 } }));
 }
 
 /// A blocking request pushes fixed text to `<ntfy_url>/<topic>`; the question stays home.

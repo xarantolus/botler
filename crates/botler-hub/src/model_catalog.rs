@@ -93,13 +93,9 @@ impl Catalog {
     }
 }
 
-/// pi compacts once the context passes its window minus this (pi's default `reserveTokens`).
-const PI_RESERVE: u64 = 16_384;
-
 /// The `models.json` entry pi gets for `choice`: the configured cap and input, refined by the
-/// catalog (the model's own output maximum, context window and prices). The window is cut so pi
-/// compacts at about `compact_at` tokens (`[defaults] compact_at`; 0: the model's window).
-pub fn pi_model(choice: &ModelChoice, known: Option<&CatalogModel>, compact_at: u64) -> serde_json::Value {
+/// catalog (the model's own output maximum, context window and prices).
+pub fn pi_model(choice: &ModelChoice, known: Option<&CatalogModel>) -> serde_json::Value {
     let cap = u64::from(choice.max_tokens);
     let mut model = serde_json::json!({ "maxTokens": known.and_then(|k| k.max_output).map_or(cap, |m| m.min(cap)) });
     let input = choice.input.clone().or_else(|| {
@@ -110,8 +106,7 @@ pub fn pi_model(choice: &ModelChoice, known: Option<&CatalogModel>, compact_at: 
     }
     if let Some(k) = known {
         if let Some(c) = k.context_length {
-            let cut = if compact_at > 0 { c.min(compact_at + PI_RESERVE) } else { c };
-            model["contextWindow"] = cut.into();
+            model["contextWindow"] = c.into();
         }
         let mut cost = serde_json::Map::new();
         for (key, v) in [
@@ -129,6 +124,20 @@ pub fn pi_model(choice: &ModelChoice, known: Option<&CatalogModel>, compact_at: 
         }
     }
     model
+}
+
+/// The `settings.json` pi gets: it compacts once the context passes its window minus
+/// `reserveTokens`, so that is set to compact at `compact_at` (0, or an unknown window: pi's
+/// default). The window itself stays the model's: pi fits every request, the summary of an
+/// already larger context included, into it, so a cut window starves the summary and the chat
+/// never compacts.
+pub fn pi_settings(known: Option<&CatalogModel>, compact_at: u64) -> serde_json::Value {
+    match known.and_then(|k| k.context_length) {
+        Some(c) if compact_at > 0 && c > compact_at => {
+            serde_json::json!({ "compaction": { "reserveTokens": c - compact_at } })
+        }
+        _ => serde_json::json!({}),
+    }
 }
 
 /// The catalog entry for `choice`, if it is an OpenRouter model the catalog knows.
@@ -339,17 +348,20 @@ mod tests {
     fn pi_model_caps_output_and_takes_the_catalogs_input() {
         let c = parse(BODY.as_bytes(), Utc::now()).unwrap();
         let mut choice = botler_core::defs::Models::default().resolve("qwen/qwen3.8-flash");
-        let m = pi_model(&choice, c.get("qwen/qwen3.8-flash"), 0);
+        let m = pi_model(&choice, c.get("qwen/qwen3.8-flash"));
         assert_eq!(m, serde_json::json!({ "maxTokens": 8192, "input": ["text"] }));
         choice.id = "~anthropic/claude-sonnet-latest".into();
-        let m = pi_model(&choice, c.get(&choice.id), 0);
+        let m = pi_model(&choice, c.get(&choice.id));
         assert_eq!(m["maxTokens"], 16384);
         assert_eq!(m["input"], serde_json::json!(["text", "image"]));
         assert_eq!(m["contextWindow"], 1000000);
         assert_eq!(m["cost"], serde_json::json!({ "input": 2.0, "output": 10.0, "cacheRead": 0.1 }));
-        // Compacting at 120k: pi's window is cut to 120k plus its reserve.
-        assert_eq!(pi_model(&choice, c.get(&choice.id), 120_000)["contextWindow"], 120_000 + PI_RESERVE);
         // Offline: only the configured cap.
-        assert_eq!(pi_model(&choice, None, 120_000), serde_json::json!({ "maxTokens": 16384 }));
+        assert_eq!(pi_model(&choice, None), serde_json::json!({ "maxTokens": 16384 }));
+        // Compacting at 120k of a 1M window: pi reserves the rest.
+        let s = pi_settings(c.get(&choice.id), 120_000);
+        assert_eq!(s, serde_json::json!({ "compaction": { "reserveTokens": 880_000 } }));
+        assert_eq!(pi_settings(c.get(&choice.id), 0), serde_json::json!({}));
+        assert_eq!(pi_settings(None, 120_000), serde_json::json!({}));
     }
 }

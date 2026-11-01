@@ -789,7 +789,7 @@ async fn container_spec(
     }
     let known = crate::model_catalog::known(hub, &route).await;
     let compact_at = def.spec.compact_at.unwrap_or(applied.defs.instance.defaults.compact_at);
-    let model = crate::model_catalog::pi_model(&route, known.as_ref(), compact_at);
+    let model = crate::model_catalog::pi_model(&route, known.as_ref());
     provider.insert("modelOverrides".into(), json!({ route.id.clone(): model }));
     let models = json!({ "providers": { route.provider.clone(): provider } });
     let mut servers = serde_json::Map::new();
@@ -815,6 +815,7 @@ async fn container_spec(
     let caller = ops::Caller { principal, capabilities: def.spec.capabilities.clone(), runnable: None };
     let files: Vec<(&str, String)> = vec![
         ("models.json", to_json(&models)?),
+        ("settings.json", to_json(&crate::model_catalog::pi_settings(known.as_ref(), compact_at))?),
         ("tools.json", to_json(&json!(tools))?),
         ("turn-tools.json", to_json(&ops::turn_ending_tools(&caller))?),
         ("mcp.json", to_json(&json!({ "mcpServers": servers }))?),
