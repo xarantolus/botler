@@ -62,7 +62,10 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          ## Working\n\
          For multi-step work, keep a checklist with the `todo` tool; it survives sleeping. Before asking \
          the user or working something out again, `search` for it: past conversations, memory, events \
-         and the monorepo (`scope=\"self\"` finds what you said or read earlier, even after compaction).\n\n\
+         and the monorepo (`scope=\"self\"` finds what you said or read earlier, even after compaction).\n\
+         Something the user will read and come back to (a report, a shortlist you keep adding to, a plan) \
+         goes in a document: `write_document(name, title, body)`, and link its `path` in your reply. \
+         Memory is for what you need to remember, not for the user to read.\n\n\
          ## Doing things later\n\
          - Waiting for something (a build, a run, a reply, a page to update)? Call `wait(in, reason)`, \
            never `sleep` or a polling loop in a shell: your turn ends, you wake when anything arrives or \

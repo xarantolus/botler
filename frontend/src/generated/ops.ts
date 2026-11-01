@@ -26,6 +26,11 @@ import type { CollectGarbage } from "./CollectGarbage";
 import type { CompactChat } from "./CompactChat";
 import type { Connections } from "./Connections";
 import type { DeleteChat } from "./DeleteChat";
+import type { DeleteDocument } from "./DeleteDocument";
+import type { Document } from "./Document";
+import type { DocumentDeleted } from "./DocumentDeleted";
+import type { DocumentSummary } from "./DocumentSummary";
+import type { DocumentWritten } from "./DocumentWritten";
 import type { EmitEvent } from "./EmitEvent";
 import type { EntryDone } from "./EntryDone";
 import type { EventEmitted } from "./EventEmitted";
@@ -54,6 +59,7 @@ import type { JobStarted } from "./JobStarted";
 import type { LabelEntry } from "./LabelEntry";
 import type { ListChats } from "./ListChats";
 import type { ListConnections } from "./ListConnections";
+import type { ListDocuments } from "./ListDocuments";
 import type { ListEventTypes } from "./ListEventTypes";
 import type { ListRequests } from "./ListRequests";
 import type { ListSubscriptions } from "./ListSubscriptions";
@@ -76,6 +82,7 @@ import type { PreviewChange } from "./PreviewChange";
 import type { ProposalDetail } from "./ProposalDetail";
 import type { ProposeChange } from "./ProposeChange";
 import type { Proposed } from "./Proposed";
+import type { ReadDocument } from "./ReadDocument";
 import type { ReadSession } from "./ReadSession";
 import type { RenameChat } from "./RenameChat";
 import type { ReplayEvent } from "./ReplayEvent";
@@ -122,6 +129,7 @@ import type { Unsubscribe } from "./Unsubscribe";
 import type { Unsubscribed } from "./Unsubscribed";
 import type { Wait } from "./Wait";
 import type { Waiting } from "./Waiting";
+import type { WriteDocument } from "./WriteDocument";
 
 /** Every hub op, called as `POST /api/v1/ops/{name}` with its input. */
 export interface Ops {
@@ -130,6 +138,10 @@ export interface Ops {
   emit_event: { input: EmitEvent; output: EventEmitted };
   set_timer: { input: SetTimer; output: TimerSet };
   wait: { input: Wait; output: Waiting };
+  write_document: { input: WriteDocument; output: DocumentWritten };
+  read_document: { input: ReadDocument; output: Document };
+  list_documents: { input: ListDocuments; output: Array<DocumentSummary> };
+  delete_document: { input: DeleteDocument; output: DocumentDeleted };
   cancel_timer: { input: CancelTimer; output: TimerCancelled };
   list_timers: { input: ListTimers; output: Array<Timer> };
   set_chat_title: { input: SetChatTitle; output: ChatTitled };

@@ -451,6 +451,10 @@ routes! {
         clear_chat: crate::ops::ClearChat;
         pin_chat: crate::ops::PinChat;
         rename_chat: crate::ops::RenameChat;
+        list_documents: crate::ops::ListDocuments;
+        read_document: crate::ops::ReadDocument;
+        write_document: crate::ops::WriteDocument;
+        delete_document: crate::ops::DeleteDocument;
         session_tree: GetSessionTree;
         goto_entry: GotoEntry;
         label_entry: LabelEntry;

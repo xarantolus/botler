@@ -6,6 +6,7 @@ import AppsView from "./views/AppsView.vue";
 import ChatView from "./views/ChatView.vue";
 import EventsView from "./views/EventsView.vue";
 import IncidentsView from "./views/IncidentsView.vue";
+import DocumentsView from "./views/DocumentsView.vue";
 import MemoryView from "./views/MemoryView.vue";
 import ProposalReviewView from "./views/ProposalReviewView.vue";
 import ProposalsView from "./views/ProposalsView.vue";
@@ -36,6 +37,8 @@ const router = createRouter({
     { path: "/apps/:name", name: "app", component: AppsView, props: true },
     { path: "/search", name: "search", component: SearchView },
     { path: "/memory", name: "memory", component: MemoryView },
+    { path: "/documents", name: "documents", component: DocumentsView },
+    { path: "/documents/:name", name: "document", component: DocumentsView, props: true },
     { path: "/share", name: "share", component: ShareView },
     { path: "/storage", redirect: { name: "system", query: { tab: "storage" } } },
     { path: "/:rest(.*)*", redirect: "/" },

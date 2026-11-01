@@ -7,6 +7,7 @@ mod access;
 mod actions;
 mod channels;
 mod chats;
+mod documents;
 mod incidents;
 mod lifecycle;
 mod messages;
@@ -38,6 +39,7 @@ pub use access::*;
 pub use actions::*;
 pub use channels::*;
 pub use chats::*;
+pub use documents::*;
 pub use incidents::*;
 pub use lifecycle::*;
 pub use messages::*;
@@ -253,6 +255,10 @@ pub static OPS: &[OpSpec] = &[
     op::<EmitEvent>(),
     op::<SetTimer>(),
     op::<Wait>(),
+    op::<WriteDocument>(),
+    op::<ReadDocument>(),
+    op::<ListDocuments>(),
+    op::<DeleteDocument>(),
     op::<CancelTimer>(),
     op::<ListTimers>(),
     op::<SetChatTitle>(),

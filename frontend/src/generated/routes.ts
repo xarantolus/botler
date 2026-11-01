@@ -24,10 +24,15 @@ import type { CollectGarbage } from "./CollectGarbage";
 import type { CompactChat } from "./CompactChat";
 import type { Connections } from "./Connections";
 import type { DeleteChat } from "./DeleteChat";
+import type { DeleteDocument } from "./DeleteDocument";
 import type { DeviceRevoked } from "./DeviceRevoked";
 import type { DeviceView } from "./DeviceView";
 import type { DialogAnswer } from "./DialogAnswer";
 import type { Dialogs } from "./Dialogs";
+import type { Document } from "./Document";
+import type { DocumentDeleted } from "./DocumentDeleted";
+import type { DocumentSummary } from "./DocumentSummary";
+import type { DocumentWritten } from "./DocumentWritten";
 import type { EntryDone } from "./EntryDone";
 import type { EventPosted } from "./EventPosted";
 import type { EventsQuery } from "./EventsQuery";
@@ -45,6 +50,7 @@ import type { Instance } from "./Instance";
 import type { JobStarted } from "./JobStarted";
 import type { LabelEntry } from "./LabelEntry";
 import type { ListConnections } from "./ListConnections";
+import type { ListDocuments } from "./ListDocuments";
 import type { LoginCode } from "./LoginCode";
 import type { MemoryCommit } from "./MemoryCommit";
 import type { MemoryEntry } from "./MemoryEntry";
@@ -64,6 +70,7 @@ import type { ProposalDetail } from "./ProposalDetail";
 import type { ProposalDiff } from "./ProposalDiff";
 import type { ProposalVerdict } from "./ProposalVerdict";
 import type { ProposalView } from "./ProposalView";
+import type { ReadDocument } from "./ReadDocument";
 import type { RenameChat } from "./RenameChat";
 import type { RestartService } from "./RestartService";
 import type { RestoreRequest } from "./RestoreRequest";
@@ -101,6 +108,7 @@ import type { UploadQuery } from "./UploadQuery";
 import type { Uploaded } from "./Uploaded";
 import type { Usage } from "./Usage";
 import type { UserMessage } from "./UserMessage";
+import type { WriteDocument } from "./WriteDocument";
 
 /** Every HTTP route: method, path, parameters, query, body and response types. */
 export interface Routes {
@@ -167,6 +175,10 @@ export interface Routes {
   clear_chat: { method: "POST"; path: "/api/v1/ops/clear_chat"; params: Record<string, never>; query: never; body: ClearChat; response: ChatDone };
   pin_chat: { method: "POST"; path: "/api/v1/ops/pin_chat"; params: Record<string, never>; query: never; body: PinChat; response: ChatDone };
   rename_chat: { method: "POST"; path: "/api/v1/ops/rename_chat"; params: Record<string, never>; query: never; body: RenameChat; response: ChatDone };
+  list_documents: { method: "POST"; path: "/api/v1/ops/list_documents"; params: Record<string, never>; query: never; body: ListDocuments; response: Array<DocumentSummary> };
+  read_document: { method: "POST"; path: "/api/v1/ops/read_document"; params: Record<string, never>; query: never; body: ReadDocument; response: Document };
+  write_document: { method: "POST"; path: "/api/v1/ops/write_document"; params: Record<string, never>; query: never; body: WriteDocument; response: DocumentWritten };
+  delete_document: { method: "POST"; path: "/api/v1/ops/delete_document"; params: Record<string, never>; query: never; body: DeleteDocument; response: DocumentDeleted };
   session_tree: { method: "POST"; path: "/api/v1/ops/session_tree"; params: Record<string, never>; query: never; body: GetSessionTree; response: SessionTree };
   goto_entry: { method: "POST"; path: "/api/v1/ops/goto_entry"; params: Record<string, never>; query: never; body: GotoEntry; response: EntryDone };
   label_entry: { method: "POST"; path: "/api/v1/ops/label_entry"; params: Record<string, never>; query: never; body: LabelEntry; response: EntryDone };
@@ -237,6 +249,10 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   clear_chat: { method: "POST", path: "/api/v1/ops/clear_chat" },
   pin_chat: { method: "POST", path: "/api/v1/ops/pin_chat" },
   rename_chat: { method: "POST", path: "/api/v1/ops/rename_chat" },
+  list_documents: { method: "POST", path: "/api/v1/ops/list_documents" },
+  read_document: { method: "POST", path: "/api/v1/ops/read_document" },
+  write_document: { method: "POST", path: "/api/v1/ops/write_document" },
+  delete_document: { method: "POST", path: "/api/v1/ops/delete_document" },
   session_tree: { method: "POST", path: "/api/v1/ops/session_tree" },
   goto_entry: { method: "POST", path: "/api/v1/ops/goto_entry" },
   label_entry: { method: "POST", path: "/api/v1/ops/label_entry" },

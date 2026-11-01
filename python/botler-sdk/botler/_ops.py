@@ -62,6 +62,31 @@ def wait(*, in_: str, reason: str) -> dict[str, Any]:
     return call("wait", {"in": in_, "reason": reason})
 
 
+def write_document(*, name: str, title: str, body: str) -> dict[str, Any]:
+    """Write a document for the user to read in the app (Documents), in Markdown: a report, a shortlist you keep adding to, a plan. Writing the same name again replaces it, so read_document first to add to it. Prefer this over a memory note or a file when the user is the reader.
+
+    Args:
+        name: Its id: lowercase words joined by dashes, e.g. `flat-shortlist`. Writing an existing one replaces it, so read it first to add to it.
+        body: The whole document, in Markdown.
+    """
+    return call("write_document", {"name": name, "title": title, "body": body})
+
+
+def read_document(*, name: str) -> dict[str, Any]:
+    """Read a document (its title, Markdown body and who wrote it last)."""
+    return call("read_document", {"name": name})
+
+
+def list_documents() -> list[dict[str, Any]]:
+    """The documents there are, most recently updated first (without their bodies)."""
+    return call("list_documents", {})
+
+
+def delete_document(*, name: str) -> dict[str, Any]:
+    """Delete a document."""
+    return call("delete_document", {"name": name})
+
+
 def cancel_timer(*, id: str) -> dict[str, Any]:
     """Cancel a pending timer."""
     return call("cancel_timer", {"id": id})
