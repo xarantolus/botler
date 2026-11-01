@@ -607,7 +607,11 @@ impl Repo {
     /// `dest`; the whole tree when `paths` is empty. Every path must exist at `commit`.
     pub async fn export_paths(&self, commit: &str, paths: &[&str], dest: &Path) -> Result<()> {
         tokio::fs::create_dir_all(dest).await?;
-        let tar = dest.with_extension("tar");
+        // Next to `dest`, named after all of it: `with_extension` would drop a unique suffix
+        // (`x.partial-<id>` → `x.tar`) and concurrent exports would share one archive.
+        let mut name = dest.file_name().unwrap_or_default().to_os_string();
+        name.push(".tar");
+        let tar = dest.with_file_name(name);
         let t = tar.to_string_lossy().to_string();
         let mut args = vec!["archive", "--format=tar", "-o", &t, commit, "--"];
         args.extend_from_slice(paths);

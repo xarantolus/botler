@@ -9,12 +9,12 @@ const props = defineProps<{
   confirmLabel: string;
   color?: "primary" | "warning" | "error";
   /** Ask for a reason; optional unless `required`. */
-  reason?: { label: string; placeholder?: string; required?: boolean };
+  reason?: { label: string; placeholder?: string; required?: boolean; value?: string };
   /** A checkbox, returned as `checked`. */
   check?: { label: string };
 }>();
 const emit = defineEmits<{ close: [result: { reason: string; checked: boolean } | false] }>();
-const reason = ref("");
+const reason = ref(props.reason?.value ?? "");
 const checked = ref(false);
 </script>
 

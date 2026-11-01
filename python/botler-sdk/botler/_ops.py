@@ -201,7 +201,7 @@ def cancel_request(*, id: str, reason: str) -> dict[str, Any]:
 
 
 def handover_ready(*, summary: str, outstanding: list[str] | None = None, state: list[str] | None = None, handoff: Any = None) -> dict[str, Any]:
-    """Hand over, only after an archive.requested or handover.requested event: what you did, what is outstanding, where your state lives, and (when archiving) optionally who should continue. For a handover to yourself you continue on a fresh session that starts from this report.
+    """Hand over: after an archive.requested or handover.requested event, or (not in a persistent chat) by yourself once your task is done and the user has what they need, which archives this chat. Give what you did, what is outstanding, where your state lives, and optionally who should continue. For a handover to yourself you continue on a fresh session that starts from this report.
 
     Args:
         summary: Everything you did in this chat, for someone who has not read it.
@@ -238,6 +238,24 @@ def clear_chat(*, chat: str) -> dict[str, Any]:
         chat: The chat (name or slug).
     """
     return call("clear_chat", {"chat": chat})
+
+
+def pin_chat(*, chat: str, pinned: bool) -> dict[str, Any]:
+    """Pin a chat to the top of the list (right after the front door), or unpin it.
+
+    Args:
+        chat: The chat (name or slug).
+    """
+    return call("pin_chat", {"chat": chat, "pinned": pinned})
+
+
+def rename_chat(*, chat: str, title: str) -> dict[str, Any]:
+    """Give a chat the user's own title; its agent keeps it from then on.
+
+    Args:
+        chat: The chat (name or slug).
+    """
+    return call("rename_chat", {"chat": chat, "title": title})
 
 
 def session_tree(*, chat: str) -> dict[str, Any]:

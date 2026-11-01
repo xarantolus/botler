@@ -58,6 +58,8 @@ pub struct LiveAgent {
     /// The hub aborted the running turn (the user's stop, a budget, the kill switch): pi's
     /// "operation was aborted" ending it is not a model failure to retry.
     aborted: AtomicBool,
+    /// The running turn answers the user: its end counts as the chat writing (the list's order).
+    answering: AtomicBool,
     /// What it did this turn: decides whether its parent hears about the end of the turn.
     turn: std::sync::Mutex<TurnLog>,
     /// The error of the turn's last model call, if it failed: the turn failed when it settles.
@@ -148,8 +150,12 @@ pub struct Agents {
     crashes: Mutex<HashMap<String, (u32, DateTime<Utc>)>>,
     /// What waking is doing right now, or why the last wake failed (for viewers).
     phases: Mutex<HashMap<String, WakePhase>>,
-    /// Serialises waking per hub so one instance is never started twice.
-    waking: Mutex<()>,
+    /// Serialises waking per instance so one is never started twice; others wake meanwhile (a
+    /// wake can build an image for minutes).
+    waking: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Instances a delivery task runs for (one at a time each, all instances at once), and
+    /// whether a pass skipped it meanwhile (then another pass follows the task).
+    delivering: Mutex<HashMap<String, bool>>,
     /// The applied commit and when it was first seen, to restart agents once per burst of merges.
     applied_at: Mutex<Option<(String, DateTime<Utc>)>>,
     /// The hub is shutting down: turns it aborts were cut off, not ended (resumed at boot).
@@ -200,13 +206,34 @@ pub async fn dispatch_pending(hub: &Arc<Hub>) -> Result<()> {
     if hub.paused().await? {
         return Ok(());
     }
+    // Each instance in its own task: one waking slowly (building its image) holds up no other.
+    let mut tasks = Vec::new();
     for (name, wakes) in hub.store.instances_with_pending().await? {
         // Notes alone never wake an agent; they ride along with whatever wakes it next.
         if !wakes && hub.agents.get(&name).await.is_none_or(|a| a.stopping()) {
             continue;
         }
-        if let Err(e) = deliver_to(hub, &name).await {
-            tracing::warn!(instance = %name, error = %e, "delivery deferred");
+        {
+            let mut running = hub.agents.delivering.lock().await;
+            if let Some(skipped) = running.get_mut(&name) {
+                *skipped = true; // a task for it runs; another pass follows it
+                continue;
+            }
+            running.insert(name.clone(), false);
+        }
+        let hub = hub.clone();
+        tasks.push(tokio::spawn(async move {
+            if let Err(e) = deliver_to(&hub, &name).await {
+                tracing::warn!(instance = %name, error = %e, "delivery deferred");
+            }
+            if hub.agents.delivering.lock().await.remove(&name) == Some(true) {
+                hub.dispatch_notify.notify_one();
+            }
+        }));
+    }
+    for t in tasks {
+        if let Err(e) = t.await {
+            tracing::error!(error = %e, "a delivery task panicked");
         }
     }
     Ok(())
@@ -347,6 +374,8 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
             hub.store.mark_delivered(&d.id).await?;
             if ev.source == Source::User {
                 agent.since().talked();
+                agent.answering.store(true, Ordering::SeqCst);
+                hub.store.touch_message(&d.instance).await?;
             }
             if streaming == Some(Streaming::Steer) && ev.source == Source::User {
                 agent.steered.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(d.id.clone());
@@ -395,7 +424,8 @@ pub async fn ensure_awake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<Liv
 }
 
 async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
-    let _guard = hub.agents.waking.lock().await;
+    let lock = hub.agents.waking.lock().await.entry(instance.name.clone()).or_default().clone();
+    let _guard = lock.lock().await;
     if let Some(a) = hub.agents.get(&instance.name).await {
         return Ok(a);
     }
@@ -461,6 +491,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
         aborted: AtomicBool::new(false),
+        answering: AtomicBool::new(false),
         turn: std::sync::Mutex::default(),
         error: std::sync::Mutex::default(),
         delivering: Mutex::default(),
@@ -874,6 +905,11 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                 agent.touch();
                 if let Err(e) = hub.store.touch_instance(&agent.instance).await {
                     tracing::error!(instance = %agent.instance, error = %e, "could not record activity");
+                }
+                if agent.answering.swap(false, Ordering::SeqCst)
+                    && let Err(e) = hub.store.touch_message(&agent.instance).await
+                {
+                    tracing::error!(instance = %agent.instance, error = %e, "could not record the reply");
                 }
                 let aborted = agent.aborted.swap(false, Ordering::SeqCst);
                 let failed = agent.error().take().filter(|_| !aborted);
@@ -1328,9 +1364,13 @@ pub async fn run(hub: Arc<Hub>) {
         if let Err(e) = refresh_environments(&hub, Utc::now()).await {
             tracing::error!(error = %e, "environment refresh failed");
         }
-        if let Err(e) = dispatch_pending(&hub).await {
-            tracing::error!(error = %e, "dispatch failed");
-        }
+        // Not awaited: a pass waits for its slowest wake, the next messages must not.
+        let h = hub.clone();
+        tokio::spawn(async move {
+            if let Err(e) = dispatch_pending(&h).await {
+                tracing::error!(error = %e, "dispatch failed");
+            }
+        });
         if let Err(e) = reap_idle(&hub, Utc::now()).await {
             tracing::error!(error = %e, "idle reaping failed");
         }

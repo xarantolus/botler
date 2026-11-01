@@ -449,6 +449,8 @@ routes! {
         handover: Handover;
         compact_chat: crate::ops::CompactChat;
         clear_chat: crate::ops::ClearChat;
+        pin_chat: crate::ops::PinChat;
+        rename_chat: crate::ops::RenameChat;
         session_tree: GetSessionTree;
         goto_entry: GotoEntry;
         label_entry: LabelEntry;

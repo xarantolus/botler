@@ -10,7 +10,7 @@ export interface ConfirmOptions {
   confirmLabel: string;
   color?: "primary" | "warning" | "error";
   /** Ask for a reason (returned in the result); optional unless `required`. */
-  reason?: { label: string; placeholder?: string; required?: boolean };
+  reason?: { label: string; placeholder?: string; required?: boolean; value?: string };
   /** A checkbox (its state is `checked` in the result). */
   check?: { label: string };
 }

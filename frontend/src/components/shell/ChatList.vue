@@ -1,9 +1,12 @@
 <script setup lang="ts">
-// The chats in the sidebar: Botler pinned first, then those waiting for the user, then the most
-// recently active. Each shows what it is doing when that is worth a glance.
-import type { NavigationMenuItem } from "@nuxt/ui";
+// The chats in the sidebar: Botler first, then the ones the user pinned, then those waiting for
+// the user, then by when someone last wrote in them. Each shows what it is doing when that is
+// worth a glance; its menu pins, renames or archives it.
+import type { DropdownMenuItem, NavigationMenuItem } from "@nuxt/ui";
+import { archiveNow, pinChat, renameChat } from "../../chatActions";
 import { computed } from "vue";
 import type { Instance } from "../../generated";
+import { chatOrder } from "../../lib/chatOrder";
 import { chatTitle } from "../../lib/events";
 import { phaseBadge, type Badge } from "../../lib/phase";
 import { usd } from "../../lib/time";
@@ -17,15 +20,8 @@ const waitingChats = computed(() => Object.keys(waitingByInstance.value).length)
 
 const chats = computed(() => {
   const door = frontDoorName.value;
-  return state.instances
-    .filter((i) => i.state !== "archived" || state.showArchived || i.name === selected.value)
-    .sort((a, b) => {
-      if (a.name === door) return -1;
-      if (b.name === door) return 1;
-      const wa = waitingByInstance.value[a.name] ? 1 : 0;
-      const wb = waitingByInstance.value[b.name] ? 1 : 0;
-      return wb - wa || b.last_active.localeCompare(a.last_active);
-    });
+  const shown = state.instances.filter((i) => i.state !== "archived" || state.showArchived || i.name === selected.value);
+  return chatOrder(shown, door, waitingByInstance.value);
 });
 
 function badge(i: Instance): Badge {
@@ -44,6 +40,18 @@ function notable(b: Badge): boolean {
 
 type ChatItem = NavigationMenuItem & { instance: Instance; badgeInfo: Badge; sub: string };
 
+function actions(i: Instance): DropdownMenuItem[] {
+  const title = chatTitle(i, frontDoorName.value);
+  const out: DropdownMenuItem[] = [
+    { label: i.pinned ? "Unpin" : "Pin", icon: i.pinned ? "i-lucide-pin-off" : "i-lucide-pin", onSelect: () => void pinChat(i.name, !i.pinned) },
+    { label: "Rename…", icon: "i-lucide-pencil", onSelect: () => void renameChat(i.name, title) },
+  ];
+  if (i.name !== frontDoorName.value && i.state !== "archived") {
+    out.push({ label: "Archive now…", icon: "i-lucide-archive", onSelect: () => void archiveNow(i.name) });
+  }
+  return out;
+}
+
 const items = computed((): ChatItem[] =>
   chats.value.map((i) => {
     const b = badge(i);
@@ -53,7 +61,7 @@ const items = computed((): ChatItem[] =>
       label: chatTitle(i, frontDoorName.value),
       to: `/chat/${encodeURIComponent(i.name)}`,
       active: i.name === selected.value,
-      icon: door ? "i-lucide-star" : i.state === "archived" ? "i-lucide-archive" : "i-lucide-message-square",
+      icon: door ? "i-lucide-star" : i.pinned ? "i-lucide-pin" : i.state === "archived" ? "i-lucide-archive" : "i-lucide-message-square",
       chip: waitingByInstance.value[i.name] ? { color: "warning" as const, size: "md" as const } : undefined,
       instance: i,
       badgeInfo: b,
@@ -101,10 +109,23 @@ const items = computed((): ChatItem[] =>
             <PhaseBadge v-if="notable((item as ChatItem).badgeInfo)" :badge="(item as ChatItem).badgeInfo" />
             <span class="truncate">
               <template v-if="(item as ChatItem).sub">{{ (item as ChatItem).sub }} · </template>
-              <TimeAgo :at="(item as ChatItem).instance.last_active" />
+              <TimeAgo :at="(item as ChatItem).instance.last_message_at" />
             </span>
           </span>
         </span>
+      </template>
+      <template #item-trailing="{ item }">
+        <UDropdownMenu :items="actions((item as ChatItem).instance)" :content="{ align: 'end' }">
+          <UButton
+            icon="i-lucide-ellipsis"
+            color="neutral"
+            variant="ghost"
+            size="xs"
+            :aria-label="`Actions for ${item.label}`"
+            class="opacity-60 hover:opacity-100"
+            @click.stop.prevent
+          />
+        </UDropdownMenu>
       </template>
     </UNavigationMenu>
 

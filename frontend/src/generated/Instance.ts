@@ -22,4 +22,16 @@ archive_requested_at: string | null,
 /**
  * How it was archived, with the agent's handover report when it gave one.
  */
-archive_report: ArchiveRecord | null, created_at: string, last_active: string, };
+archive_report: ArchiveRecord | null, created_at: string, last_active: string, 
+/**
+ * Pinned by the user: listed right after the front door.
+ */
+pinned: boolean, 
+/**
+ * The user named it: agents keep its title.
+ */
+titled_by_user: boolean, 
+/**
+ * When the user or the chat last wrote in it (the list's order); its creation before that.
+ */
+last_message_at: string, };

@@ -35,6 +35,9 @@ impl Op for SetChatTitle {
 
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<ChatTitled, OpError> {
         let instance = caller.agent("only agents name chats")?;
+        if hub.store.instance(instance).await?.titled_by_user {
+            return Err(OpError::BadRequest("the user named this chat; keep its title".into()));
+        }
         let slug_ok = (3..=60).contains(&self.slug.len())
             && botler_core::defs::valid_name(&self.slug)
             && !self.slug.ends_with('-')
@@ -373,7 +376,7 @@ pub struct HandedOver {
 
 impl Op for HandoverReady {
     const NAME: &'static str = "handover_ready";
-    const DESCRIPTION: &'static str = "Hand over, only after an archive.requested or handover.requested event: what you did, what is outstanding, where your state lives, and (when archiving) optionally who should continue. For a handover to yourself you continue on a fresh session that starts from this report.";
+    const DESCRIPTION: &'static str = "Hand over: after an archive.requested or handover.requested event, or (not in a persistent chat) by yourself once your task is done and the user has what they need, which archives this chat. Give what you did, what is outstanding, where your state lives, and optionally who should continue. For a handover to yourself you continue on a fresh session that starts from this report.";
     const WHO: Who = Who::UserAndAgents;
     const ENDS_TURN: bool = true;
     type Output = HandedOver;
@@ -382,7 +385,8 @@ impl Op for HandoverReady {
         let name = caller.agent("only agents hand over")?;
         let inst = hub.store.instance(name).await?;
         let to = crate::handover::pending(hub, name).await?;
-        if inst.archive_requested_at.is_none() && to.is_none() {
+        // A chat done with its task may archive itself; a persistent one only when asked.
+        if inst.archive_requested_at.is_none() && to.is_none() && inst.persistent {
             return Err(OpError::BadRequest("nobody asked for a handover; keep working".into()));
         }
         if self.summary.trim().len() < 20 {

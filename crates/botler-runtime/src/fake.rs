@@ -53,6 +53,8 @@ struct State {
     seen: BTreeMap<String, HashSet<String>>,
     events: Vec<mpsc::Sender<ContainerEvent>>,
     fail_builds: bool,
+    /// Builds of tags containing this take this long (a slow image).
+    slow_builds: Option<(String, std::time::Duration)>,
     crash_on_start: bool,
     networks: HashSet<String>,
     /// Attached containers that are not pi (e.g. the gate) print this and exit with this code.
@@ -161,6 +163,11 @@ impl Fake {
         self.lock().fail_builds = fail;
     }
 
+    /// Builds of tags containing `tag` take `took`.
+    pub fn set_slow_builds(&self, tag: &str, took: std::time::Duration) {
+        self.lock().slow_builds = Some((tag.into(), took));
+    }
+
     /// What attached non-pi containers (the gate) print and their exit code.
     pub fn set_script_result(&self, output: &str, code: i32) {
         self.lock().script = (output.to_string(), code);
@@ -265,6 +272,10 @@ impl Containers for Fake {
         tag: &str,
         labels: &BTreeMap<String, String>,
     ) -> Result<()> {
+        let slow = self.lock().slow_builds.clone().filter(|(t, _)| tag.contains(t.as_str()));
+        if let Some((_, took)) = slow {
+            tokio::time::sleep(took).await;
+        }
         let mut st = self.lock();
         // Like podman, the Dockerfile must be inside the context.
         if st.fail_builds || !context.join(dockerfile).is_file() {

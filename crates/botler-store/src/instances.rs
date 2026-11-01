@@ -37,6 +37,12 @@ pub struct Instance {
     pub archive_report: Option<ArchiveRecord>,
     pub created_at: DateTime<Utc>,
     pub last_active: DateTime<Utc>,
+    /// Pinned by the user: listed right after the front door.
+    pub pinned: bool,
+    /// The user named it: agents keep its title.
+    pub titled_by_user: bool,
+    /// When the user or the chat last wrote in it (the list's order); its creation before that.
+    pub last_message_at: DateTime<Utc>,
 }
 
 /// The record kept when a chat is archived.
@@ -126,6 +132,12 @@ fn row(r: &SqliteRow) -> Result<Instance> {
             .transpose()?,
         created_at: parse_ts(T, r.get("created_at"))?,
         last_active: parse_ts(T, r.get("last_active"))?,
+        pinned: r.get::<i64, _>("pinned") != 0,
+        titled_by_user: r.get::<i64, _>("titled_by_user") != 0,
+        last_message_at: match r.get::<Option<String>, _>("last_message_at") {
+            Some(t) => parse_ts(T, &t)?,
+            None => parse_ts(T, r.get("created_at"))?,
+        },
     })
 }
 
@@ -217,6 +229,35 @@ impl Store {
             .bind(state.as_str())
             .bind(container_id)
             .bind(ts(Utc::now()))
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Someone wrote in chat `name` (the user, or the chat answering them).
+    pub async fn touch_message(&self, name: &str) -> Result<()> {
+        sqlx::query("UPDATE instances SET last_message_at = ? WHERE name = ?")
+            .bind(ts(Utc::now()))
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The user's title for chat `name`; agents keep it from then on.
+    pub async fn set_user_title(&self, name: &str, title: &str) -> Result<()> {
+        sqlx::query("UPDATE instances SET title = ?, titled_by_user = 1 WHERE name = ?")
+            .bind(title)
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_pinned(&self, name: &str, pinned: bool) -> Result<()> {
+        sqlx::query("UPDATE instances SET pinned = ? WHERE name = ?")
+            .bind(i64::from(pinned))
             .bind(name)
             .execute(&self.pool)
             .await?;

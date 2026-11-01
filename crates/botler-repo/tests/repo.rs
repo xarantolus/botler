@@ -131,6 +131,20 @@ async fn revert_and_export() {
     f.repo.export_paths(&rev, &["jobs/poll", "botler.toml"], &part).await.unwrap();
     assert!(part.join("jobs/poll/src/poll.py").exists() && part.join("botler.toml").exists());
     assert!(!part.join("agents").exists());
+
+    // Exports of the same content side by side (`x.partial-<id>`) do not share an archive.
+    let dirs: Vec<_> = (0..4).map(|i| f.root.join(format!("pi-tree.partial-{i}"))).collect();
+    let paths = ["jobs/poll"];
+    let (a, b, c, d) = tokio::join!(
+        f.repo.export_paths(&rev, &paths, &dirs[0]),
+        f.repo.export_paths(&rev, &paths, &dirs[1]),
+        f.repo.export_paths(&rev, &paths, &dirs[2]),
+        f.repo.export_paths(&rev, &paths, &dirs[3]),
+    );
+    for r in [a, b, c, d] {
+        r.unwrap();
+    }
+    assert!(dirs.iter().all(|d| d.join("jobs/poll/src/poll.py").exists()));
 }
 
 #[tokio::test]

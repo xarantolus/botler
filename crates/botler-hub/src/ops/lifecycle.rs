@@ -205,3 +205,56 @@ impl Op for ClearChat {
         Ok(ChatDone { chat: inst.name, note: "Cleared: the chat continues on an empty session.".into() })
     }
 }
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct PinChat {
+    /// The chat (name or slug).
+    pub chat: String,
+    pub pinned: bool,
+}
+
+impl Op for PinChat {
+    const NAME: &'static str = "pin_chat";
+    const DESCRIPTION: &'static str = "Pin a chat to the top of the list (right after the front door), or unpin it.";
+    const WHO: Who = Who::User;
+    type Output = ChatDone;
+
+    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<ChatDone, OpError> {
+        let inst = hub
+            .store
+            .resolve_instance(&self.chat)
+            .await?
+            .ok_or_else(|| OpError::BadRequest(format!("no chat named {}", self.chat)))?;
+        hub.store.set_pinned(&inst.name, self.pinned).await?;
+        let note = if self.pinned { "Pinned." } else { "Unpinned." };
+        Ok(ChatDone { chat: inst.name, note: note.into() })
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct RenameChat {
+    /// The chat (name or slug).
+    pub chat: String,
+    pub title: String,
+}
+
+impl Op for RenameChat {
+    const NAME: &'static str = "rename_chat";
+    const DESCRIPTION: &'static str = "Give a chat the user's own title; its agent keeps it from then on.";
+    const WHO: Who = Who::User;
+    type Output = ChatDone;
+
+    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<ChatDone, OpError> {
+        let inst = hub
+            .store
+            .resolve_instance(&self.chat)
+            .await?
+            .ok_or_else(|| OpError::BadRequest(format!("no chat named {}", self.chat)))?;
+        let title = self.title.trim();
+        if title.is_empty() || title.len() > 120 {
+            return Err(OpError::BadRequest("the title must be 1-120 characters".into()));
+        }
+        hub.store.set_user_title(&inst.name, title).await?;
+        Ok(ChatDone { chat: inst.name, note: format!("Renamed to {title}.") })
+    }
+}

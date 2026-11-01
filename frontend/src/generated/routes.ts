@@ -58,11 +58,13 @@ import type { NewChat } from "./NewChat";
 import type { NewPairingCode } from "./NewPairingCode";
 import type { PairingCode } from "./PairingCode";
 import type { PauseState } from "./PauseState";
+import type { PinChat } from "./PinChat";
 import type { Proposal } from "./Proposal";
 import type { ProposalDetail } from "./ProposalDetail";
 import type { ProposalDiff } from "./ProposalDiff";
 import type { ProposalVerdict } from "./ProposalVerdict";
 import type { ProposalView } from "./ProposalView";
+import type { RenameChat } from "./RenameChat";
 import type { RestartService } from "./RestartService";
 import type { RestoreRequest } from "./RestoreRequest";
 import type { RevertRequest } from "./RevertRequest";
@@ -163,6 +165,8 @@ export interface Routes {
   handover: { method: "POST"; path: "/api/v1/ops/handover"; params: Record<string, never>; query: never; body: Handover; response: HandoverRequested };
   compact_chat: { method: "POST"; path: "/api/v1/ops/compact_chat"; params: Record<string, never>; query: never; body: CompactChat; response: ChatDone };
   clear_chat: { method: "POST"; path: "/api/v1/ops/clear_chat"; params: Record<string, never>; query: never; body: ClearChat; response: ChatDone };
+  pin_chat: { method: "POST"; path: "/api/v1/ops/pin_chat"; params: Record<string, never>; query: never; body: PinChat; response: ChatDone };
+  rename_chat: { method: "POST"; path: "/api/v1/ops/rename_chat"; params: Record<string, never>; query: never; body: RenameChat; response: ChatDone };
   session_tree: { method: "POST"; path: "/api/v1/ops/session_tree"; params: Record<string, never>; query: never; body: GetSessionTree; response: SessionTree };
   goto_entry: { method: "POST"; path: "/api/v1/ops/goto_entry"; params: Record<string, never>; query: never; body: GotoEntry; response: EntryDone };
   label_entry: { method: "POST"; path: "/api/v1/ops/label_entry"; params: Record<string, never>; query: never; body: LabelEntry; response: EntryDone };
@@ -231,6 +235,8 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   handover: { method: "POST", path: "/api/v1/ops/handover" },
   compact_chat: { method: "POST", path: "/api/v1/ops/compact_chat" },
   clear_chat: { method: "POST", path: "/api/v1/ops/clear_chat" },
+  pin_chat: { method: "POST", path: "/api/v1/ops/pin_chat" },
+  rename_chat: { method: "POST", path: "/api/v1/ops/rename_chat" },
   session_tree: { method: "POST", path: "/api/v1/ops/session_tree" },
   goto_entry: { method: "POST", path: "/api/v1/ops/goto_entry" },
   label_entry: { method: "POST", path: "/api/v1/ops/label_entry" },

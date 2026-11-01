@@ -279,3 +279,66 @@ async fn a_persistent_agent_has_its_chat_once_defined() {
     assert!(chat.persistent);
     assert!(e.hub.agents.get("curator").await.is_none(), "asleep until something is delivered");
 }
+
+#[tokio::test]
+async fn a_chat_building_its_image_holds_up_no_other() {
+    let e = setup().await;
+    // Named after `dev-…`: a pass reaches it after the dev chat.
+    let parent = router::new_instance(&e.hub, "triage", None, None).await.unwrap();
+    // Its image is built; it sleeps.
+    user_says(&e, &parent, "hello").await;
+    pump(&e).await;
+    agents::stop_all(&e.hub).await;
+    settle().await;
+    e.fake.set_slow_builds("image-dev", std::time::Duration::from_secs(20));
+    let dev = router::spawn(&e.hub, "dev", Some(&parent), Some("build it"), None, None).await.unwrap();
+    user_says(&e, &parent, "are you there?").await;
+    e.route().await;
+    let hub = e.hub.clone();
+    let pass = tokio::spawn(async move { agents::dispatch_pending(&hub).await });
+    let name = agents::container_name(&e.hub, &parent);
+    for _ in 0..200 {
+        if e.fake.prompts(&name).iter().any(|p| p.contains("are you there?")) {
+            assert!(e.hub.agents.get(&dev).await.is_none(), "the dev chat is still building");
+            pass.abort();
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("the chat waited for the other chat's image build");
+}
+
+#[tokio::test]
+async fn the_user_pins_and_renames_chats_and_a_finished_chat_archives_itself() {
+    let e = setup().await;
+    let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    ops::call(&e.hub, &user(), "pin_chat", json!({"chat": chat, "pinned": true})).await.unwrap();
+    ops::call(&e.hub, &user(), "rename_chat", json!({"chat": chat, "title": "Flat search"})).await.unwrap();
+    let i = e.hub.store.instance(&chat).await.unwrap();
+    assert!(i.pinned && i.titled_by_user);
+    assert_eq!(i.title.as_deref(), Some("Flat search"));
+
+    // Its agent keeps the user's title, and archives the chat once its task is done.
+    let agent = Caller {
+        principal: Principal::Agent { instance: chat.clone(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    let r = ops::call(&e.hub, &agent, "set_chat_title", json!({"title": "Other", "slug": "other-topic"})).await;
+    assert!(r.unwrap_err().to_string().contains("the user named this chat"));
+    ops::call(&e.hub, &agent, "handover_ready", json!({"summary": "Found three flats and sent them to the user."}))
+        .await
+        .unwrap();
+    assert_eq!(e.hub.store.instance(&chat).await.unwrap().state, botler_store::InstanceState::Archived);
+
+    // Botler only hands over when asked.
+    router::create_persistent_chats(&e.hub).await.unwrap();
+    let botler = Caller {
+        principal: Principal::Agent { instance: "botler".into(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    let r = ops::call(&e.hub, &botler, "handover_ready", json!({"summary": "Nothing to hand over, really."})).await;
+    let err = r.unwrap_err().to_string();
+    assert!(err.contains("nobody asked"), "{err}");
+}

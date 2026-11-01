@@ -51,3 +51,45 @@ export async function handoverChat(chat: string): Promise<void> {
   }
   await refreshSession(chat);
 }
+
+export async function pinChat(chat: string, pinned: boolean): Promise<void> {
+  try {
+    await call("pin_chat", { body: { chat, pinned } });
+    await refreshInstances();
+  } catch (e) {
+    notifyError(pinned ? "Could not pin" : "Could not unpin", e);
+  }
+}
+
+export async function renameChat(chat: string, current: string): Promise<void> {
+  const ok = await confirm({
+    title: "Rename this chat",
+    description: "Its agent keeps your title from now on.",
+    confirmLabel: "Rename",
+    reason: { label: "Title", required: true, value: current },
+  });
+  if (!ok) return;
+  try {
+    await call("rename_chat", { body: { chat, title: ok.reason } });
+    await refreshInstances();
+  } catch (e) {
+    notifyError("Could not rename", e);
+  }
+}
+
+/** Archive at once, without waiting for the agent's handover report. */
+export async function archiveNow(chat: string): Promise<void> {
+  const ok = await confirm({
+    title: "Archive this chat now?",
+    description: "It leaves the list right away, without the agent's handover report. Nothing is deleted; a message to it restores it.",
+    confirmLabel: "Archive",
+    color: "warning",
+  });
+  if (!ok) return;
+  try {
+    await call("archive_chat", { params: { instance: chat }, body: { force: true } });
+    await refreshInstances();
+  } catch (e) {
+    notifyError("Could not archive", e);
+  }
+}
