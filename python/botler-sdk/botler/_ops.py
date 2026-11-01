@@ -192,7 +192,7 @@ def list_requests() -> dict[str, Any]:
 
 
 def cancel_request(*, id: str, reason: str) -> dict[str, Any]:
-    """Withdraw one of your outstanding requests by id (it disappears for the user; a late answer is rejected).
+    """Withdraw one of your outstanding requests by id when it no longer matters, e.g. the user answered it in the chat (it disappears for the user; a late answer is rejected). Withdrawing a proposal's approval request withdraws the proposal.
 
     Args:
         reason: Why it is no longer needed.

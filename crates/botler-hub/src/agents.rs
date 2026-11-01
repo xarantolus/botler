@@ -14,7 +14,7 @@ use botler_core::payloads::{
 };
 use botler_core::{Event, Source};
 use botler_runtime::{ContainerSpec, Disposition, Mount, PiClient, PiError, PiEvent, PiEventKind, Streaming};
-use botler_store::{Delivery, Instance, InstanceState};
+use botler_store::{Delivery, Dialog, Instance, InstanceState};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -267,14 +267,24 @@ fn is_queued_message(ev: &Event) -> Result<bool> {
 
 /// The text pi receives for one delivery. The botler extension recognises the prefix, drops
 /// duplicate ids, and renders the header. `previous` is when the instance's last delivery
-/// arrived: the header notes a long gap since then.
+/// arrived: the header notes a long gap since then. `open` are the chat's open requests: a
+/// user's message lists them, since a reply in the chat often answers one.
 pub fn envelope(
     d: &Delivery,
     ev: &Event,
     tz: chrono_tz::Tz,
     now: DateTime<Utc>,
     previous: Option<DateTime<Utc>>,
+    open: &[Dialog],
 ) -> Result<String> {
+    let mut rendered = catalog::render(ev, d.prompt.as_deref());
+    if ev.source == Source::User && !open.is_empty() {
+        let list: Vec<String> = open.iter().map(|o| format!("- `{}`: {}", o.id, o.question)).collect();
+        rendered.push_str(&format!(
+            "\n\n(Your requests still open:\n{}\nIf this message answers one or makes it moot, withdraw it with cancel_request.)",
+            list.join("\n")
+        ));
+    }
     let body = DeliveryEnvelope {
         id: d.id.clone(),
         event: ev.id.to_string(),
@@ -282,7 +292,7 @@ pub fn envelope(
         from: ev.source.key(),
         provenance: ev.provenance,
         correlation: ev.correlation.unwrap_or(ev.id).to_string(),
-        body: catalog::render(ev, d.prompt.as_deref()),
+        body: rendered,
         quiet: d.quiet,
         at: botler_core::clock::format_local(now, tz),
         gap: botler_core::clock::gap_note(now, previous),
@@ -301,7 +311,11 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
         return Ok(false);
     }
     let previous = hub.store.last_delivered(&d.instance).await?.and_then(|p| p.delivered_at);
-    let text = envelope(d, &ev, hub.applied().await.defs.timezone, Utc::now(), previous)?;
+    let open = match ev.source {
+        Source::User => hub.store.open_dialogs().await?.into_iter().filter(|o| o.instance == d.instance).collect(),
+        _ => Vec::new(),
+    };
+    let text = envelope(d, &ev, hub.applied().await.defs.timezone, Utc::now(), previous, &open)?;
     let streaming = if busy {
         // The user and urgent events interrupt at the next turn boundary; everything else waits.
         Some(if ev.urgent || ev.source == Source::User { Streaming::Steer } else { Streaming::FollowUp })

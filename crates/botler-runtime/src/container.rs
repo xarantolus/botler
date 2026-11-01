@@ -648,10 +648,14 @@ impl Containers for Cli {
             .await
             .map_err(|source| ContainerError::Io { binary: self.info.binary.clone(), source })?;
         if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if stderr.to_lowercase().contains("no such container") {
+                return Err(ContainerError::NotFound(name.into()));
+            }
             return Err(ContainerError::Command {
                 binary: self.info.binary.clone(),
                 args: format!("logs {name}"),
-                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                stderr,
             });
         }
         // Containers write to both streams; the hub treats them as one log.

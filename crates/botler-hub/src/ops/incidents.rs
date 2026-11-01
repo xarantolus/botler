@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use botler_core::defs::Capability;
-use botler_store::{Incident, Run};
+use botler_store::{Incident, Run, RunStatus};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -41,7 +41,14 @@ impl Op for GetRunLogs {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Still running: read live.
                 let name = crate::jobs::run_container(hub, &run);
-                hub.containers.logs(&name, 2000).await.map_err(HubError::from)?
+                match hub.containers.logs(&name, 2000).await {
+                    Ok(l) => l,
+                    Err(botler_runtime::ContainerError::NotFound(_)) => match run.status {
+                        RunStatus::Queued => "(not started yet: its image is building or it waits its turn)\n".into(),
+                        _ => "(no output: its container is gone and nothing was kept)\n".into(),
+                    },
+                    Err(e) => return Err(HubError::from(e).into()),
+                }
             }
             Err(e) => return Err(HubError::Io(e).into()),
         };

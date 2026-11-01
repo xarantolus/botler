@@ -113,7 +113,7 @@ async fn message_wakes_botler_and_is_delivered_once() {
     let delivery = e.hub.store.delivery(&first_id).await.unwrap();
     let agent = e.hub.agents.get("botler").await.unwrap();
     let now = Utc::now();
-    let text = agents::envelope(&delivery, &ev, tz, now, Some(now - Duration::days(3))).unwrap();
+    let text = agents::envelope(&delivery, &ev, tz, now, Some(now - Duration::days(3)), &[]).unwrap();
     assert!(text.contains("\"gap\":\"first message in 3 days\""), "{text}");
     let again = agent.pi.prompt(&text, &[], None).await.unwrap();
     assert_eq!(again, botler_runtime::Disposition::Handled);

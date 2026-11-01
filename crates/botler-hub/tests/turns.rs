@@ -344,3 +344,48 @@ async fn review_timeout_after_the_user_rejected_does_nothing() {
     let dialogs = e.hub.store.open_dialogs().await.unwrap();
     assert!(dialogs.iter().all(|d| d.proposal_id.as_deref() != Some(p.id.as_str())), "no approval asked");
 }
+
+#[tokio::test]
+async fn a_user_message_lists_open_requests_and_withdrawing_the_approval_withdraws_the_proposal() {
+    let e = env().await;
+    with_key(&e).await;
+    let (p, _) = in_review(&e).await;
+    turns::sweep(&e.hub, Utc::now() + chrono::Duration::minutes(21)).await.unwrap();
+    awaiting_user(&e, &p.id).await;
+    let open: Vec<_> =
+        e.hub.store.open_dialogs().await.unwrap().into_iter().filter(|d| d.instance == "botler").collect();
+    let approval = open.iter().find(|d| d.proposal_id.as_deref() == Some(p.id.as_str())).unwrap().clone();
+
+    // The user answers in the chat instead: the delivery reminds the agent of its open requests.
+    let user =
+        botler_hub::ops::Caller { principal: botler_hub::auth::Principal::User, capabilities: vec![], runnable: None };
+    botler_hub::ops::call(&e.hub, &user, "send_message", json!({"to": "botler", "text": "never mind the digest"}))
+        .await
+        .unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    let name = agents::container_name(&e.hub, "botler");
+    let text = until("the delivery", || async {
+        e.fake.prompts(&name).into_iter().find(|t| t.contains("never mind the digest"))
+    })
+    .await;
+    assert!(text.contains(&approval.id) && text.contains("cancel_request"), "{text}");
+
+    let botler = botler_hub::ops::Caller {
+        principal: botler_hub::auth::Principal::Agent { instance: "botler".into(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    botler_hub::ops::call(
+        &e.hub,
+        &botler,
+        "cancel_request",
+        json!({"id": approval.id, "reason": "the user said never mind"}),
+    )
+    .await
+    .unwrap();
+    let p = e.hub.store.proposal(&p.id).await.unwrap();
+    assert_eq!(p.status, ProposalStatus::Failed);
+    assert!(p.review_notes.unwrap_or_default().contains("the user said never mind"));
+    assert!(e.hub.store.open_dialogs().await.unwrap().iter().all(|d| d.proposal_id.as_deref() != Some(p.id.as_str())));
+}

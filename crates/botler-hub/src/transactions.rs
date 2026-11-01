@@ -557,6 +557,21 @@ async fn stage(hub: &Hub, id: &str, stage: ProposalStage, detail: &str) -> Resul
     })
 }
 
+/// Its agent withdraws proposal `id` while it waits for the user. Returns whether it was waiting.
+pub async fn withdraw(hub: &Hub, id: &str, why: &str) -> Result<bool> {
+    if hub.store.proposal(id).await?.status != ProposalStatus::AwaitingUser {
+        return Ok(false);
+    }
+    hub.store.set_proposal_outcome(id, ProposalStatus::Failed, why).await?;
+    for d in hub.store.open_dialogs().await?.into_iter().filter(|d| d.proposal_id.as_deref() == Some(id)) {
+        if hub.store.close_dialog(&d.id, DialogStatus::Aborted, why).await? {
+            crate::notify::dialog_closed(hub, &d);
+        }
+    }
+    broadcast(hub, id).await?;
+    Ok(true)
+}
+
 /// Show the proposal's current state to live viewers.
 async fn broadcast(hub: &Hub, id: &str) -> Result<()> {
     let proposal = Box::new(hub.store.proposal(id).await?);

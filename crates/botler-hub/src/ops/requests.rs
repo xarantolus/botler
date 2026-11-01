@@ -103,8 +103,7 @@ pub struct RequestCancelled {
 
 impl Op for CancelRequest {
     const NAME: &'static str = "cancel_request";
-    const DESCRIPTION: &'static str =
-        "Withdraw one of your outstanding requests by id (it disappears for the user; a late answer is rejected).";
+    const DESCRIPTION: &'static str = "Withdraw one of your outstanding requests by id when it no longer matters, e.g. the user answered it in the chat (it disappears for the user; a late answer is rejected). Withdrawing a proposal's approval request withdraws the proposal.";
     const WHO: Who = Who::UserAndAgents;
     type Output = RequestCancelled;
 
@@ -116,6 +115,12 @@ impl Op for CancelRequest {
         }
         let why = format!("cancelled by {instance}: {}", self.reason);
         let cancelled = hub.store.close_dialog(&self.id, DialogStatus::Aborted, &why).await?;
+        if cancelled {
+            crate::notify::dialog_closed(hub, &d);
+        }
+        if let Some(p) = &d.proposal_id {
+            crate::transactions::withdraw(hub, p, &why).await?;
+        }
         Ok(RequestCancelled { cancelled, id: self.id })
     }
 }
