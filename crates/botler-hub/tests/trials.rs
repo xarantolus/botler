@@ -307,3 +307,34 @@ async fn podman_trial_of_the_example_watcher() {
     assert!(e.hub.store.events(&ticks).await.unwrap().is_empty(), "nothing was routed");
     assert!(e.hub.store.open_incidents().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_restart_launches_the_run_the_old_hub_was_starting() {
+    let e = common::env().await;
+    e.commit(&[
+        ("jobs/hourly/job.toml", "command = [\"python\", \"-m\", \"hourly\"]\n"),
+        ("jobs/hourly/Dockerfile", common::JOB_DOCKERFILE),
+    ])
+    .await;
+    // Queued while its image built, then the hub stopped: nothing would ever launch it.
+    let run = e
+        .hub
+        .store
+        .create_run(&botler_store::NewRun {
+            runnable: "hourly".into(),
+            kind: botler_store::RunKind::Oneshot,
+            trigger_id: None,
+            event_id: None,
+            commit_id: None,
+        })
+        .await
+        .unwrap();
+    jobs::resume_queued_on_boot(&e.hub).await.unwrap();
+    for _ in 0..200 {
+        if e.hub.store.run(&run.id).await.unwrap().status == RunStatus::Running {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the queued run never launched");
+}

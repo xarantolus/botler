@@ -53,6 +53,7 @@ pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()
     hub.containers.ensure_network(&hub.network()).await?;
     agents::reconcile_on_boot(&hub).await?;
     crate::trials::end_unstarted_on_boot(&hub).await?;
+    crate::jobs::resume_queued_on_boot(&hub).await?;
     // Interrupted proposals are collected first: the template upgrade may open a new one (its
     // pipeline already runs) or supersede an interrupted one (which must not restart).
     let interrupted = crate::transactions::interrupted(&hub).await?;

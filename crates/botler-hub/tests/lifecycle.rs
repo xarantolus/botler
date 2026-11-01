@@ -239,3 +239,19 @@ async fn agent_containers_have_a_git_identity() {
         assert_eq!(env.get(k).map(String::as_str), Some(v), "{k}");
     }
 }
+
+#[tokio::test]
+async fn a_turn_the_hub_aborted_is_not_a_failure_to_retry() {
+    let e = setup().await;
+    let parent = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let chat = router::spawn(&e.hub, "dev", Some(&parent), Some("build it"), None, None).await.unwrap();
+    e.fake.set_hold_turns(true);
+    pump(&e).await;
+    let agent = e.hub.agents.get(&chat).await.unwrap();
+    assert!(agent.busy());
+    // pi ends the aborted model call with "This operation was aborted".
+    agent.abort().await.unwrap();
+    settle().await;
+    assert!(!agent.busy());
+    assert!(e.hub.store.turn_retry(&chat).await.unwrap().is_none(), "the abort is not retried");
+}

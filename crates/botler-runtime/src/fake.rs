@@ -598,9 +598,14 @@ impl Fake {
                 let text = self.lock().last_reply.get(name).cloned().unwrap_or_else(|| "fake reply".into());
                 vec![ok(json!({"text": text}))]
             }
-            // Like pi: aborting ends a running (held) turn; when idle it does nothing.
+            // Like pi: aborting ends a running (held) turn, its model call failing with the
+            // abort; when idle it does nothing.
             "abort" => match self.lock().busy.remove(name) {
-                true => vec![ok(Value::Null), json!({"type": "agent_settled"})],
+                true => vec![
+                    ok(Value::Null),
+                    json!({"type": "message_end", "message": {"role": "assistant", "stopReason": "error", "errorMessage": "This operation was aborted", "model": "fake/model", "provider": "openrouter"}}),
+                    json!({"type": "agent_settled"}),
+                ],
                 false => vec![ok(Value::Null)],
             },
             "compact" => {

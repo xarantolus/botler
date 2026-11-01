@@ -5,6 +5,8 @@ use botler_core::defs::{Environment, JobDef, Lifetime, Overlap};
 use botler_core::payloads::{BuiltinPayload, RunnableFinishedPayload};
 use botler_core::{Event, Source};
 use botler_runtime::Mount;
+use std::sync::Arc;
+
 use botler_store::{NewRun, Run, RunKind, RunStatus};
 use chrono::{Duration, Utc};
 use serde_json::json;
@@ -301,6 +303,30 @@ pub(crate) fn failure(run: &Run, kind: &'static str, exit_code: Option<i64>, log
         commit: run.commit_id.clone(),
         event_id: run.event_id.clone(),
     }
+}
+
+/// After a restart: a queued oneshot run with nothing running before it was being launched by a
+/// task of the old hub (its image building). Launch it again; until then it would hold the job,
+/// and `overlap = "skip"` triggers would skip every later run.
+pub async fn resume_queued_on_boot(hub: &Arc<Hub>) -> Result<()> {
+    let active = hub.store.active_runs().await?;
+    let mut jobs: Vec<String> = active
+        .iter()
+        .filter(|r| r.kind == RunKind::Oneshot && r.status == RunStatus::Queued)
+        .map(|r| r.runnable.clone())
+        .filter(|job| !active.iter().any(|r| &r.runnable == job && r.status == RunStatus::Running))
+        .collect();
+    jobs.dedup();
+    for job in jobs {
+        tracing::info!(%job, "launching the run the hub was starting when it stopped");
+        let hub = hub.clone();
+        tokio::spawn(async move {
+            if let Err(e) = start_queued(&hub, &job).await {
+                tracing::error!(%job, error = %e, "could not launch the queued run");
+            }
+        });
+    }
+    Ok(())
 }
 
 async fn start_queued(hub: &Hub, job: &str) -> Result<()> {

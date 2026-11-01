@@ -77,7 +77,7 @@ async fn stop(
             if let Some(p) = &parent {
                 agent.record_message(p);
             }
-            agent.pi.abort().await.map_err(crate::hub::HubError::from)?;
+            agent.abort().await.map_err(crate::hub::HubError::from)?;
             true
         }
         _ => false,

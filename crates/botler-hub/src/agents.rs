@@ -55,6 +55,9 @@ pub struct LiveAgent {
     last_active: std::sync::Mutex<DateTime<Utc>>,
     /// Set when the hub stops the agent on purpose (idle, kill switch), so the exit is not a crash.
     stopping: AtomicBool,
+    /// The hub aborted the running turn (the user's stop, a budget, the kill switch): pi's
+    /// "operation was aborted" ending it is not a model failure to retry.
+    aborted: AtomicBool,
     /// What it did this turn: decides whether its parent hears about the end of the turn.
     turn: std::sync::Mutex<TurnLog>,
     /// The error of the turn's last model call, if it failed: the turn failed when it settles.
@@ -75,6 +78,12 @@ pub struct LiveAgent {
 impl LiveAgent {
     pub fn busy(&self) -> bool {
         self.busy.load(Ordering::SeqCst)
+    }
+
+    /// Abort the running turn; it ends without counting as a failure.
+    pub async fn abort(&self) -> std::result::Result<(), PiError> {
+        self.aborted.store(true, Ordering::SeqCst);
+        self.pi.abort().await
     }
 
     /// Being stopped: its container is on the way out, so nothing more is delivered to it (the
@@ -451,6 +460,7 @@ async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
         steered: std::sync::Mutex::default(),
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
+        aborted: AtomicBool::new(false),
         turn: std::sync::Mutex::default(),
         error: std::sync::Mutex::default(),
         delivering: Mutex::default(),
@@ -865,10 +875,12 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                 if let Err(e) = hub.store.touch_instance(&agent.instance).await {
                     tracing::error!(instance = %agent.instance, error = %e, "could not record activity");
                 }
-                let failed = agent.error().take();
+                let aborted = agent.aborted.swap(false, Ordering::SeqCst);
+                let failed = agent.error().take().filter(|_| !aborted);
                 let ended = match crate::checkpoint::ended(&hub, &agent, failed.as_ref().map(|(e, _)| e.as_str())).await
                 {
                     Ok(true) => Ok(()),
+                    Ok(false) if aborted => Ok(()),
                     Ok(false) => match failed {
                         Some((err, called)) => crate::turns::failed(&hub, &agent, &err, called.as_deref()).await,
                         None => turn_succeeded(&hub, &agent).await,
@@ -990,7 +1002,7 @@ async fn meter(hub: &Hub, agent: &LiveAgent, u: &botler_runtime::Usage) -> Resul
         && hub.store.trip_breaker(&format!("instance:{}", agent.instance), "budget", &reason).await?
     {
         tracing::warn!(instance = %agent.instance, %reason, "budget exceeded; stopping agent");
-        if let Err(e) = agent.pi.abort().await {
+        if let Err(e) = agent.abort().await {
             tracing::warn!(instance = %agent.instance, error = %e, "abort after budget failed");
         }
         alarm(
@@ -1165,7 +1177,7 @@ pub async fn stop_after_reply(hub: &Hub, instance: &str) {
 /// Stop every agent (kill switch / shutdown). They come back on their next delivery.
 pub async fn stop_all(hub: &Hub) {
     for agent in hub.agents.all().await {
-        if let Err(e) = agent.pi.abort().await {
+        if let Err(e) = agent.abort().await {
             tracing::debug!(instance = %agent.instance, error = %e, "abort before stop failed");
         }
         agent.stop().await;
