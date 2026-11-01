@@ -207,10 +207,6 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
       <UDashboardNavbar v-else title="Chat">
         <template #leading><UDashboardSidebarCollapse /></template>
       </UDashboardNavbar>
-      <!-- Shown only when a banner is: the banners root is always there, comments make :empty miss. -->
-      <div v-if="inst" class="hidden border-b border-default px-4 py-3 has-[>div>*]:block sm:px-6">
-        <ChatBanners :instance="inst" :status="status" :badge="badge" class="mx-auto max-w-3xl" @show-request="showRequest" />
-      </div>
       <!-- Earlier sessions of this chat (one per handover to a fresh session); `?file=` links one. -->
       <div
         v-if="name && session && session.sessions.length > 1"
@@ -233,6 +229,10 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
           <span>An earlier session, before a handover: read only.</span>
           <UButton size="xs" variant="link" label="Back to the current session" class="p-0" @click="showSession(session.instance.session_file)" />
         </template>
+      </div>
+      <!-- Shown only when a banner is: the banners root is always there, comments make :empty miss. -->
+      <div v-if="inst" class="hidden border-b border-default px-4 py-3 has-[>div>*]:block sm:px-6">
+        <ChatBanners :instance="inst" :status="status" :badge="badge" class="mx-auto max-w-3xl" @show-request="showRequest" />
       </div>
     </template>
 
