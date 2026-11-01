@@ -199,7 +199,7 @@ async fn crashing_always_on_agent_backs_off_and_opens_an_incident() {
 #[tokio::test]
 async fn emit_event_validates_and_explains() {
     use botler_hub::auth::Principal;
-    use botler_hub::ops::{self, Caller};
+    use botler_hub::ops::{self, Caller, OpError};
     let e = env().await;
     e.commit(&[(
         "events/mail.toml",
@@ -473,7 +473,7 @@ async fn parent_hears_when_a_spawned_chat_finishes_its_turn() {
 #[tokio::test]
 async fn secret_requests_are_async_and_declare_on_submit() {
     use botler_hub::auth::Principal;
-    use botler_hub::ops::{self, Caller};
+    use botler_hub::ops::{self, Caller, OpError};
     use botler_hub::secret_requests::{InputError, Submission, submit};
     let e = env().await;
     with_key(&e).await;
