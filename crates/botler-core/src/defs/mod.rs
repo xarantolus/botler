@@ -25,6 +25,15 @@ use crate::trigger::ScheduleSpec;
 /// The uv workspace's shared code and lock: what tools, connectors and packages are built from.
 pub const SHARED_INPUTS: [&str; 5] = ["pyproject.toml", "uv.lock", "packages", "tools", "connectors"];
 
+/// An image reference with a version: a tag other than `latest`, or a digest.
+fn pinned(image: &str) -> bool {
+    if image.contains("@sha256:") {
+        return true;
+    }
+    let last = image.rsplit('/').next().unwrap_or(image);
+    last.split_once(':').is_some_and(|(_, tag)| !tag.is_empty() && tag != "latest")
+}
+
 /// Repo paths a job's image is built from (its build context): its directory and the shared code.
 pub fn job_inputs(job: &str) -> Vec<String> {
     let mut inputs = vec![format!("jobs/{job}")];
@@ -546,11 +555,18 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
             continue;
         };
         l.check_version(&path, spec.version);
-        if !matches!(tree.read(&format!("jobs/{name}/Dockerfile")), Ok(Some(_))) {
-            l.err(&path, "job has no Dockerfile next to job.toml");
+        let dockerfile = matches!(tree.read(&format!("jobs/{name}/Dockerfile")), Ok(Some(_)));
+        match &spec.from {
+            None if !dockerfile => l.err(&path, "job has no Dockerfile next to job.toml (or `from` an upstream image)"),
+            Some(_) if dockerfile => l.err(&path, "`from` and a Dockerfile both define the image; keep one"),
+            Some(image) if !pinned(image) => {
+                l.err(&path, format!("`from = \"{image}\"` needs a version tag or digest, not `latest`"))
+            }
+            None if spec.command.is_empty() => l.err(&path, "command must not be empty"),
+            _ => {}
         }
-        if spec.command.is_empty() {
-            l.err(&path, "command must not be empty");
+        if let Some(k) = spec.environment.keys().find(|k| k.starts_with("BOTLER_")) {
+            l.err(&path, format!("environment `{k}`: BOTLER_ variables are set by the hub"));
         }
         if spec.lifetime == Lifetime::Service && !spec.triggers.is_empty() {
             l.err(&path, "a service runs forever and cannot have triggers; use a oneshot job instead");
@@ -1157,5 +1173,33 @@ mod lenient_tests {
         assert!(l.errors.iter().any(|d| d.path == "agents/bad/agent.toml"), "{:?}", l.errors);
         // Nothing to leave out for a broken botler.toml.
         assert!(load_lenient(&base().with("botler.toml", "nope = ["), chrono_tz::UTC).is_none());
+    }
+}
+
+#[cfg(test)]
+mod upstream_image_tests {
+    use super::*;
+
+    fn errors(job: &str, dockerfile: bool) -> Vec<String> {
+        let mut t = MemTree::new()
+            .with("botler.toml", "[models]\ndefault = \"p/m\"\n")
+            .with("images/agent/Dockerfile", "FROM x")
+            .with("jobs/db/job.toml", job);
+        if dockerfile {
+            t = t.with("jobs/db/Dockerfile", "FROM x");
+        }
+        load(&t).diagnostics.into_iter().filter(|d| d.path.starts_with("jobs/")).map(|d| d.message).collect()
+    }
+
+    #[test]
+    fn a_job_names_a_pinned_upstream_image_or_has_a_dockerfile() {
+        assert_eq!(errors("from = \"docker.io/library/postgres:16\"\n", false), Vec::<String>::new());
+        assert_eq!(errors("from = \"localhost:5000/pg@sha256:abc\"\n", false), Vec::<String>::new());
+        assert!(errors("from = \"docker.io/library/postgres\"\n", false)[0].contains("version tag"));
+        assert!(errors("from = \"postgres:latest\"\n", false)[0].contains("version tag"));
+        assert!(errors("from = \"localhost:5000/pg\"\n", false)[0].contains("version tag"));
+        assert!(errors("from = \"pg:16\"\n", true)[0].contains("keep one"));
+        assert!(errors("command = []\n", false)[0].contains("no Dockerfile"));
+        assert!(errors("from = \"pg:16\"\nenvironment = { BOTLER_X = \"1\" }\n", false)[0].contains("BOTLER_"));
     }
 }

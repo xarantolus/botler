@@ -45,3 +45,11 @@ A job's image is built from the repo root, but the build context holds only `job
 `COPY jobs/<name>/ ...`). The image is rebuilt only when one of those changes. `FROM
 botler/image-<x>` builds on `images/<x>/` at the same commit (e.g. `images/browser`, a Chromium
 desktop: skill `browser-login`, example `jobs/browser-example/`).
+
+An off-the-shelf server (a database, Mattermost, Gitea) needs no Dockerfile: `from =
+"docker.io/library/postgres:16-alpine"` (a version tag or digest, never `latest`) runs that image
+as it is, with its own command unless `command` is set, and `environment = { KEY = "value" }` for
+its plain settings (secrets stay in `secrets` groups). Such an image cannot call
+`botler.health.ok()`, so `[health] command = ["pg_isready"]` lets the hub run that check inside the
+container instead: each success is a heartbeat. Skill `compose-apps` translates a
+docker-compose file.

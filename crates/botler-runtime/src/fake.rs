@@ -61,6 +61,8 @@ struct State {
     script: (String, i32),
     /// `exec`s run, as (container, command).
     execs: Vec<(String, Vec<String>)>,
+    /// `exec`s fail with this.
+    exec_failure: Option<String>,
     /// Shares the fake mount entrypoint reports as failed, with the error.
     mount_failures: BTreeMap<String, String>,
 }
@@ -175,6 +177,11 @@ impl Fake {
 
     pub fn execs(&self) -> Vec<(String, Vec<String>)> {
         self.lock().execs.clone()
+    }
+
+    /// Every `exec` fails with `stderr` (until cleared).
+    pub fn set_exec_failure(&self, stderr: Option<&str>) {
+        self.lock().exec_failure = stderr.map(String::from);
     }
 
     /// The mount entrypoint reports share `name` as unavailable with `error` (until cleared).
@@ -542,7 +549,14 @@ impl Containers for Fake {
             return Err(ContainerError::NotFound(name.into()));
         }
         st.execs.push((name.into(), command.to_vec()));
-        Ok(String::new())
+        match &st.exec_failure {
+            Some(stderr) => Err(ContainerError::Command {
+                binary: "fake".into(),
+                args: format!("exec {name}"),
+                stderr: stderr.clone(),
+            }),
+            None => Ok(String::new()),
+        }
     }
 }
 

@@ -94,12 +94,32 @@ async fn alive(hub: &Hub, run: &Run) -> Result<bool> {
 async fn check_heartbeat(hub: &Hub, def: &JobDef, run: &Run, now: DateTime<Utc>) -> Result<()> {
     let (Some(h), Some(started)) = (&def.spec.health, run.started_at) else { return Ok(()) };
     let last = (started + h.grace.as_chrono()).max(run.heartbeat_at.unwrap_or(started));
+    let mut reason = format!("no health heartbeat since {last} (expected every {})", h.heartbeat);
+    // `command`: the hub checks, a few times per heartbeat interval.
+    let seen = run.heartbeat_at.unwrap_or(started);
+    if !h.command.is_empty() && now >= seen + h.heartbeat.as_chrono() / 3 {
+        let name = container_name(hub, &run.runnable);
+        let checked = tokio::time::timeout(PROBE_TIMEOUT, hub.containers.exec(&name, &h.command)).await;
+        match checked {
+            Ok(Ok(_)) => {
+                hub.store.heartbeat(&run.id, now).await?;
+                return Ok(());
+            }
+            Ok(Err(e)) => reason = format!("its health check `{}` failed: {e}", h.command.join(" ")),
+            Err(_) => reason = format!("its health check `{}` took over {PROBE_TIMEOUT:?}", h.command.join(" ")),
+        }
+        if now > started + h.grace.as_chrono() {
+            tracing::warn!(service = %run.runnable, %reason, "service health check failed");
+        }
+    }
     if now > last + h.heartbeat.as_chrono() {
-        let reason = format!("no health heartbeat since {last} (expected every {})", h.heartbeat);
         unhealthy(hub, run, &reason).await?;
     }
     Ok(())
 }
+
+/// A `[health] command` that takes longer than this fails.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Start `def` unless it runs, is backing off or is crash-looping.
 async fn ensure_running(hub: &Hub, def: &JobDef, commit: &str, now: DateTime<Utc>) -> Result<()> {

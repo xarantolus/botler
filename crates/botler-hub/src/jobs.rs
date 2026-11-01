@@ -182,6 +182,10 @@ pub(crate) async fn launch_job(
     let ttl = if service { Duration::days(3650) } else { timeout + Duration::minutes(5) };
     let what = Runnable::Run { run, ttl };
     let mut spec = environment::container_spec(hub, env, what, image, def.spec.command.clone(), &[]).await?;
+    // What the hub sets (its BOTLER_ variables, secrets) wins over plain settings.
+    for (k, v) in &def.spec.environment {
+        spec.env.entry(k.clone()).or_insert_with(|| v.clone());
+    }
     let run_dir = hub.paths.root.join("runs").join(&run.id);
     tokio::fs::create_dir_all(&run_dir).await?;
     let event_file = run_dir.join("event.json");

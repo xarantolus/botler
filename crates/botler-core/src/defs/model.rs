@@ -480,8 +480,18 @@ pub struct Job {
     /// `trial_run` still runs it. Enabling a service needs the user's approval once.
     #[serde(default = "enabled_default")]
     pub enabled: bool,
-    /// Command run inside the image built from this directory's Dockerfile.
+    /// Command run inside the image built from this directory's Dockerfile. With `from`, empty
+    /// runs the image's own command.
+    #[serde(default)]
     pub command: Vec<String>,
+    /// An upstream image used as it is, instead of a Dockerfile (`docker.io/library/postgres:16`,
+    /// with a tag or `@sha256:` digest; never `latest`): a service from a compose file.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Plain environment variables (not secrets: those are `secrets` groups), e.g. what a compose
+    /// file's `environment:` sets.
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
     #[serde(default)]
     pub timeout: Option<HumanDuration>,
     #[serde(flatten)]
@@ -579,11 +589,16 @@ pub enum Lifetime {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Health {
-    /// The service must call `health.ok()` at least this often.
+    /// The service must call `health.ok()` at least this often (or pass `command` that often).
     pub heartbeat: HumanDuration,
     /// Time after start before the first heartbeat is required.
     #[serde(default = "Health::grace")]
     pub grace: HumanDuration,
+    /// A check the hub runs inside the container instead of the service calling `health.ok()`,
+    /// e.g. `["pg_isready"]` or `["curl", "-fsS", "http://localhost:8065/api/v4/system/ping"]`:
+    /// each success is a heartbeat. For upstream images that know nothing of botler.
+    #[serde(default)]
+    pub command: Vec<String>,
 }
 
 impl Health {

@@ -65,6 +65,8 @@ struct Resolved {
     tag: String,
     inputs: Vec<String>,
     monorepo: Vec<MonorepoBase>,
+    /// The Dockerfile written for an upstream image (`from`), not read from the repo.
+    from: Option<String>,
 }
 
 /// The tag of `recipe` at `commit`. Every other botler image the Dockerfile builds `FROM` must
@@ -87,9 +89,16 @@ fn resolve_from<'a>(
             return Err(HubError::ImageCycle(cycle.join(" → ")));
         }
         let chain = [chain, std::slice::from_ref(&recipe.repository)].concat();
+        let from = upstream(hub, recipe, commit).await?;
+        // An upstream image depends on its job.toml alone, not on the uv workspace's code.
+        let own = from.as_ref().map(|_| Recipe { inputs: recipe.inputs[..1].to_vec(), ..recipe.clone() });
+        let recipe = own.as_ref().unwrap_or(recipe);
         let paths: Vec<&str> = recipe.inputs.iter().map(String::as_str).collect();
         let ids = hub.repo.path_ids(commit, &paths).await?;
-        let dockerfile = hub.repo.read_file(commit, &recipe.dockerfile).await?.unwrap_or_default();
+        let dockerfile = match &from {
+            Some(f) => f.clone(),
+            None => hub.repo.read_file(commit, &recipe.dockerfile).await?.unwrap_or_default(),
+        };
         let mut bases = Vec::new();
         let mut monorepo = Vec::new();
         for base in botler_bases(&dockerfile) {
@@ -113,8 +122,20 @@ fn resolve_from<'a>(
             bases.push((base, id));
         }
         let tag = format!("localhost/botler/{}:{}", recipe.repository, key(recipe, &ids, &bases));
-        Ok(Resolved { tag, inputs: ids.into_keys().collect(), monorepo })
+        Ok(Resolved { tag, inputs: ids.into_keys().collect(), monorepo, from })
     })
+}
+
+/// The Dockerfile of a job that names an upstream image (`from` in its job.toml) instead of
+/// having one: `FROM <image>`.
+async fn upstream(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<Option<String>> {
+    let Some(job) = recipe.repository.strip_prefix("job-") else { return Ok(None) };
+    let Some(toml) = hub.repo.read_file(commit, &format!("jobs/{job}/job.toml")).await? else { return Ok(None) };
+    let from = toml::from_str::<toml::Table>(&toml)
+        .map_err(|e| HubError::Io(std::io::Error::other(format!("jobs/{job}/job.toml: {e}"))))?
+        .get("from")
+        .and_then(|f| f.as_str().map(|f| format!("FROM {f}\n")));
+    Ok(from)
 }
 
 /// `<name>` of a `localhost/botler/image-<name>[:tag]` reference.
@@ -256,7 +277,7 @@ pub async fn ensure_with(
     progress: Option<&mpsc::UnboundedSender<String>>,
 ) -> Result<String> {
     ensure_base(hub).await?;
-    let Resolved { tag, inputs, monorepo } = resolve(hub, recipe, commit).await?;
+    let Resolved { tag, inputs, monorepo, from } = resolve(hub, recipe, commit).await?;
     // Before taking the build lock, which building them takes too.
     for base in &monorepo {
         Box::pin(ensure_with(hub, &Recipe::agent(&base.image), commit, progress)).await?;
@@ -285,6 +306,9 @@ pub async fn ensure_with(
     let inputs: Vec<&str> = inputs.iter().map(String::as_str).collect();
     let built = async {
         hub.repo.export_paths(commit, &inputs, &ctx).await?;
+        if let Some(from) = &from {
+            tokio::fs::write(ctx.join(&recipe.dockerfile), from).await?;
+        }
         if !monorepo.is_empty() {
             let path = ctx.join(&recipe.dockerfile);
             let to: BTreeMap<&str, &str> = monorepo.iter().map(|b| (b.reference.as_str(), b.tag.as_str())).collect();

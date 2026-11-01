@@ -396,3 +396,40 @@ async fn a_service_missing_a_secret_value_asks_the_user_once_instead_of_an_incid
     assert!(asks[0].detail.as_deref().unwrap().contains("`app` cannot start"));
     assert!(e.hub.store.incidents_for("app", 5).await.unwrap().is_empty(), "nothing to triage");
 }
+
+#[tokio::test]
+async fn an_upstream_image_runs_as_it_is_and_the_hub_checks_its_health() {
+    let e = common::env().await;
+    let toml = "lifetime = \"service\"\nfrom = \"docker.io/library/postgres:16-alpine\"\nvolume = true\nport = 5432\n\
+                environment = { PGDATA = \"/data/pgdata\" }\n\
+                [health]\nheartbeat = \"1m\"\ngrace = \"1s\"\ncommand = [\"pg_isready\"]\n";
+    e.commit(&[("jobs/app/job.toml", toml)]).await;
+    services::reconcile(&e.hub).await.unwrap();
+    let run = current(&e).await;
+    assert_eq!(run.status, RunStatus::Running);
+    let name = services::container_name(&e.hub, "app");
+    let spec = e.fake.containers()[&name].spec.clone();
+    assert!(spec.command.is_empty(), "the image's own command");
+    assert_eq!(spec.env["PGDATA"], "/data/pgdata");
+    assert!(e.fake.builds().iter().any(|b| b.contains("job-app") && b.ends_with("jobs/app/Dockerfile")));
+
+    // Shared Python code is no input of an upstream image: a change there leaves it running.
+    e.commit(&[("packages/x/x.py", "x = 1\n")]).await;
+    services::reconcile(&e.hub).await.unwrap();
+    assert_eq!(current(&e).await.id, run.id);
+
+    // A passing check is the heartbeat.
+    services::reconcile_at(&e.hub, Utc::now() + Duration::seconds(30)).await.unwrap();
+    assert!(e.fake.execs().iter().any(|(c, cmd)| *c == name && cmd == &["pg_isready"]));
+    let beat = e.hub.store.run(&run.id).await.unwrap().heartbeat_at.expect("a heartbeat");
+
+    // A failing one: unhealthy once the heartbeat is overdue, with the check's output.
+    e.fake.set_exec_failure(Some("no response"));
+    services::reconcile_at(&e.hub, beat + Duration::seconds(30)).await.unwrap();
+    assert_eq!(current(&e).await.status, RunStatus::Running, "not overdue yet");
+    services::reconcile_at(&e.hub, beat + Duration::seconds(70)).await.unwrap();
+    let ended = e.hub.store.run(&run.id).await.unwrap();
+    assert_eq!(ended.status, RunStatus::Failed);
+    let reason = ended.reason.unwrap();
+    assert!(reason.contains("`pg_isready` failed") && reason.contains("no response"), "{reason}");
+}
