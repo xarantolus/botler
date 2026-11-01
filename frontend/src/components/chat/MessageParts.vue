@@ -20,11 +20,6 @@ const key = computed(() => props.message.metadata?.key ?? props.message.id);
 const fold = computed(() => (props.message.role === "assistant" ? foldOf(props.message.parts) : null));
 const firstFolded = computed(() => props.message.parts.findIndex((_, i) => folded(props.message.parts, fold.value, i)));
 const stepsOpen = computed(() => shell.open[`${key.value}:steps`] ?? false);
-
-/** The user toggled a thinking block: it is theirs now, never closed automatically. */
-function onReasoningClick(e: MouseEvent, id: string) {
-  if ((e.target as Element).closest("[data-slot=trigger]")) shell.touched[id] = true;
-}
 </script>
 
 <template>
@@ -42,19 +37,20 @@ function onReasoningClick(e: MouseEvent, id: string) {
         {{ fold.summary }}
       </button>
       <template v-if="stepsOpen || !folded(message.parts, fold, i)">
-      <!-- A closed thinking block is not mounted: each measures its scroll shadow, which lays out
-           the whole chat, so a long chat would open slowly. -->
+      <!-- Thinking stays one line ("Thinking…") unless opened: opening it while it streams and
+           closing it after shifted the chat. A closed block is not mounted: each measures its
+           scroll shadow, which lays out the whole chat, so a long chat would open slowly. -->
       <UChatReasoning
         v-if="part.type === 'reasoning'"
         :text="part.text"
         :streaming="part.state === 'streaming'"
         :open="shell.open[`${key}:${i}`] ?? false"
-        :auto-close-delay="shell.touched[`${key}:${i}`] ? 0 : 500"
+        :auto-open="false"
+        :auto-close-delay="0"
         icon="i-lucide-brain"
         unmount-on-hide
         :ui="{ body: 'max-h-72 text-sm' }"
         @update:open="(v: boolean) => (shell.open[`${key}:${i}`] = v)"
-        @click.capture="(e: MouseEvent) => onReasoningClick(e, `${key}:${i}`)"
       />
       <MarkdownText v-else-if="part.type === 'text'" :source="part.text" :class="part.state === 'streaming' && 'streaming'" />
       <ToolCall v-else-if="part.type === 'dynamic-tool'" :part="part" :running="toolRunning(part, busy)" />

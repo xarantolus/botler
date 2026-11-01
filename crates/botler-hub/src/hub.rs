@@ -235,6 +235,7 @@ impl Hub {
     pub async fn apply(&self, applied: Applied) -> Result<()> {
         self.store.set_last_applied_commit(&applied.commit).await?;
         *self.applied.write().await = Arc::new(applied);
+        crate::router::create_persistent_chats(self).await?;
         self.schedule_notify.notify_one();
         self.reconcile_notify.notify_one();
         // Running agents whose environment changed are restarted (`agents::refresh_environments`).

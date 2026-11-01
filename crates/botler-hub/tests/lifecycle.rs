@@ -270,3 +270,12 @@ async fn compact_and_clear_from_the_composer() {
     assert_ne!(before, after, "a fresh session");
     assert!(ops::call(&e.hub, &user(), "clear_chat", json!({"chat": "nope"})).await.is_err());
 }
+
+#[tokio::test]
+async fn a_persistent_agent_has_its_chat_once_defined() {
+    let e = setup().await;
+    e.commit(&[("agents/curator/agent.toml", "kind = \"persistent\"\n"), ("agents/curator/AGENTS.md", "c")]).await;
+    let chat = e.hub.store.instance("curator").await.unwrap();
+    assert!(chat.persistent);
+    assert!(e.hub.agents.get("curator").await.is_none(), "asleep until something is delivered");
+}

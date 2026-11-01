@@ -8,7 +8,7 @@ use botler_core::defs::{AgentKind, Target};
 use botler_core::payloads::{BreakerKind, BreakerTrippedPayload, BuiltinPayload, DialogAbortedPayload, MessagePayload};
 use botler_core::routing::{Action, Dispatch, Routed, route};
 use botler_core::{Event, Source};
-use botler_store::{DialogStatus, InstanceState, NewInstance};
+use botler_store::{DialogStatus, Instance, InstanceState, NewInstance};
 
 use crate::hub::{Hub, HubError, Result, builtin};
 use crate::loops::AgentDelivery;
@@ -56,6 +56,36 @@ async fn route_one(hub: &Hub, ev: &Event) -> Result<()> {
     }
 }
 
+/// The one chat of persistent agent `name`, created (asleep) now.
+async fn persistent_chat(hub: &Hub, name: &str) -> Result<Instance> {
+    Ok(hub
+        .store
+        .create_instance(&NewInstance {
+            name: name.into(),
+            definition: name.into(),
+            persistent: true,
+            session_file: format!("{name}.jsonl"),
+            branch: None,
+            parent: None,
+            depth: 0,
+            task: None,
+        })
+        .await?)
+}
+
+/// Every persistent agent has its chat from when it is defined, so the user can open it before
+/// anything was delivered to it. It sleeps until something is.
+pub async fn create_persistent_chats(hub: &Hub) -> Result<()> {
+    let applied = hub.applied().await;
+    for (name, def) in &applied.defs.agents {
+        if def.spec.kind == AgentKind::Persistent && hub.store.resolve_instance(name).await?.is_none() {
+            persistent_chat(hub, name).await?;
+            tracing::info!(chat = %name, "created the persistent agent's chat");
+        }
+    }
+    Ok(())
+}
+
 /// Carry out one dispatch for `ev` (which is already journaled).
 pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
     let applied = hub.applied().await;
@@ -64,20 +94,7 @@ pub async fn execute(hub: &Hub, d: &Dispatch, ev: &Event) -> Result<()> {
             let instance = match hub.store.resolve_instance(name).await? {
                 Some(i) => i,
                 None => match applied.defs.agents.get(name) {
-                    Some(def) if def.spec.kind == AgentKind::Persistent => {
-                        hub.store
-                            .create_instance(&NewInstance {
-                                name: name.clone(),
-                                definition: name.clone(),
-                                persistent: true,
-                                session_file: format!("{name}.jsonl"),
-                                branch: None,
-                                parent: None,
-                                depth: 0,
-                                task: None,
-                            })
-                            .await?
-                    }
+                    Some(def) if def.spec.kind == AgentKind::Persistent => persistent_chat(hub, name).await?,
                     _ => return Err(HubError::Undefined { kind: "instance", name: name.clone() }),
                 },
             };

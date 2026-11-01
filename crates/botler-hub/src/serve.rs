@@ -52,6 +52,7 @@ pub async fn serve(hub: Arc<Hub>, shutdown: impl std::future::Future<Output = ()
     // Services and the agents granted them meet on this network (created once, kept).
     hub.containers.ensure_network(&hub.network()).await?;
     agents::reconcile_on_boot(&hub).await?;
+    crate::router::create_persistent_chats(&hub).await?;
     crate::trials::end_unstarted_on_boot(&hub).await?;
     crate::jobs::resume_queued_on_boot(&hub).await?;
     // Interrupted proposals are collected first: the template upgrade may open a new one (its
