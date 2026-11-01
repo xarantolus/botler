@@ -17,7 +17,7 @@ use std::sync::Arc;
 use botler_core::model_error::{ErrorClass, classify, retry_delay};
 use botler_core::payloads::{AgentTurnFailedPayload, BuiltinPayload, MessagePayload, ReplyOverduePayload};
 use botler_core::{FRONT_DOOR, Source};
-use botler_store::{DialogKind, NewDialog, Priority, ReplyExpectation, TurnRetry};
+use botler_store::{Dialog, DialogKind, DialogStatus, NewDialog, Priority, ReplyExpectation, TurnRetry};
 use chrono::{DateTime, Utc};
 
 use crate::agents::{self, LiveAgent};
@@ -65,6 +65,24 @@ pub async fn failed(hub: &Arc<Hub>, agent: &LiveAgent, error: &str) -> Result<()
 pub async fn succeeded(hub: &Hub, instance: &str) -> Result<()> {
     if hub.store.clear_turn_retry(instance).await? {
         tracing::info!(instance, "turn succeeded after retrying");
+    }
+    close_retry_requests(hub, instance, "the chat works again").await
+}
+
+/// The hub's "`<chat>` stopped" request, answered with `retry`.
+fn is_retry_request(d: &Dialog, instance: &str) -> bool {
+    d.instance == instance
+        && d.kind == DialogKind::Question
+        && d.ctas == ["retry"]
+        && d.question.contains("` stopped: ")
+}
+
+/// Close a chat's open retry requests: a chat has at most one, about its latest failure.
+async fn close_retry_requests(hub: &Hub, instance: &str, why: &str) -> Result<()> {
+    for d in hub.store.open_dialogs().await?.into_iter().filter(|d| is_retry_request(d, instance)) {
+        if hub.store.close_dialog(&d.id, DialogStatus::Aborted, why).await? {
+            crate::notify::dialog_closed(hub, &d);
+        }
     }
     Ok(())
 }
@@ -169,6 +187,7 @@ async fn tell_user(
         ErrorClass::Auth | ErrorClass::Billing => Priority::Blocking,
         _ => Priority::Normal,
     };
+    close_retry_requests(hub, &inst.name, "replaced by the chat's latest failure").await?;
     let d = hub
         .store
         .create_dialog(&NewDialog {

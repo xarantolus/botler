@@ -159,6 +159,42 @@ async fn billing_error_pauses_and_asks_the_user() {
     assert_eq!(events(&e, kinds::AGENT_TURN_FAILED).await[0].payload["class"], "billing");
 }
 
+/// The open retry requests about `child`.
+async fn retry_requests(e: &common::Env, child: &str) -> Vec<botler_store::Dialog> {
+    let open = e.hub.store.open_dialogs().await.unwrap();
+    open.into_iter().filter(|d| d.instance == child && d.ctas == ["retry"]).collect()
+}
+
+#[tokio::test]
+async fn a_chat_has_one_retry_request_and_working_again_closes_it() {
+    let e = env().await;
+    with_key(&e).await;
+    let child = router::new_instance(&e.hub, "dev", Some("botler"), None).await.unwrap();
+    e.fake.fail_turns(&child, &["404 No endpoints found for model x/y"; 2]);
+    let mut first = None;
+    for (i, text) in ["one", "two", "three"].into_iter().enumerate() {
+        let msg = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+            .to(child.clone())
+            .payload(json!({ "text": text }));
+        e.hub.emit(msg).await.unwrap();
+        e.route().await;
+        agents::dispatch_pending(&e.hub).await.unwrap();
+        if i < 2 {
+            let open = until("the failure reported", || async {
+                let n = events(&e, kinds::AGENT_TURN_FAILED).await.len();
+                let open = retry_requests(&e, &child).await;
+                (n == i + 1 && open.len() == 1).then_some(open)
+            })
+            .await;
+            assert_ne!(Some(&open[0].id), first.as_ref(), "the second failure replaces the first request");
+            first = Some(open[0].id.clone());
+        }
+    }
+    until("the request closed", || async { retry_requests(&e, &child).await.is_empty().then_some(()) }).await;
+    let old = e.hub.store.dialog(first.as_deref().unwrap()).await.unwrap();
+    assert_eq!(old.status, botler_store::DialogStatus::Aborted);
+}
+
 #[tokio::test]
 async fn overdue_answers_are_reported_and_replies_clear_them() {
     let e = env().await;

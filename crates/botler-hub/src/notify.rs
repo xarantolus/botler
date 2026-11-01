@@ -27,6 +27,20 @@ pub enum PushError {
     Refused(String),
 }
 
+/// Live viewers refetch the requests when one closed without an answer.
+pub fn dialog_closed(hub: &Hub, d: &Dialog) {
+    let notice = crate::hub::Live::Dialog {
+        notice: DialogNotice {
+            dialog_id: d.id.clone(),
+            instance: d.instance.clone(),
+            priority: d.priority.to_string(),
+        },
+    };
+    if hub.live.send(notice).is_err() {
+        tracing::trace!("no live viewers");
+    }
+}
+
 pub async fn dialog_opened(hub: &Hub, d: &Dialog) {
     tracing::info!(dialog = %d.id, instance = %d.instance, priority = %d.priority, "dialog opened");
     let notice = crate::hub::Live::Dialog {

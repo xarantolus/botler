@@ -59,7 +59,7 @@ pub enum ServerMessage {
     Event { event: Event },
     /// An agent's runtime status changed.
     Instance { instance: String, status: AgentStatus },
-    /// A dialog opened.
+    /// A dialog opened or closed: refetch the requests.
     Dialog { notice: DialogNotice },
     /// A proposal moved (stage, status, decision).
     Proposal { proposal: Box<Proposal> },
