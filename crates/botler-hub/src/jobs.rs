@@ -182,6 +182,14 @@ pub(crate) async fn launch_job(
     let ttl = if service { Duration::days(3650) } else { timeout + Duration::minutes(5) };
     let what = Runnable::Run { run, ttl };
     let mut spec = environment::container_spec(hub, env, what, image, def.spec.command.clone(), &[]).await?;
+    // An upstream image runs as its own user, which must own its volume (podman `U`).
+    if def.spec.from.is_some() {
+        for m in &mut spec.mounts {
+            if let Mount::Volume { chown, .. } = m {
+                *chown = true;
+            }
+        }
+    }
     // What the hub sets (its BOTLER_ variables, secrets) wins over plain settings.
     for (k, v) in &def.spec.environment {
         spec.env.entry(k.clone()).or_insert_with(|| v.clone());

@@ -411,6 +411,8 @@ async fn an_upstream_image_runs_as_it_is_and_the_hub_checks_its_health() {
     let spec = e.fake.containers()[&name].spec.clone();
     assert!(spec.command.is_empty(), "the image's own command");
     assert_eq!(spec.env["PGDATA"], "/data/pgdata");
+    let volume = spec.mounts.iter().find(|m| matches!(m, botler_runtime::Mount::Volume { .. }));
+    assert!(matches!(volume, Some(botler_runtime::Mount::Volume { chown: true, .. })), "owned by the image's user");
     assert!(e.fake.builds().iter().any(|b| b.contains("job-app") && b.ends_with("jobs/app/Dockerfile")));
 
     // Shared Python code is no input of an upstream image: a change there leaves it running.

@@ -259,7 +259,11 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
     let mut spec = environment::container_spec(hub, &Environment::default(), gate, image, command, &[]).await?;
     spec.mounts.insert(0, Mount::Bind { src: dir.clone(), dst: "/workspace".into(), read_only: false });
     // Dependency downloads are cached across gate runs.
-    spec.mounts.push(Mount::Volume { name: "botler-gate-uv-cache".into(), dst: "/home/agent/.cache/uv".into() });
+    spec.mounts.push(Mount::Volume {
+        name: "botler-gate-uv-cache".into(),
+        dst: "/home/agent/.cache/uv".into(),
+        chown: false,
+    });
     spec.env.insert("CI".into(), "1".into());
     // Explicit, so images built before the base image moved HOME still use the cache.
     spec.env.insert("HOME".into(), crate::agents::HOME.into());

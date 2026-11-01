@@ -48,6 +48,9 @@ pub enum Mount {
     Volume {
         name: String,
         dst: String,
+        /// Hand it to the image's user at start (podman `U`): an upstream image that runs as
+        /// its own user cannot write a volume root owns.
+        chown: bool,
     },
 }
 
@@ -257,8 +260,9 @@ impl Cli {
                     a.extend(["--mount".into(), format!("type=bind,src={},dst={dst}{ro}", src.display())]);
                 }
                 Mount::Tmpfs { dst } => a.extend(["--mount".into(), format!("type=tmpfs,dst={dst}")]),
-                Mount::Volume { name, dst } => {
-                    a.extend(["--mount".into(), format!("type=volume,src={name},dst={dst}")])
+                Mount::Volume { name, dst, chown } => {
+                    let u = if *chown { ",U=true" } else { "" };
+                    a.extend(["--mount".into(), format!("type=volume,src={name},dst={dst}{u}")])
                 }
             }
         }

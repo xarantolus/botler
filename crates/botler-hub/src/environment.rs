@@ -98,7 +98,11 @@ pub async fn container_spec(
             match (env.volume, run.kind) {
                 (true, RunKind::Trial) => mounts.push(Mount::Tmpfs { dst: "/data".into() }),
                 (true, _) => {
-                    mounts.push(Mount::Volume { name: format!("botler-job-{}", run.runnable), dst: "/data".into() });
+                    mounts.push(Mount::Volume {
+                        name: format!("botler-job-{}", run.runnable),
+                        dst: "/data".into(),
+                        chown: false,
+                    });
                 }
                 (false, _) => {}
             }

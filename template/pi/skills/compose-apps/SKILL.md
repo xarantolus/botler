@@ -28,9 +28,10 @@ Name the jobs `<app>` and `<app>-db` and so on. The volume belongs to the job's 
 the names of anything already deployed. To move a deployed service from a Dockerfile to `from`,
 keep its name and check that the image reads its data from the same place under `/data`.
 
-The image's user must be able to write `/data` (rootless Podman: the volume is owned by the
-container's root). Images that start as root and drop privileges (postgres, most official ones)
-work; for others, set the app's data path to a directory the image creates for its user.
+With `from`, the hub hands the volume to the image's own user at every start (Podman's `U`
+option), so an image that runs as a non-root user (Mattermost runs as `mattermost`) can write
+existing data too. A Dockerfile job's volume is left as it is; don't add `USER root` to get
+around that, use `from`.
 
 `trial_run` each service before proposing (its `/data` is empty and thrown away); start the
 database first. The first deployment of each service asks the user once.
