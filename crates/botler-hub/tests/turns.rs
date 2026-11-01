@@ -115,6 +115,16 @@ async fn exhausted_retries_open_an_incident_and_tell_the_parent() {
 }
 
 #[tokio::test]
+async fn a_connection_error_says_what_the_container_finds() {
+    let e = env().await;
+    e.fake.set_exec_output("offline\n");
+    let child = failing_child(&e, &["Connection error."]).await;
+    let r = until("a scheduled retry", || async { e.hub.store.turn_retry(&child).await.unwrap() }).await;
+    assert!(r.error.starts_with("Connection error. (the chat's container has no internet connection"), "{}", r.error);
+    assert!(e.fake.execs().iter().any(|(_, cmd)| cmd.join(" ").contains("getent hosts openrouter.ai")));
+}
+
+#[tokio::test]
 async fn permanent_error_is_not_retried() {
     let e = env().await;
     let child = failing_child(&e, &["404 No endpoints found for model x/y"]).await;

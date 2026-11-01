@@ -16,7 +16,7 @@ use crate::ops::Caller;
 
 /// Where the gateway listens (on the hub's socket and port, like the API).
 pub const PATH: &str = "/v1/chat/completions";
-const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
+pub const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
 const TIMEOUT_SECONDS: u32 = 300;
 
 #[derive(Debug, thiserror::Error)]

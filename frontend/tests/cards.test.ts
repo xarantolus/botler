@@ -50,35 +50,69 @@ afterEach(() => {
 
 describe("DialogCard", () => {
   it("links a visit request to the service's port on this host, then answers done", async () => {
-    const visit = { service: "grafana", host_port: 3300, path: "/login", title: "Grafana", instructions: "Log in as **admin**." };
+    const visit = {
+      service: "grafana",
+      host_port: 3300,
+      path: "/login",
+      title: "Grafana",
+      instructions: "Log in as **admin**.",
+    };
     const w = await mountInApp(DialogCard, {
-      dialog: { ...dialog({ kind: "visit", question: "Log in to Grafana", detail: null, ctas: ["done", "cancel"] }), visit },
+      dialog: {
+        ...dialog({
+          kind: "visit",
+          question: "Log in to Grafana",
+          detail: null,
+          ctas: ["done", "cancel"],
+        }),
+        visit,
+      },
     });
     const open = w.findAll("a").find((a) => a.text() === "Open Grafana")!;
-    expect(open.attributes("href")).toBe(`${window.location.protocol}//${window.location.hostname}:3300/login`);
-    expect([open.attributes("target"), open.attributes("rel")]).toEqual(["_blank", "noopener noreferrer"]);
+    expect(open.attributes("href")).toBe(
+      `${window.location.protocol}//${window.location.hostname}:3300/login`,
+    );
+    expect([open.attributes("target"), open.attributes("rel")]).toEqual([
+      "_blank",
+      "noopener noreferrer",
+    ]);
     expect(w.find(".md strong").text()).toBe("admin");
-    await w.findAll("button").find((b) => b.text() === "Done")!.trigger("click");
+    await w
+      .findAll("button")
+      .find((b) => b.text() === "Done")!
+      .trigger("click");
     await flushPromises();
-    expect(calls[0]).toEqual({ name: "answer_dialog", args: { params: { id: "d1" }, body: { answer: "done" } } });
+    expect(calls[0]).toEqual({
+      name: "answer_dialog",
+      args: { params: { id: "d1" }, body: { answer: "done" } },
+    });
   });
 
   it("answers a question with one of its choices", async () => {
     const w = await mountInApp(DialogCard, { dialog: dialog() });
     expect(w.text()).toContain("Which calendar?");
     expect(w.find(".md strong").text()).toBe("two");
-    const buttons = w.findAll("button").filter((b) => ["work", "personal"].includes(b.text()));
+    const buttons = w
+      .findAll("button")
+      .filter((b) => ["work", "personal"].includes(b.text()));
     expect(buttons.map((b) => b.text())).toEqual(["work", "personal"]);
     await buttons[0]!.trigger("click");
     await flushPromises();
-    expect(calls[0]).toEqual({ name: "answer_dialog", args: { params: { id: "d1" }, body: { answer: "work" } } });
+    expect(calls[0]).toEqual({
+      name: "answer_dialog",
+      args: { params: { id: "d1" }, body: { answer: "work" } },
+    });
   });
 
   it("shows the outcome of a closed dialog without actions", async () => {
-    const w = await mountInApp(DialogCard, { dialog: dialog({ status: "answered", answer: "personal" }) });
+    const w = await mountInApp(DialogCard, {
+      dialog: dialog({ status: "answered", answer: "personal" }),
+    });
     expect(w.text()).toContain("answered");
     expect(w.text()).toContain("Answer: personal");
-    expect(w.findAll("button").filter((b) => b.text() === "work")).toHaveLength(0);
+    expect(w.findAll("button").filter((b) => b.text() === "work")).toHaveLength(
+      0,
+    );
   });
 
   it("asks for each secret and saves only when all are filled", async () => {
@@ -90,7 +124,9 @@ describe("DialogCard", () => {
         ctas: [],
         group: "deploy",
         new_group: true,
-        form: [{ name: "DEPLOY_TOKEN", description: "Project token", file: null }],
+        form: [
+          { name: "DEPLOY_TOKEN", description: "Project token", file: null },
+        ],
       }),
     });
     expect(w.text()).toContain("DEPLOY_TOKEN");
@@ -102,7 +138,10 @@ describe("DialogCard", () => {
     await flushPromises();
     expect(calls[0]).toEqual({
       name: "submit_secrets",
-      args: { params: { id: "d1" }, body: { values: { DEPLOY_TOKEN: "s3cret" }, decline: false } },
+      args: {
+        params: { id: "d1" },
+        body: { values: { DEPLOY_TOKEN: "s3cret" }, decline: false },
+      },
     });
   });
 
@@ -116,7 +155,9 @@ describe("DialogCard", () => {
       }),
     });
     expect(w.text()).toContain("Access");
-    const allow = w.findAll("button").find((b) => b.text() === "Allow for this chat")!;
+    const allow = w
+      .findAll("button")
+      .find((b) => b.text() === "Allow for this chat")!;
     await allow.trigger("click");
     await flushPromises();
     expect(calls[0]).toEqual({
@@ -128,10 +169,18 @@ describe("DialogCard", () => {
         kind: "credentials",
         ctas: [],
         group: "github-ssh",
-        form: [{ name: "GITHUB_SSH_KEY", description: "deploy key", file: "/home/agent/.ssh/id_ed25519" }],
+        form: [
+          {
+            name: "GITHUB_SSH_KEY",
+            description: "deploy key",
+            file: "/home/agent/.ssh/id_ed25519",
+          },
+        ],
       }),
     });
-    expect(key.text()).toContain("SSH private key at /home/agent/.ssh/id_ed25519");
+    expect(key.text()).toContain(
+      "SSH private key at /home/agent/.ssh/id_ed25519",
+    );
   });
 
   it("renders an approval's change summary", async () => {
@@ -139,20 +188,29 @@ describe("DialogCard", () => {
       dialog: dialog({
         kind: "approval",
         ctas: ["approve", "reject"],
-        detail: "**Will start happening:**\n- at 07:00: message `botler`\n\n**Gate:** passed",
+        detail:
+          "**Will start happening:**\n- at 07:00: message `botler`\n\n**Gate:** passed",
       }),
     });
     expect(w.text()).toContain("Approval");
     expect(w.text()).toContain("Will start happening");
     expect(w.text()).toContain("passed");
-    expect(w.findAll("button").map((b) => b.text())).toEqual(expect.arrayContaining(["Approve", "Reject"]));
+    expect(w.findAll("button").map((b) => b.text())).toEqual(
+      expect.arrayContaining(["Approve", "Reject"]),
+    );
   });
 
   it("shows an action request with its arguments and code version, not as a change", async () => {
     const detail =
-      "Send a newsletter.\n\n**Arguments** (it runs with exactly these)\n```json\n{\n  \"to\": \"all\"\n}\n```\n\n**Secret groups it uses:** `mail`\n\n**Code version** `abc123` (it runs with exactly this code), unchanged";
+      'Send a newsletter.\n\n**Arguments** (it runs with exactly these)\n```json\n{\n  "to": "all"\n}\n```\n\n**Secret groups it uses:** `mail`\n\n**Code version** `abc123` (it runs with exactly this code), unchanged';
     const w = await mountInApp(DialogCard, {
-      dialog: dialog({ kind: "approval", question: "Run action `newsletter` for Botler?", ctas: ["approve", "reject"], detail, proposal_id: "p9" }),
+      dialog: dialog({
+        kind: "approval",
+        question: "Run action `newsletter` for Botler?",
+        ctas: ["approve", "reject"],
+        detail,
+        proposal_id: "p9",
+      }),
     });
     expect(w.find("pre code").text()).toContain('"to": "all"');
     expect(w.find("[data-language=json]").exists()).toBe(true);
@@ -162,13 +220,26 @@ describe("DialogCard", () => {
 
   it("rejects an approval only with a reason, which reaches the hub", async () => {
     const w = await mountInApp(DialogCard, {
-      dialog: dialog({ kind: "approval", ctas: ["approve", "reject"], proposal_id: "p1", detail: null }),
+      dialog: dialog({
+        kind: "approval",
+        ctas: ["approve", "reject"],
+        proposal_id: "p1",
+        detail: null,
+      }),
     });
-    expect(w.find('a[href="/proposals/p1"]').text()).toContain("Review changes");
-    await w.findAll("button").find((b) => b.text() === "Reject")!.trigger("click");
+    expect(w.find('a[href="/proposals/p1"]').text()).toContain(
+      "Review changes",
+    );
+    await w
+      .findAll("button")
+      .find((b) => b.text() === "Reject")!
+      .trigger("click");
     await flushPromises();
     const modal = () => document.querySelector('[role="dialog"]')!;
-    const confirmButton = () => [...modal().querySelectorAll("button")].find((b) => b.textContent?.trim() === "Reject")!;
+    const confirmButton = () =>
+      [...modal().querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === "Reject",
+      )!;
     expect(modal().textContent).toContain("Reject this change?");
     expect(confirmButton().disabled).toBe(true);
     const box = modal().querySelector("textarea")!;
@@ -184,12 +255,40 @@ describe("DialogCard", () => {
     await flushPromises();
     expect(calls.find((c) => c.name === "answer_dialog")).toEqual({
       name: "answer_dialog",
-      args: { params: { id: "d1" }, body: { answer: "reject", reason: "Not on weekdays" } },
+      args: {
+        params: { id: "d1" },
+        body: { answer: "reject", reason: "Not on weekdays" },
+      },
     });
   });
 });
 
+/** Unfold a delivered event's card. */
+const unfold = (w: {
+  find(s: string): { trigger(e: string): Promise<void> };
+}) => w.find("button[aria-expanded]").trigger("click");
+
 describe("EnvelopeCard", () => {
+  it("is folded to a preview line by default", async () => {
+    const w = await mountInApp(EnvelopeCard, {
+      env: {
+        from: "hub",
+        provenance: "trusted",
+        kind: "proposal.updated",
+        delivery: null,
+        event: null,
+        localTime: null,
+        gap: null,
+        body: '{"detail":"main moved\nlong log"}',
+        malformed: false,
+      },
+      at: null,
+    });
+    expect(w.text()).toContain("main moved");
+    expect(w.text()).not.toContain("long log");
+    expect(w.find("pre").exists()).toBe(false);
+  });
+
   it("shows who sent what, how far it is trusted, and JSON bodies indented", async () => {
     const w = await mountInApp(EnvelopeCard, {
       env: {
@@ -205,6 +304,7 @@ describe("EnvelopeCard", () => {
       },
       at: "2026-10-30T10:00:00Z",
     });
+    await unfold(w);
     const text = w.text();
     expect(text).toContain("mail.received");
     expect(text).toContain("runnable:poller");
@@ -229,7 +329,16 @@ describe("EnvelopeCard action.result", () => {
   });
 
   it("shows the action, whether it succeeded, and its result", async () => {
-    const w = await mountInApp(EnvelopeCard, { env: env({ proposal_id: "p", action: "newsletter", ok: true, result: { sent: 12 } }), at: null });
+    const w = await mountInApp(EnvelopeCard, {
+      env: env({
+        proposal_id: "p",
+        action: "newsletter",
+        ok: true,
+        result: { sent: 12 },
+      }),
+      at: null,
+    });
+    await unfold(w);
     expect(w.text()).toContain("newsletter");
     expect(w.text()).toContain("succeeded");
     expect(w.find("pre").text()).toContain('"sent": 12');
@@ -237,7 +346,16 @@ describe("EnvelopeCard action.result", () => {
   });
 
   it("shows a declined action with the user's reason", async () => {
-    const w = await mountInApp(EnvelopeCard, { env: env({ proposal_id: "p", action: "newsletter", ok: false, result: { declined: "not today" } }), at: null });
+    const w = await mountInApp(EnvelopeCard, {
+      env: env({
+        proposal_id: "p",
+        action: "newsletter",
+        ok: false,
+        result: { declined: "not today" },
+      }),
+      at: null,
+    });
+    await unfold(w);
     expect(w.text()).toContain("declined");
     expect(w.text()).toContain("Your reason: not today");
   });
@@ -251,7 +369,8 @@ describe("ChangeSummary", () => {
 
   it("shows changes as before and after", async () => {
     const w = await mountInApp(ChangeSummary, {
-      markdown: '**Will change:**\n- `nightly`: was "at 02:00", becomes "at 03:00"\n\n**Check this (likely mistakes):**\n- fires at 03:00',
+      markdown:
+        '**Will change:**\n- `nightly`: was "at 02:00", becomes "at 03:00"\n\n**Check this (likely mistakes):**\n- fires at 03:00',
     });
     expect(w.text()).toContain("Will change");
     expect(w.text()).toContain("nightly");
@@ -299,7 +418,10 @@ describe("MessageParts", () => {
       streaming: noLive(),
       busy: true,
     });
-    const w = await mountInApp(MessageParts, { message: t.messages[0], busy: true });
+    const w = await mountInApp(MessageParts, {
+      message: t.messages[0],
+      busy: true,
+    });
     const text = w.text();
     expect(text).toMatch(/Thinking|Thought/);
     expect(w.find(".md strong").text()).toBe("check");

@@ -40,7 +40,10 @@ export function parseEnvelope(text: string): Envelope | null {
     };
   }
   if (!first.startsWith("[") || !first.endsWith("]")) return null;
-  const parts = first.slice(1, -1).split(" | ").map((p) => p.trim());
+  const parts = first
+    .slice(1, -1)
+    .split(" | ")
+    .map((p) => p.trim());
   const env: Envelope = {
     from: "",
     provenance: "",
@@ -122,9 +125,43 @@ export function payloadOf(body: string): Record<string, unknown> | null {
   if (!m) return null;
   try {
     const v: unknown = JSON.parse(m[1]!);
-    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    return v && typeof v === "object" && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : null;
   } catch {
     // Not JSON: the body renders as Markdown.
     return null;
   }
+}
+
+/** The payload fields that say what a delivered event is about, in order of preference. */
+const PREVIEW_FIELDS = [
+  "text",
+  "last_reply",
+  "question",
+  "detail",
+  "summary",
+  "reason",
+  "error",
+  "status",
+  "changes",
+];
+
+/** One line saying what a delivery is about, shown while its card is folded. */
+export function previewOf(body: string): string {
+  const p = payloadOf(body) ?? payloadOf("```json\n" + body.trim() + "\n```");
+  const field =
+    p &&
+    PREVIEW_FIELDS.map((f) => p[f]).find(
+      (v) => (typeof v === "string" && v.trim()) || Array.isArray(v),
+    );
+  const text = Array.isArray(field)
+    ? field.join("; ")
+    : typeof field === "string"
+      ? field
+      : body.replace(/```json[\s\S]*?```/g, "");
+  const line = text
+    .split("\n")
+    .find((l) => l.trim() && !/^[{}[\]]+,?$/.test(l.trim()));
+  return (line ?? "").trim().replace(/^#+\s*/, "");
 }

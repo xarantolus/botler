@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { envelopeOf, isUserMessage, parseEnvelope, prettyJsonBody } from "./envelope";
+import {
+  envelopeOf,
+  isUserMessage,
+  parseEnvelope,
+  prettyJsonBody,
+  previewOf,
+} from "./envelope";
 
 describe("parseEnvelope", () => {
   it("parses the full header", () => {
@@ -30,13 +36,20 @@ describe("parseEnvelope", () => {
       "message",
       "hi",
     ]);
-    const plain = parseEnvelope("[Fri 2026-10-30 17:05 UTC | from hub | provenance: trusted | timer | delivery d | event e]");
-    expect([plain?.localTime, plain?.gap]).toEqual(["Fri 2026-10-30 17:05 UTC", null]);
+    const plain = parseEnvelope(
+      "[Fri 2026-10-30 17:05 UTC | from hub | provenance: trusted | timer | delivery d | event e]",
+    );
+    expect([plain?.localTime, plain?.gap]).toEqual([
+      "Fri 2026-10-30 17:05 UTC",
+      null,
+    ]);
     expect(parseEnvelope("[note] something | from x")).toBeNull();
   });
 
   it("accepts the short form without kind and event", () => {
-    const e = parseEnvelope("[from user | provenance: trusted | delivery d2]\nhi");
+    const e = parseEnvelope(
+      "[from user | provenance: trusted | delivery d2]\nhi",
+    );
     expect(e?.from).toBe("user");
     expect(e?.kind).toBeNull();
     expect(e?.delivery).toBe("d2");
@@ -45,18 +58,26 @@ describe("parseEnvelope", () => {
   });
 
   it("handles a header without body", () => {
-    expect(parseEnvelope("[from hub | provenance: trusted | agent.idle | delivery d | event e]")?.body).toBe("");
+    expect(
+      parseEnvelope(
+        "[from hub | provenance: trusted | agent.idle | delivery d | event e]",
+      )?.body,
+    ).toBe("");
   });
 
   it("rejects plain text and look-alikes", () => {
     expect(parseEnvelope("hello")).toBeNull();
     expect(parseEnvelope("[from you]\nno provenance")).toBeNull();
-    expect(parseEnvelope("[from a | provenance: trusted | two words | delivery d]")).toBeNull();
+    expect(
+      parseEnvelope("[from a | provenance: trusted | two words | delivery d]"),
+    ).toBeNull();
     expect(parseEnvelope("[note] something")).toBeNull();
   });
 
   it("flags malformed deliveries", () => {
-    const e = parseEnvelope("[botler: malformed delivery]\nbotler:delivery {oops");
+    const e = parseEnvelope(
+      "[botler: malformed delivery]\nbotler:delivery {oops",
+    );
     expect(e?.malformed).toBe(true);
     expect(e?.body).toBe("botler:delivery {oops");
   });
@@ -94,7 +115,14 @@ describe("envelopeOf", () => {
 
   it("is null for a typed user message without header", () => {
     expect(
-      envelopeOf({ text: "hi", from: null, provenance: null, event_kind: null, delivery: null, event: null }),
+      envelopeOf({
+        text: "hi",
+        from: null,
+        provenance: null,
+        event_kind: null,
+        delivery: null,
+        event: null,
+      }),
     ).toBeNull();
   });
 });
@@ -104,5 +132,25 @@ describe("prettyJsonBody", () => {
     expect(prettyJsonBody('{"a":1}')).toBe('{\n  "a": 1\n}');
     expect(prettyJsonBody("{not json")).toBeNull();
     expect(prettyJsonBody("plain")).toBeNull();
+  });
+});
+
+describe("previewOf", () => {
+  const json = (p: unknown) =>
+    "Proposal moved.\n```json\n" + JSON.stringify(p) + "\n```";
+  it("says what the event is about from its payload", () => {
+    expect(
+      previewOf(json({ id: "x", last_reply: "Gate passed.\nMore." })),
+    ).toBe("Gate passed.");
+    expect(previewOf(json({ detail: "main moved", status: "failed" }))).toBe(
+      "main moved",
+    );
+    expect(previewOf(json({ changes: ["new image", "skills updated"] }))).toBe(
+      "new image; skills updated",
+    );
+  });
+  it("falls back to the text around the payload, or plain Markdown", () => {
+    expect(previewOf(json({ id: "x" }))).toBe("Proposal moved.");
+    expect(previewOf("## Heading\nbody")).toBe("Heading");
   });
 });
