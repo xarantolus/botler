@@ -80,7 +80,7 @@ async fn transient_error_is_retried_with_backoff_and_succeeds() {
     assert_eq!(idle[0].to.as_deref(), Some("botler"));
     let p = prompts(&e, &child);
     assert_eq!(p.len(), 2, "the task, then one retry");
-    assert!(p[1].contains("transient provider error (Connection error.)"), "{}", p[1]);
+    assert!(p[1].contains("transient provider error (Connection error. (calling fake/model via openrouter))"), "{}", p[1]);
     assert!(e.hub.store.turn_retry(&child).await.unwrap().is_none(), "retries forgotten once it succeeds");
     assert!(events(&e, kinds::AGENT_TURN_FAILED).await.is_empty());
     assert!(e.hub.store.open_incidents().await.unwrap().is_empty());
@@ -115,16 +115,6 @@ async fn exhausted_retries_open_an_incident_and_tell_the_parent() {
 }
 
 #[tokio::test]
-async fn a_connection_error_says_what_the_container_finds() {
-    let e = env().await;
-    e.fake.set_exec_output("offline\n");
-    let child = failing_child(&e, &["Connection error."]).await;
-    let r = until("a scheduled retry", || async { e.hub.store.turn_retry(&child).await.unwrap() }).await;
-    assert!(r.error.starts_with("Connection error. (the chat's container has no internet connection"), "{}", r.error);
-    assert!(e.fake.execs().iter().any(|(_, cmd)| cmd.join(" ").contains("getent hosts openrouter.ai")));
-}
-
-#[tokio::test]
 async fn permanent_error_is_not_retried() {
     let e = env().await;
     let child = failing_child(&e, &["404 No endpoints found for model x/y"]).await;
@@ -134,6 +124,7 @@ async fn permanent_error_is_not_retried() {
     .await;
     assert_eq!(failed[0].payload["class"], "permanent");
     assert_eq!(failed[0].payload["attempts"], 1);
+    assert_eq!(failed[0].payload["error"], "404 No endpoints found for model x/y (calling fake/model via openrouter)");
     assert!(e.hub.store.turn_retry(&child).await.unwrap().is_none());
     assert!(e.hub.store.next_wait_at().await.unwrap().is_none(), "nothing scheduled");
     assert_eq!(prompts(&e, &child).len(), 1);

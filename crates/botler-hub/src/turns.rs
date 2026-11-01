@@ -33,18 +33,16 @@ fn clip(s: &str) -> String {
     s.trim().chars().take(ERROR_CHARS).collect()
 }
 
-/// `agent`'s turn ended in `error` (after pi's own retries).
-pub async fn failed(hub: &Arc<Hub>, agent: &LiveAgent, error: &str) -> Result<()> {
+/// `agent`'s turn ended in `error` (after pi's own retries) while `called` (the model and
+/// provider), which is kept with the error: "Connection error." alone says nothing.
+pub async fn failed(hub: &Arc<Hub>, agent: &LiveAgent, error: &str, called: Option<&str>) -> Result<()> {
     let class = classify(error);
     let started = agents::turn_start(hub, agent).await?.map(|d| d.event_id);
-    let mut error = clip(error);
-    if class == ErrorClass::Transient
-        && let Some(found) = network_check(hub, agent, &error).await
-    {
-        error = format!("{error} ({found})");
-    }
-    let error = error.as_str();
-    let retry = hub.store.record_turn_failure(&agent.instance, started.as_deref(), error).await?;
+    let error = match called {
+        Some(c) => format!("{} ({c})", clip(error)),
+        None => clip(error),
+    };
+    let retry = hub.store.record_turn_failure(&agent.instance, started.as_deref(), &error).await?;
     tracing::warn!(instance = %agent.instance, ?class, attempts = retry.attempts, %error, "turn failed");
     let now = Utc::now();
     match class {
@@ -66,60 +64,6 @@ pub async fn failed(hub: &Arc<Hub>, agent: &LiveAgent, error: &str) -> Result<()
         ErrorClass::ContextLength | ErrorClass::Permanent => {}
     }
     give_up(hub, &agent.instance, class, &retry.error, &retry).await
-}
-
-/// What the chat's container finds when a turn failed on the connection to the provider: "Connection
-/// error." alone does not say whether the chat is offline, its DNS is broken, or the provider is.
-async fn network_check(hub: &Hub, agent: &LiveAgent, error: &str) -> Option<String> {
-    let lower = error.to_ascii_lowercase();
-    let connection =
-        ["connection", "timed out", "timeout", "fetch failed", "econn", "getaddrinfo", "eai_again", "socket"];
-    if !connection.iter().any(|n| lower.contains(n)) {
-        return None;
-    }
-    let url = {
-        let defs = &hub.applied().await.defs;
-        let default = defs.instance.models.default.clone().unwrap_or_default();
-        defs.instance.models.resolve(&default).base_url.unwrap_or_else(|| crate::gateway::OPENROUTER_URL.into())
-    };
-    let host = url.split("://").nth(1)?.split(['/', ':']).next()?.to_owned();
-    if !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
-        return None;
-    }
-    // Resolve the provider, else tell "no DNS" from "no network at all" by connecting to an address.
-    let script = format!(
-        "if getent hosts {host} >/dev/null 2>&1; then \
-           if curl -s -o /dev/null --max-time 8 https://{host}/; then echo reachable; else echo unreachable; fi; \
-         elif curl -s -o /dev/null --max-time 5 https://1.1.1.1/; then echo dns; else echo offline; fi"
-    );
-    let cmd = ["sh".to_string(), "-c".into(), script];
-    let out =
-        tokio::time::timeout(std::time::Duration::from_secs(20), hub.containers.exec(&agent.container, &cmd)).await;
-    let found = match out.as_ref().map(|o| o.as_ref().map(|s| s.trim())) {
-        Ok(Ok("offline")) => format!(
-            "the chat's container has no internet connection: {host} does not resolve and no address can be reached. \
-             The container network is down (on rootless Podman: its network namespace lost its uplink; \
-             stop the hub, remove its containers and start it again)"
-        ),
-        Ok(Ok("dns")) => {
-            format!("the chat's container reaches the internet but cannot resolve {host}: its DNS is broken")
-        }
-        Ok(Ok("unreachable")) => format!("the chat's container resolves {host} but cannot connect to it"),
-        Ok(Ok("reachable")) => {
-            format!("the chat's container reaches {host} now: the provider dropped or timed out the call")
-        }
-        Ok(Ok(other)) => {
-            tracing::warn!(instance = %agent.instance, output = other, "unexpected network check output");
-            return None;
-        }
-        Ok(Err(e)) => {
-            tracing::warn!(instance = %agent.instance, error = %e, "could not check the chat's network");
-            return None;
-        }
-        Err(_) => "checking the chat's network timed out".into(),
-    };
-    tracing::warn!(instance = %agent.instance, %found, "network check after a failed turn");
-    Some(found)
 }
 
 /// `instance` finished a turn normally: any retries of an earlier failure are over.

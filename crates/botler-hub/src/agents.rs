@@ -58,7 +58,7 @@ pub struct LiveAgent {
     /// What it did this turn: decides whether its parent hears about the end of the turn.
     turn: std::sync::Mutex<TurnLog>,
     /// The error of the turn's last model call, if it failed: the turn failed when it settles.
-    error: std::sync::Mutex<Option<String>>,
+    error: std::sync::Mutex<Option<(String, Option<String>)>>,
     /// Held while a delivery is handed to pi and recorded as delivered. pi can start and settle
     /// the turn before its response to the prompt is processed, so the end-of-turn handling takes
     /// it before looking up the delivery that started the turn.
@@ -101,7 +101,8 @@ impl LiveAgent {
         self.turn.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn error(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+    /// The turn's model error and what the call went to.
+    fn error(&self) -> std::sync::MutexGuard<'_, Option<(String, Option<String>)>> {
         self.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
@@ -851,10 +852,11 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                     tracing::error!(instance = %agent.instance, error = %e, "could not record activity");
                 }
                 let failed = agent.error().take();
-                let ended = match crate::checkpoint::ended(&hub, &agent, failed.as_deref()).await {
+                let ended = match crate::checkpoint::ended(&hub, &agent, failed.as_ref().map(|(e, _)| e.as_str())).await
+                {
                     Ok(true) => Ok(()),
                     Ok(false) => match failed {
-                        Some(err) => crate::turns::failed(&hub, &agent, &err).await,
+                        Some((err, called)) => crate::turns::failed(&hub, &agent, &err, called.as_deref()).await,
                         None => turn_succeeded(&hub, &agent).await,
                     },
                     Err(e) => Err(e),
@@ -864,12 +866,12 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                 }
                 hub.dispatch_notify.notify_one();
             }
-            PiEventKind::MessageEnd { role, usage, error } => {
+            PiEventKind::MessageEnd { role, usage, error, called } => {
                 if role == "assistant" {
                     if let Some(err) = error {
-                        tracing::warn!(instance = %agent.instance, %err, "model call failed");
+                        tracing::warn!(instance = %agent.instance, %err, called = called.as_deref().unwrap_or("?"), "model call failed");
                     }
-                    agent.error().clone_from(error);
+                    *agent.error() = error.clone().map(|e| (e, called.clone()));
                 }
                 if let Some(u) = usage
                     && let Err(e) = meter(&hub, &agent, u).await

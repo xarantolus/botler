@@ -59,8 +59,6 @@ struct State {
     script: (String, i32),
     /// `exec`s run, as (container, command).
     execs: Vec<(String, Vec<String>)>,
-    /// What `exec` prints.
-    exec_output: String,
     /// Shares the fake mount entrypoint reports as failed, with the error.
     mount_failures: BTreeMap<String, String>,
 }
@@ -166,11 +164,6 @@ impl Fake {
     /// What attached non-pi containers (the gate) print and their exit code.
     pub fn set_script_result(&self, output: &str, code: i32) {
         self.lock().script = (output.to_string(), code);
-    }
-
-    /// What `exec` in a running container prints.
-    pub fn set_exec_output(&self, output: &str) {
-        self.lock().exec_output = output.to_string();
     }
 
     pub fn execs(&self) -> Vec<(String, Vec<String>)> {
@@ -538,7 +531,7 @@ impl Containers for Fake {
             return Err(ContainerError::NotFound(name.into()));
         }
         st.execs.push((name.into(), command.to_vec()));
-        Ok(st.exec_output.clone())
+        Ok(String::new())
     }
 }
 
@@ -580,7 +573,7 @@ impl Fake {
                     let error = st.fail_turns.get_mut(instance).and_then(VecDeque::pop_front);
                     (st.hold_turns, error)
                 };
-                let mut message = json!({"role": "assistant", "model": "fake/model", "stopReason": "stop", "usage": {"totalTokens": 100, "cost": {"total": 0.001}}});
+                let mut message = json!({"role": "assistant", "model": "fake/model", "provider": "openrouter", "stopReason": "stop", "usage": {"totalTokens": 100, "cost": {"total": 0.001}}});
                 if let Some(e) = error {
                     message["stopReason"] = json!("error");
                     message["errorMessage"] = json!(e);

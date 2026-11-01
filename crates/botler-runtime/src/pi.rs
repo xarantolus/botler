@@ -71,6 +71,8 @@ pub enum PiEventKind {
         role: String,
         usage: Option<Usage>,
         error: Option<String>,
+        /// What the failed call went to, e.g. "calling x/y via openrouter".
+        called: Option<String>,
     },
     ToolStart {
         tool: String,
@@ -108,7 +110,13 @@ impl PiEvent {
                 // An aborted call (budget stop, kill switch) is not a model failure.
                 let aborted = msg.get("stopReason").and_then(Value::as_str) == Some("aborted");
                 let error = msg.get("errorMessage").and_then(Value::as_str).filter(|_| !aborted).map(String::from);
-                PiEventKind::MessageEnd { role, usage, error }
+                let field = |k: &str| msg.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+                let called = match (field("model"), field("provider")) {
+                    (Some(m), Some(p)) => Some(format!("calling {m} via {p}")),
+                    (Some(m), None) => Some(format!("calling {m}")),
+                    _ => None,
+                };
+                PiEventKind::MessageEnd { role, usage, error, called }
             }
             "tool_execution_start" => {
                 PiEventKind::ToolStart { tool: raw.get("toolName").and_then(Value::as_str).unwrap_or("").to_string() }
