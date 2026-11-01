@@ -5,9 +5,11 @@
 // holds it until the agent is done; it can be taken back until then). A message to an archived chat
 // restores it; one to a sleeping agent wakes it. Files attach with the paperclip, by dropping
 // them on the composer or by pasting (images): each uploads right away and goes with the message.
+// The draft and its uploaded files are kept per chat in this browser (lib/drafts.ts) until sent.
 import { computed, reactive, ref, useTemplateRef, watch } from "vue";
 import { call, upload } from "../../api/client";
 import type { SendMode } from "../../generated";
+import { loadDraft, saveDraft } from "../../lib/drafts";
 import { bytes } from "../../lib/time";
 import { notifyError } from "../../notify";
 import { shell } from "../../shell";
@@ -37,6 +39,22 @@ const dragging = ref(false);
 const uploading = computed(() => attachments.some((a) => !a.file && !a.error));
 const failed = computed(() => attachments.some((a) => a.error));
 const canSend = computed(() => (!!draft.value.trim() || attachments.length > 0) && !uploading.value && !failed.value);
+
+/** This chat's draft from before (a closed tab, a reload, another chat opened meanwhile). */
+watch(
+  () => props.instance,
+  (to) => {
+    const d = loadDraft(to);
+    draft.value = d.text;
+    attachments.splice(0, attachments.length, ...d.files.map((f) => ({ ...f, key: nextKey++, progress: 1, error: null })));
+  },
+  { immediate: true },
+);
+watch(
+  [draft, attachments],
+  () => saveDraft(props.instance, { text: draft.value, files: attachments.flatMap((a) => (a.file ? [{ name: a.name, size: a.size, file: a.file }] : [])) }),
+  { deep: true },
+);
 
 /** A shared text (the share target) waiting for this chat's composer. */
 watch(

@@ -25,6 +25,7 @@ import { mountInApp } from "./mount";
 afterEach(() => {
   calls.length = 0;
   document.body.innerHTML = "";
+  localStorage.clear();
 });
 
 async function pick(w: Awaited<ReturnType<typeof mountInApp>>, files: File[]) {
@@ -74,6 +75,30 @@ describe("ChatComposer attachments", () => {
     await w.find("form").trigger("submit");
     await flushPromises();
     expect(calls.find((c) => c.name === "send_message")?.args).toEqual({ body: { to: "botler", text: "hi", mode: "steer", files: undefined } });
+  });
+});
+
+describe("ChatComposer drafts", () => {
+  it("keeps the draft and its uploads per chat across a reload, until sent", async () => {
+    const w = await mountInApp(ChatComposer, { instance: "botler", archived: false, busy: false });
+    await pick(w, [new File(["x"], "notes.txt")]);
+    await w.find("textarea").setValue("half a thought");
+    await flushPromises();
+    w.unmount();
+
+    const other = await mountInApp(ChatComposer, { instance: "triage", archived: false, busy: false });
+    expect((other.find("textarea").element as HTMLTextAreaElement).value).toBe("");
+    other.unmount();
+
+    const again = await mountInApp(ChatComposer, { instance: "botler", archived: false, busy: false });
+    expect((again.find("textarea").element as HTMLTextAreaElement).value).toBe("half a thought");
+    expect(again.text()).toContain("notes.txt");
+    await again.find("form").trigger("submit");
+    await flushPromises();
+    expect(calls.find((c) => c.name === "send_message")?.args).toEqual({
+      body: { to: "botler", text: "half a thought", mode: "steer", files: ["abc123/notes.txt"] },
+    });
+    expect(localStorage.getItem("botler.draft.botler")).toBeNull();
   });
 });
 
