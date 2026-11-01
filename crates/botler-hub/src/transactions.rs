@@ -266,7 +266,8 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
     spec.workdir = Some("/workspace".into());
     let mut att = hub.containers.run_attached(&spec).await?;
     let mut out = String::new();
-    let mut progress = Progress::new(hub, id, "gate running".into());
+    let script = tokio::fs::read_to_string(dir.join("gate/run")).await?;
+    let mut progress = Progress::new(hub, id, "gate running".into()).with_checks(&script);
     let read = tokio::time::timeout(GATE_TIMEOUT, async {
         let mut lines = BufReader::new(&mut att.stdout).lines();
         while let Some(line) = lines.next_line().await? {
@@ -298,7 +299,12 @@ async fn run_gate(hub: &Hub, id: &str, commit: &str) -> Result<(bool, String)> {
     if !stderr.is_empty() {
         out.push_str(&format!("\n{stderr}"));
     }
-    let report = crate::failures::tail(&out, REPORT_LINES);
+    let mut report = crate::failures::tail(&out, REPORT_LINES);
+    if code != Some(0)
+        && let Some(check) = progress.check()
+    {
+        report = format!("stopped at {check}\n{report}");
+    }
     Ok((code == Some(0), report))
 }
 
@@ -711,15 +717,29 @@ struct Progress<'a> {
     hub: &'a Hub,
     id: &'a str,
     what: String,
-    /// The image build's current `STEP n/m: …`.
+    /// The image build's current `STEP n/m: …`, or the gate's current check.
     step: Option<String>,
+    /// The gate's checks (`echo "== <name>"` in `gate/run`), and how many started.
+    checks: Option<(usize, usize)>,
     tail: std::collections::VecDeque<String>,
     shown: Option<std::time::Instant>,
 }
 
 impl<'a> Progress<'a> {
     fn new(hub: &'a Hub, id: &'a str, what: String) -> Self {
-        Self { hub, id, what, step: None, tail: Default::default(), shown: None }
+        Self { hub, id, what, step: None, checks: None, tail: Default::default(), shown: None }
+    }
+
+    /// Count the gate's checks in `script` (lines echoing `== <name>`), to show "check 3 of 8".
+    fn with_checks(mut self, script: &str) -> Self {
+        let n = script.lines().filter(|l| l.contains("echo \"== ")).count();
+        self.checks = (n > 0).then_some((n, 0));
+        self
+    }
+
+    /// The check that ran last (to name where a failed gate stopped).
+    fn check(&self) -> Option<&str> {
+        self.checks.and(self.step.as_deref())
     }
 
     async fn line(&mut self, line: &str) -> Result<()> {
@@ -729,6 +749,10 @@ impl<'a> Progress<'a> {
         }
         if line.starts_with("STEP ") {
             self.step = Some(clip(line, 100));
+        }
+        if let (Some(name), Some((total, started))) = (line.strip_prefix("== "), self.checks.as_mut()) {
+            *started += 1;
+            self.step = Some(format!("check {started} of {total}: {}", clip(name, 80)));
         }
         if self.tail.len() == PROGRESS_LINES {
             self.tail.pop_front();

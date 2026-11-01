@@ -301,3 +301,14 @@ async fn approving_a_finished_proposal_is_refused() {
     let err = transactions::on_approval(&e.hub, &p.id, true, None).await.unwrap_err();
     assert!(err.to_string().contains("already decided"), "{err}");
 }
+
+#[tokio::test]
+async fn a_failed_gate_says_which_check_it_stopped_at() {
+    let e = env().await;
+    e.fake.set_script_result("== uv sync\nResolved 12 packages\n== events manifest\nmanifest is stale\n", 1);
+    let p = start(&e, "alpha").await;
+    let p = wait_for(&e, &p.id, &[ProposalStatus::Failed, ProposalStatus::Merged]).await;
+    let report = p.gate_report.unwrap();
+    assert!(report.starts_with("stopped at check 2 of "), "{report}");
+    assert!(report.contains(": events manifest") && report.contains("manifest is stale"), "{report}");
+}
