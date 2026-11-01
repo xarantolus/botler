@@ -32,6 +32,8 @@ pub struct Settings {
     /// `[push]` (null when off) and its JSON Schema.
     pub push: Value,
     pub push_schema: Value,
+    /// `[mirror] url` (null when off).
+    pub mirror: Option<String>,
     /// Tools agents can be granted (`tools` takes globs of these names).
     pub tools: Vec<String>,
     /// Services with a port: what `mcp` can name.
@@ -111,6 +113,9 @@ pub struct DeploymentEdit {
     pub defaults: Value,
     /// null turns push off.
     pub push: Value,
+    /// null turns the mirror off.
+    #[serde(default)]
+    pub mirror: Option<String>,
 }
 
 /// A problem with one field (`models.default`, `models.model.2`, `agents.chat.model`,
@@ -189,6 +194,7 @@ pub async fn get(hub: &Hub) -> Result<Settings> {
         defaults_schema: schema(schemars::schema_for!(Defaults))?,
         push: to_json(&defs.instance.push)?,
         push_schema: schema(schemars::schema_for!(Push))?,
+        mirror: defs.instance.mirror.as_ref().map(|m| m.url.clone()),
         tools: defs.tools.keys().cloned().collect(),
         services: defs.services().filter(|j| j.spec.env.port.is_some()).map(|j| j.name.clone()).collect(),
         warnings: by_file(&crate::model_catalog::warnings(hub, defs).await),
@@ -277,7 +283,8 @@ pub async fn save(hub: &Hub, edit: &SettingsEdit) -> Result<SettingsSaved> {
             let defaults = parse_section::<Defaults>("defaults", &d.defaults, &mut errors);
             let push =
                 if d.push.is_null() { Some(Value::Null) } else { parse_section::<Push>("push", &d.push, &mut errors) };
-            defaults.zip(push)
+            let mirror = d.mirror.as_deref().map(str::trim).filter(|u| !u.is_empty()).map(String::from);
+            defaults.zip(push).map(|(d, p)| (d, p, mirror))
         }
         None => None,
     };
@@ -312,7 +319,7 @@ pub async fn save(hub: &Hub, edit: &SettingsEdit) -> Result<SettingsSaved> {
             if let Some(m) = &edit.models {
                 edit_models(&mut doc, &models_edit(&base.defs), m, &mut changed)?;
             }
-            if let Some((defaults, push)) = &deployment {
+            if let Some((defaults, push, mirror)) = &deployment {
                 let inst = &base.defs.instance;
                 apply_json(
                     table(&mut doc, "defaults")?,
@@ -328,6 +335,13 @@ pub async fn save(hub: &Hub, edit: &SettingsEdit) -> Result<SettingsSaved> {
                     }
                 } else {
                     apply_json(table(&mut doc, "push")?, &old_push, push, "push.", &mut changed);
+                }
+                if inst.mirror.as_ref().map(|m| &m.url) != mirror.as_ref() {
+                    match mirror {
+                        Some(url) => set(table(&mut doc, "mirror")?, "url", &Value::String(url.clone())),
+                        None => drop(doc.remove("mirror")),
+                    }
+                    changed.push("mirror".into());
                 }
             }
             let new = doc.to_string();
@@ -389,7 +403,11 @@ pub async fn save(hub: &Hub, edit: &SettingsEdit) -> Result<SettingsSaved> {
         match hub.repo.advance_main(&main, &head).await {
             Ok(()) => {
                 let warnings = by_file(&crate::model_catalog::warnings(hub, &applied.defs).await);
+                let new_mirror = applied.defs.instance.mirror != base.defs.instance.mirror;
                 hub.apply(applied).await?;
+                if new_mirror {
+                    crate::transactions::mirror(hub).await; // a new mirror gets main right away
+                }
                 tracing::info!(commit = %head, "{message}");
                 crate::transactions::after_main_moved(hub).await;
                 return Ok(SettingsSaved { saved: true, commit: head, errors: vec![], warnings });

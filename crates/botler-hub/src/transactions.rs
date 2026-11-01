@@ -843,7 +843,7 @@ pub fn explain(p: &Proposal, for_agent: bool) -> String {
 }
 
 /// Push main to the configured mirror; failures are logged, never fatal.
-async fn mirror(hub: &Hub) {
+pub async fn mirror(hub: &Hub) {
     let Some(m) = hub.applied().await.defs.instance.mirror.clone() else { return };
     if let Err(e) = hub.repo.push_mirror(&m.url).await {
         tracing::warn!(url = %m.url, error = %e, "mirror push failed");

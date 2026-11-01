@@ -336,10 +336,9 @@ impl Default for Defaults {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Mirror {
+    /// Where main is pushed after every merge (e.g. `ssh://git@host:222/me/monorepo.git`), with
+    /// the hub's own git and SSH credentials.
     pub url: String,
-    /// Container secret holding push credentials (token or SSH key file).
-    #[serde(default)]
-    pub secret: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

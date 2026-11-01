@@ -132,6 +132,21 @@ async fn edits_are_committed_as_the_user_and_keep_the_files_layout() {
     let same = json!({ "commit": s["commit"], "models": s["models"], "deployment": { "defaults": s["defaults"], "push": null } });
     let r = api(&e, "PUT", Some(same)).await;
     assert_eq!((&r["saved"], &r["commit"]), (&json!(true), &s["commit"]), "{r}");
+
+    // A mirror set here gets main right away (and after every merge).
+    let bare = std::env::temp_dir().join(format!("botler-mirror-{}", uuid::Uuid::now_v7()));
+    let ok = std::process::Command::new("git").args(["init", "-q", "--bare"]).arg(&bare).status().unwrap();
+    assert!(ok.success());
+    let url = bare.to_string_lossy().to_string();
+    let edit =
+        json!({ "commit": s["commit"], "deployment": { "defaults": s["defaults"], "push": null, "mirror": url } });
+    let r = api(&e, "PUT", Some(edit)).await;
+    assert_eq!(r["saved"], true, "{r}");
+    assert!(file(&e, "botler.toml").await.contains(&format!("[mirror]\nurl = \"{url}\"")));
+    assert_eq!(api(&e, "GET", None).await["mirror"], json!(url));
+    let pushed = std::process::Command::new("git").args(["--git-dir", &url, "rev-parse", "main"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&pushed.stdout).trim(), e.hub.repo.main().await.unwrap());
+    std::fs::remove_dir_all(&bare).unwrap();
 }
 
 /// A job's `Settings` model is a form on the page; saved values are committed in its

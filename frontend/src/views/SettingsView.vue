@@ -58,7 +58,7 @@ const edit = computed(() => (loaded.value && draft.value ? changes(loaded.value,
 const models = computed(() => catalog.value?.models ?? []);
 const typical = computed(() => draft.value?.models.models ?? []);
 const users = computed(() => usedBy(loaded.value?.agents ?? []));
-const general = computed(() => generalErrors(errors.value, ["models", "agents", "defaults", "push", "runnables"]));
+const general = computed(() => generalErrors(errors.value, ["models", "agents", "defaults", "push", "mirror", "runnables"]));
 const defaults = computed(() => draft.value?.defaults ?? {});
 
 async function save() {
@@ -329,6 +329,15 @@ function setPush(on: boolean) {
             />
           </UFormField>
           <p v-else class="text-sm text-muted">Off.</p>
+        </UCard>
+        <UCard>
+          <template #header>
+            <p class="font-semibold text-highlighted">Monorepo mirror</p>
+            <p class="text-sm text-muted">After every merge, main is pushed here with this machine's git and SSH keys. Empty: off.</p>
+          </template>
+          <UFormField :error="errorsAt(errors, 'mirror').join('; ') || undefined">
+            <UInput v-model="draft.mirror" placeholder="ssh://git@host:222/me/monorepo.git" class="w-full" />
+          </UFormField>
         </UCard>
       </template>
     </div>

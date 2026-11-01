@@ -10,6 +10,8 @@ export interface Draft {
   defaults: Record<string, unknown>;
   /** null: push is off. */
   push: Record<string, unknown> | null;
+  /** The mirror's URL; empty: off. */
+  mirror: string;
   /** Per job: its settings with the schema's defaults filled in. */
   runnables: Record<string, Record<string, unknown>>;
 }
@@ -21,6 +23,7 @@ export function draftOf(s: Settings): Draft {
     agents: Object.fromEntries(s.agents.map((a) => [a.name, copy(a.edit)])),
     defaults: copy(s.defaults) as Record<string, unknown>,
     push: copy(s.push) as Record<string, unknown> | null,
+    mirror: s.mirror ?? "",
     runnables: Object.fromEntries(
       s.runnables.map((r) => [r.job, { ...defaults(r.schema as Schema), ...copy(r.values as Record<string, unknown>) }]),
     ),
@@ -36,8 +39,8 @@ export function changes(loaded: Settings, draft: Draft): SettingsEdit | null {
   if (!same(before.models, draft.models)) edit.models = draft.models;
   const agents = Object.fromEntries(Object.entries(draft.agents).filter(([n, a]) => !same(before.agents[n], a)));
   if (Object.keys(agents).length) edit.agents = agents;
-  if (!same(before.defaults, draft.defaults) || !same(before.push, draft.push)) {
-    edit.deployment = { defaults: draft.defaults as JsonValue, push: draft.push as JsonValue };
+  if (!same(before.defaults, draft.defaults) || !same(before.push, draft.push) || before.mirror !== draft.mirror) {
+    edit.deployment = { defaults: draft.defaults as JsonValue, push: draft.push as JsonValue, mirror: draft.mirror.trim() || null };
   }
   const runnables = Object.fromEntries(
     Object.entries(draft.runnables).filter(([n, v]) => !same(before.runnables[n], v)),

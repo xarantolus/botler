@@ -26,6 +26,10 @@ defaults: JsonValue, defaults_schema: JsonValue,
  */
 push: JsonValue, push_schema: JsonValue, 
 /**
+ * `[mirror] url` (null when off).
+ */
+mirror: string | null, 
+/**
  * Tools agents can be granted (`tools` takes globs of these names).
  */
 tools: Array<string>, 

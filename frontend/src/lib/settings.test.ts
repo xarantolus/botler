@@ -29,6 +29,7 @@ const settings: Settings = {
   defaults_schema: {},
   push: null,
   push_schema: {},
+  mirror: null,
   tools: [],
   services: [],
   warnings: [],
@@ -51,7 +52,9 @@ describe("changes", () => {
     d.agents.dev!.idle_timeout = "1h";
     expect(changes(settings, d)).toEqual({ commit: "c1", agents: { dev: { model: "b/y", tools: [], mcp: [], idle_timeout: "1h", compact_at: null } } });
     d.push = { ntfy_url: "https://ntfy.sh", topic_secret: "T" };
-    expect(changes(settings, d)?.deployment).toEqual({ defaults: { idle_timeout: "15m" }, push: d.push });
+    expect(changes(settings, d)?.deployment).toEqual({ defaults: { idle_timeout: "15m" }, push: d.push, mirror: null });
+    d.mirror = " ssh://git@host:222/me/repo.git ";
+    expect(changes(settings, d)?.deployment?.mirror).toBe("ssh://git@host:222/me/repo.git");
     expect(settings.agents[1]!.edit.idle_timeout).toBe("30m"); // the loaded copy is untouched
   });
 

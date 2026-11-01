@@ -5,4 +5,8 @@ export type DeploymentEdit = { defaults: JsonValue,
 /**
  * null turns push off.
  */
-push: JsonValue, };
+push: JsonValue, 
+/**
+ * null turns the mirror off.
+ */
+mirror: string | null, };
