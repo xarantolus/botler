@@ -199,7 +199,7 @@ async fn crashing_always_on_agent_backs_off_and_opens_an_incident() {
 #[tokio::test]
 async fn emit_event_validates_and_explains() {
     use botler_hub::auth::Principal;
-    use botler_hub::ops::{self, Caller, OpError};
+    use botler_hub::ops::{self, Caller};
     let e = env().await;
     e.commit(&[(
         "events/mail.toml",
@@ -260,7 +260,7 @@ async fn sleeping_chat_is_woken_by_a_message_with_its_workspace() {
 #[tokio::test]
 async fn archive_hands_over_and_messaging_restores() {
     use botler_hub::auth::Principal;
-    use botler_hub::ops::{self, Caller, OpError};
+    use botler_hub::ops::{self, Caller};
     let e = env().await;
     with_key(&e).await;
     let chat = router::spawn(&e.hub, "dev", Some("botler"), Some("build x"), None, None).await.unwrap();
@@ -274,11 +274,7 @@ async fn archive_hands_over_and_messaging_restores() {
         "state": ["branch agents/<me>/work", "notes in memory: x-design"],
         "handoff": { "spawn": "dev", "message": "Wire x into the scheduler; see branch agents/<me>/work." }
     });
-    assert!(
-        matches!(ops::call(&e.hub, &me, "handover_ready", report.clone()).await, Err(OpError::BadRequest(_))),
-        "only after a request"
-    );
-
+    // A chat done with its task may archive itself; here the user asks for it.
     e.hub.store.request_archive(&chat).await.unwrap();
     let out = ops::call(&e.hub, &me, "handover_ready", report).await.unwrap();
     let successor = out["handed_to"].as_str().unwrap().to_string();
@@ -477,7 +473,7 @@ async fn parent_hears_when_a_spawned_chat_finishes_its_turn() {
 #[tokio::test]
 async fn secret_requests_are_async_and_declare_on_submit() {
     use botler_hub::auth::Principal;
-    use botler_hub::ops::{self, Caller, OpError};
+    use botler_hub::ops::{self, Caller};
     use botler_hub::secret_requests::{InputError, Submission, submit};
     let e = env().await;
     with_key(&e).await;
