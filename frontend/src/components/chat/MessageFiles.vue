@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Files with a message or a tool call (lib/attachments.ts), each shown as what it is: images as
-// thumbnails (opening full size), videos and audio with a player, PDFs and text opening in a new
+// Files with a message or a run of tool calls (lib/attachments.ts), each shown as what it is:
+// images as thumbnails (opening a gallery of the list's images, PhotoSwipe), videos and audio with a player, PDFs and text opening in a new
 // tab, anything else a chip that downloads it. The hub serves them only with the token, so they
 // load as blobs; large media waits for a click.
 import { onBeforeUnmount, reactive, watch } from "vue";
@@ -41,6 +41,19 @@ watch(
 );
 onBeforeUnmount(() => Object.values(urls).forEach((u) => URL.revokeObjectURL(u)));
 
+/** Open a gallery of the list's loaded images at `f`, sized by their thumbnails. */
+async function zoom(f: FileRef, e: MouseEvent) {
+  const shown = props.files.filter((x) => shows(x) === "image" && urls[x.path]);
+  const list = (e.currentTarget as HTMLElement).closest("ul");
+  const thumbs = new Map([...(list?.querySelectorAll<HTMLImageElement>("img[data-path]") ?? [])].map((i) => [i.dataset.path, i]));
+  const [{ default: PhotoSwipe }] = await Promise.all([import("photoswipe"), import("photoswipe/style.css")]);
+  const dataSource = shown.map((x) => {
+    const img = thumbs.get(x.path);
+    return { src: urls[x.path], msrc: urls[x.path], alt: x.name, width: img?.naturalWidth || 1600, height: img?.naturalHeight || 1200 };
+  });
+  new PhotoSwipe({ dataSource, index: Math.max(0, shown.indexOf(f)), showHideAnimationType: "fade" }).init();
+}
+
 async function activate(f: FileRef) {
   const p = shows(f);
   // Opened before the fetch, while the click still allows a new tab.
@@ -59,8 +72,8 @@ async function activate(f: FileRef) {
 <template>
   <ul class="flex flex-wrap gap-1.5" :class="align === 'end' ? 'justify-end' : 'justify-start'" aria-label="Attached files">
     <li v-for="f in files" :key="f.path" :data-file="shows(f)">
-      <a v-if="shows(f) === 'image' && urls[f.path]" :href="urls[f.path]" target="_blank" rel="noopener noreferrer" :title="f.name" class="block">
-        <img :src="urls[f.path]" :alt="f.name" class="max-h-40 max-w-56 rounded-md border border-default object-cover" />
+      <a v-if="shows(f) === 'image' && urls[f.path]" :href="urls[f.path]" :title="f.name" class="block cursor-zoom-in" @click.prevent="zoom(f, $event).catch((e) => notifyError(`Could not open ${f.name}`, e))">
+        <img :src="urls[f.path]" :data-path="f.path" :alt="f.name" class="max-h-40 max-w-56 rounded-md border border-default object-cover" />
       </a>
       <video
         v-else-if="shows(f) === 'video' && urls[f.path]"

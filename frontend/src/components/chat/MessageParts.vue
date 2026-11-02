@@ -3,6 +3,7 @@
 // it: reasoning, text (Markdown), tool calls, and botler's own parts as cards. A turn's steps
 // before its last text fold into one line (lib/steps.ts).
 import { computed } from "vue";
+import { fileGroups } from "../../lib/fileGroups";
 import type { TranscriptMessage } from "../../lib/transcript";
 import { foldOf, folded } from "../../lib/steps";
 import { toolRunning } from "../../lib/transcript";
@@ -19,6 +20,7 @@ const props = defineProps<{ message: TranscriptMessage; busy: boolean }>();
 const key = computed(() => props.message.metadata?.key ?? props.message.id);
 const fold = computed(() => (props.message.role === "assistant" ? foldOf(props.message.parts) : null));
 const firstFolded = computed(() => props.message.parts.findIndex((_, i) => folded(props.message.parts, fold.value, i)));
+const groups = computed(() => fileGroups(props.message.parts));
 const stepsOpen = computed(() => shell.open[`${key.value}:steps`] ?? false);
 </script>
 
@@ -54,7 +56,9 @@ const stepsOpen = computed(() => shell.open[`${key.value}:steps`] ?? false);
       />
       <MarkdownText v-else-if="part.type === 'text'" :source="part.text" :class="part.state === 'streaming' && 'streaming'" />
       <ToolCall v-else-if="part.type === 'dynamic-tool'" :part="part" :running="toolRunning(part, busy)" />
-      <MessageFiles v-else-if="part.type === 'data-files'" :files="part.data.files" align="start" />
+      <template v-else-if="part.type === 'data-files'">
+        <MessageFiles v-if="groups.get(i)" :files="groups.get(i)!" align="start" />
+      </template>
       <DialogCard v-else-if="part.type === 'data-dialog'" :dialog="part.data" compact class="my-1" />
       <EnvelopeCard v-else-if="part.type === 'data-envelope'" :env="part.data.envelope" :at="part.data.at" />
       <NotePart v-else-if="part.type === 'data-note'" :note="part.data" />

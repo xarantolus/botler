@@ -56,7 +56,9 @@ describe("MessageFiles", () => {
     });
     await flushPromises();
     expect(w.find("img").attributes("src")).toMatch(/^blob:/);
-    expect(w.find("a[target=_blank]").attributes("rel")).toBe("noopener noreferrer");
+    // An image opens the gallery.
+    await w.find("a.cursor-zoom-in").trigger("click");
+    await vi.waitFor(() => expect(document.querySelector(".pswp")).not.toBeNull(), { timeout: 5000 });
     const video = w.find("video");
     expect([video.attributes("controls"), video.attributes("preload")]).toEqual(["", "metadata"]);
     expect(w.find("audio").attributes("controls")).toBe("");

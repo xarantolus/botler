@@ -7,7 +7,7 @@ import { defineShortcuts } from "@nuxt/ui/composables/defineShortcuts";
 import { useEventListener, useMediaQuery } from "@vueuse/core";
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { scrollsSideways, swipe } from "../../lib/swipe";
+import { ownsSwipe, swipe } from "../../lib/swipe";
 import { sections } from "../../navigation";
 import { shell } from "../../shell";
 import { SHORTCUTS } from "../../shortcuts";
@@ -19,15 +19,11 @@ import NewChatModal from "./NewChatModal.vue";
 
 const route = useRoute();
 const router = useRouter();
-defineShortcuts(
-  Object.fromEntries(SHORTCUTS.map((s) => [s.key, () => s.run(router)])),
-);
+defineShortcuts(Object.fromEntries(SHORTCUTS.map((s) => [s.key, () => s.run(router)])));
 
 /** Move focus past the sidebar, to the view's scrolling body. */
 function skipToContent() {
-  const body = document.querySelector<HTMLElement>(
-    "[data-slot=body]:not([data-slot=sidebar] *)",
-  );
+  const body = document.querySelector<HTMLElement>("[data-slot=body]:not([data-slot=sidebar] *)");
   if (!body) return;
   body.tabIndex = -1;
   body.focus();
@@ -41,10 +37,7 @@ useEventListener(
   "touchstart",
   (e: TouchEvent) => {
     const t = e.touches[0];
-    start =
-      phone.value && e.touches.length === 1 && t && !scrollsSideways(e.target)
-        ? { x: t.clientX, y: t.clientY }
-        : null;
+    start = phone.value && e.touches.length === 1 && t && !ownsSwipe(e.target) ? { x: t.clientX, y: t.clientY } : null;
   },
   { passive: true },
 );
@@ -67,18 +60,8 @@ const nav = computed((): NavigationMenuItem[] =>
     label: s.label,
     icon: s.icon,
     to: { name: s.name },
-    active:
-      s.name === "home"
-        ? route.name === "home" || route.name === "chat"
-        : route.name === s.name,
-    badge: s.count
-      ? {
-          label: String(s.count),
-          color: s.countColor,
-          variant: "subtle" as const,
-          size: "sm" as const,
-        }
-      : undefined,
+    active: s.name === "home" ? route.name === "home" || route.name === "chat" : route.name === s.name,
+    badge: s.count ? { label: String(s.count), color: s.countColor, variant: "subtle" as const, size: "sm" as const } : undefined,
   })),
 );
 </script>
@@ -105,27 +88,15 @@ const nav = computed((): NavigationMenuItem[] =>
       :ui="{ footer: 'lg:border-t lg:border-default', body: 'gap-5' }"
     >
       <template #header="{ collapsed }">
-        <RouterLink
-          to="/"
-          class="flex min-w-0 items-center gap-2 rounded-md"
-          aria-label="botler home"
-        >
+        <RouterLink to="/" class="flex min-w-0 items-center gap-2 rounded-md" aria-label="botler home">
           <img src="/favicon.svg" alt="" class="size-6 shrink-0" />
-          <span
-            v-if="!collapsed"
-            class="truncate text-base font-semibold text-highlighted"
-            >botler</span
-          >
+          <span v-if="!collapsed" class="truncate text-base font-semibold text-highlighted">botler</span>
         </RouterLink>
         <ColorModeCycle v-if="!collapsed" class="ms-auto" />
       </template>
 
       <template #default="{ collapsed }">
-        <UDashboardSearchButton
-          :collapsed="collapsed"
-          class="bg-transparent ring-default"
-          label="Search…"
-        />
+        <UDashboardSearchButton :collapsed="collapsed" class="bg-transparent ring-default" label="Search…" />
         <UNavigationMenu
           :collapsed="collapsed"
           :items="nav"
