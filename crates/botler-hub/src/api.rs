@@ -268,10 +268,15 @@ async fn op(
 }
 
 async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
+    Ok(Json(status_view(&hub).await?))
+}
+
+/// The hub at a glance (`GET /status`; the live stream pushes it when it changes).
+pub async fn status_view(hub: &Hub) -> Result<HubStatus, ApiError> {
     let applied = hub.applied().await;
     let info = hub.containers.info();
-    let services = crate::services::status(&hub).await?;
-    Ok(Json(HubStatus {
+    let services = crate::services::status(hub).await?;
+    Ok(HubStatus {
         version: env!("CARGO_PKG_VERSION").into(),
         commit: applied.commit.clone(),
         paused: hub.paused().await?,
@@ -283,17 +288,22 @@ async fn status(State(hub): State<AppState>) -> ApiResult<Json<HubStatus>> {
         open_dialogs: hub.store.open_dialogs().await?.len(),
         open_incidents: hub.store.open_incidents().await?.len(),
         breakers: hub.store.breakers().await?,
-        attention: crate::system::attention(&hub, &services).await?,
+        attention: crate::system::attention(hub, &services).await?,
         services,
         jobs: applied.defs.jobs.keys().cloned().collect(),
         agents: applied.defs.agents.keys().cloned().collect(),
         secret_groups: applied.defs.secret_groups.keys().cloned().collect(),
-    }))
+    })
 }
 
 /// Model spend today (in the hub's timezone) and all time, per chat.
 async fn usage(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Usage>> {
     user_only(&p)?;
+    Ok(Json(usage_view(&hub).await?))
+}
+
+/// Today's spend (`GET /usage`; pushed when it changes).
+pub async fn usage_view(hub: &Hub) -> Result<Usage, ApiError> {
     let applied = hub.applied().await;
     let tz = applied.defs.timezone;
     let now = Utc::now();
@@ -304,14 +314,14 @@ async fn usage(State(hub): State<AppState>, Extension(p): Extension<Principal>) 
         .and_then(|t| t.and_local_timezone(tz).earliest())
         .map_or(now - chrono::Duration::hours(24), |t| t.with_timezone(&Utc));
     let budget = &applied.defs.instance.defaults.budget;
-    Ok(Json(Usage {
+    Ok(Usage {
         day_start,
         timezone: tz.name().into(),
         today: hub.store.usage_since(None, day_start).await?,
         today_by_instance: hub.store.usage_by_instance(day_start).await?,
         total_by_instance: hub.store.usage_by_instance(chrono::DateTime::<Utc>::UNIX_EPOCH).await?,
         default_budget: BudgetView { usd_per_day: budget.usd_per_day, tokens_per_day: budget.tokens_per_day },
-    }))
+    })
 }
 
 #[derive(Deserialize, ts_rs::TS)]
@@ -494,6 +504,11 @@ fn user_event(payload: BuiltinPayload) -> Result<Event, ApiError> {
 
 async fn dialogs(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Dialogs>> {
     user_only(&p)?;
+    Ok(Json(dialogs_view(&hub).await?))
+}
+
+/// Open and recent requests (`GET /dialogs`; pushed when they change).
+pub async fn dialogs_view(hub: &Hub) -> Result<Dialogs, ApiError> {
     let applied = hub.applied().await;
     let mut open = Vec::new();
     for d in hub.store.open_dialogs().await? {
@@ -522,7 +537,7 @@ async fn dialogs(State(hub): State<AppState>, Extension(p): Extension<Principal>
         }
         open.push(view);
     }
-    Ok(Json(Dialogs { open, recent: hub.store.recent_dialogs(50).await? }))
+    Ok(Dialogs { open, recent: hub.store.recent_dialogs(50).await? })
 }
 
 #[derive(Deserialize, ts_rs::TS)]
@@ -1173,13 +1188,18 @@ async fn chat_completions(
 
 async fn apps(State(hub): State<AppState>, Extension(p): Extension<Principal>) -> ApiResult<Json<Vec<AppView>>> {
     user_only(&p)?;
+    Ok(Json(apps_view(&hub).await?))
+}
+
+/// The apps services serve (`GET /apps`; pushed when they change).
+pub async fn apps_view(hub: &Hub) -> Result<Vec<AppView>, ApiError> {
     let applied = hub.applied().await;
     let mut out = Vec::new();
     for j in applied.defs.jobs.values().filter(|j| j.spec.is_service()) {
         let Some(app) = &j.spec.app else { continue };
         let running = hub
             .containers
-            .inspect(&crate::services::container_name(&hub, &j.name))
+            .inspect(&crate::services::container_name(hub, &j.name))
             .await
             .map_err(HubError::from)?
             .is_some_and(|c| c.running);
@@ -1191,7 +1211,7 @@ async fn apps(State(hub): State<AppState>, Extension(p): Extension<Principal>) -
             running,
         });
     }
-    Ok(Json(out))
+    Ok(out)
 }
 
 async fn app_ticket(

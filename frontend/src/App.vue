@@ -5,7 +5,7 @@ import AppShell from "./components/shell/AppShell.vue";
 import LoginView from "./components/shell/LoginView.vue";
 import { startLive, stopLive } from "./live";
 import { bindToaster } from "./notify";
-import { checkSignedIn, refreshAll, state } from "./store";
+import { checkSignedIn, state } from "./store";
 
 bindToaster(useToast());
 void checkSignedIn();
@@ -14,8 +14,8 @@ watch(
   () => state.authed,
   (authed) => {
     if (authed) {
+      // Its `ready` brings everything.
       startLive();
-      void refreshAll();
     } else {
       stopLive();
     }

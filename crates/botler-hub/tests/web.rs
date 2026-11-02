@@ -259,3 +259,45 @@ async fn queued_messages_wait_for_the_turn_and_can_be_taken_back() {
     assert_eq!(req("DELETE", &format!("/api/v1/messages/{delivered}"), None).await.0, StatusCode::CONFLICT);
     assert_eq!(req("DELETE", &format!("/api/v1/messages/{id}"), None).await.0, StatusCode::CONFLICT);
 }
+
+/// The shared state comes with `ready`, then only what changed; a refresh is answered by id.
+#[tokio::test]
+async fn live_sends_the_state_then_what_changed() {
+    let e = env().await;
+    e.hub.store.set_secret(&e.hub.secret_key, "OPENROUTER_API_KEY", "sk").await.unwrap();
+    let hi = Event::new(botler_core::event::kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+        .to("botler")
+        .payload(json!({"text": "hi"}));
+    e.hub.emit(hi).await.unwrap();
+    e.route().await;
+    let url = serve(&e).await;
+    let token = e.hub.tokens.issue(&Principal::User, chrono::Duration::hours(1), Utc::now());
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    ws.send(Message::text(json!({ "type": "auth", "token": token }).to_string())).await.unwrap();
+    let ready = next_json(&mut ws).await;
+    assert_eq!(ready["kind"], "ready");
+    let state = &ready["state"];
+    assert!(state["status"].is_object() && state["usage"].is_object() && state["dialogs"].is_object(), "{state}");
+    assert_eq!(state["all_instances"], true);
+    assert!(state["instances"].as_array().unwrap().iter().any(|i| i["name"] == "botler"));
+
+    // Nothing changed: the refresh's answer carries nothing else.
+    ws.send(Message::text(json!({ "type": "refresh", "id": 1 }).to_string())).await.unwrap();
+    let m = next_json(&mut ws).await;
+    assert_eq!(
+        m,
+        json!({"kind": "state", "patch": {"instances": [], "all_instances": false, "removed_instances": [], "refresh": 1}})
+    );
+
+    // A new title: that chat's row only.
+    e.hub.store.set_user_title("botler", "Trip planning").await.unwrap();
+    ws.send(Message::text(json!({ "type": "refresh", "id": 2 }).to_string())).await.unwrap();
+    let m = next_json(&mut ws).await;
+    let rows = m["patch"]["instances"].as_array().unwrap();
+    assert_eq!(
+        (rows.len(), rows[0]["title"].as_str(), m["patch"]["refresh"].as_u64()),
+        (1, Some("Trip planning"), Some(2)),
+        "{m}"
+    );
+    assert!(m["patch"].get("status").is_none(), "{m}");
+}

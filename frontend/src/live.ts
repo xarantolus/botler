@@ -1,20 +1,20 @@
-// The live stream (`/api/v1/live`, see crates/botler-hub/src/live.rs) with polling as the
-// fallback: while the socket is down the app polls, and it reconnects with exponential backoff.
+// The live stream (`/api/v1/live`, see crates/botler-hub/src/live.rs): the shared state with
+// `ready`, then what changes, pushed (`state` patches, events, the chat on screen); nothing is
+// polled. While it is down the app shows what it has (the connection badge says so) and
+// reconnects with backoff; `ready` brings everything again. Only a first connection that fails
+// fetches over HTTP, so the app is not empty behind a proxy that refuses WebSockets.
 
 import { getToken } from "./api/client";
 import type { ClientMessage, ServerMessage } from "./generated";
 import { noLive } from "./lib/transcript";
 import {
   addEvent,
+  applyState,
   onSessionLoaded,
   pushedSession,
   refreshAll,
-  refreshDialogs,
   refreshEvents,
-  refreshInstances,
-  refreshSession,
-  refreshStatus,
-  refreshUsage,
+  refreshViaLive,
   shownLast,
   state,
   trackWake,
@@ -24,20 +24,27 @@ import {
 let socket: WebSocket | null = null;
 let backoff = 1000;
 let reconnectTimer: number | undefined;
-let pollTimers: number[] = [];
 let watched: string | null = null;
 let stopped = true;
 
-const debounced = new Map<string, number>();
-function soon(key: string, f: () => unknown, ms = 300) {
-  window.clearTimeout(debounced.get(key));
-  debounced.set(
-    key,
-    window.setTimeout(() => {
-      debounced.delete(key);
-      f();
-    }, ms),
-  );
+/** Whether a connection was ever ready (else a failed one fetches over HTTP once). */
+let wasReady = false;
+/** Refreshes asked of the stream, waiting for the `state` that answers them. */
+let refreshId = 0;
+const refreshing = new Map<number, () => void>();
+function settleRefreshes(upTo = Infinity) {
+  for (const [id, done] of refreshing) {
+    if (id > upTo) continue;
+    refreshing.delete(id);
+    done();
+  }
+}
+function refreshLive(): Promise<void> {
+  return new Promise((done) => {
+    const id = ++refreshId;
+    refreshing.set(id, done);
+    send({ type: "refresh", id });
+  });
 }
 
 function send(msg: ClientMessage) {
@@ -60,35 +67,6 @@ function follow() {
 onSessionLoaded((name) => {
   if (name === watched) follow();
 });
-
-function startPolling() {
-  stopPolling();
-  const every = (ms: number, f: () => unknown) =>
-    pollTimers.push(
-      window.setInterval(() => {
-        if (!document.hidden) f();
-      }, ms),
-    );
-  if (state.connection === "live") {
-    // Slow refresh for what the stream does not carry (spend, queued deliveries).
-    every(30_000, () => Promise.all([refreshStatus(), refreshUsage(), refreshInstances()]));
-  } else {
-    every(2_500, () => watched && refreshSession(watched));
-    every(4_000, () => Promise.all([refreshStatus(), refreshInstances(), refreshDialogs(), refreshEvents()]));
-    every(30_000, refreshUsage);
-  }
-}
-
-function stopPolling() {
-  for (const t of pollTimers) window.clearInterval(t);
-  pollTimers = [];
-}
-
-function setConnection(c: typeof state.connection) {
-  if (state.connection === c && pollTimers.length) return;
-  state.connection = c;
-  startPolling();
-}
 
 /** One of pi's events for a chat (exported for tests). */
 export function onPi(instance: string, ev: Record<string, unknown>) {
@@ -128,37 +106,27 @@ function onMessage(msg: ServerMessage) {
   switch (msg.kind) {
     case "ready":
       backoff = 1000;
-      setConnection("live");
+      wasReady = true;
+      applyState(msg.state);
+      state.connection = "live";
+      refreshViaLive(refreshLive);
       follow();
-      // Catch up on whatever happened while disconnected.
-      void refreshAll();
+      // The latest events (the stream brings new ones; these may have passed meanwhile).
+      void refreshEvents();
+      return;
+    case "state":
+      applyState(msg.patch);
+      if (msg.patch.refresh !== undefined) settleRefreshes(msg.patch.refresh);
       return;
     case "error":
-      // Authentication failed: the next API call logs out if the token is bad.
-      void refreshStatus();
+      console.warn("live:", msg.error);
       return;
-    case "lagged":
-      void refreshAll();
-      return;
-    case "event": {
+    case "event":
       addEvent(msg.event);
-      const t = msg.event.type;
-      if (t.startsWith("dialog.") || t === "proposal.updated") soon("dialogs", refreshDialogs);
-      if (t === "proposal.updated" || t === "breaker.tripped" || t.startsWith("runnable.") || t === "manual") {
-        soon("status", refreshStatus);
-      }
-      // New chats, titles and activity show up in the list.
-      soon("instances", refreshInstances, 1000);
       return;
-    }
     case "instance":
       state.liveStatus[msg.instance] = msg.status;
       trackWake(msg.instance, msg.status.status === "waking");
-      soon("instances", refreshInstances, 500);
-      return;
-    case "dialog":
-      soon("dialogs", refreshDialogs, 100);
-      soon("status", refreshStatus);
       return;
     case "pi":
       onPi(msg.instance, msg.event);
@@ -194,10 +162,16 @@ function connect() {
   ws.onclose = () => {
     if (socket !== ws) return;
     socket = null;
-    setConnection("polling");
+    refreshViaLive(null);
+    settleRefreshes();
+    state.connection = "offline";
     if (stopped) return;
+    if (!wasReady) {
+      wasReady = true;
+      void refreshAll();
+    }
     reconnectTimer = window.setTimeout(connect, backoff);
-    backoff = Math.min(backoff * 2, 30_000);
+    backoff = Math.min(backoff * 2, 10_000);
   };
 }
 
@@ -218,7 +192,6 @@ function wakeUp() {
 export function startLive() {
   stopped = false;
   state.connection = "connecting";
-  startPolling();
   connect();
   document.addEventListener("visibilitychange", wakeUp);
   window.addEventListener("online", wakeUp);
@@ -229,7 +202,8 @@ export function stopLive() {
   document.removeEventListener("visibilitychange", wakeUp);
   window.removeEventListener("online", wakeUp);
   window.clearTimeout(reconnectTimer);
-  stopPolling();
+  refreshViaLive(null);
+  settleRefreshes();
   socket?.close();
   socket = null;
 }

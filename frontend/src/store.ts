@@ -13,6 +13,7 @@ import type {
   Proposal,
   SessionItem,
   SessionView,
+  StatePatch,
   Usage,
 } from "./generated";
 import { currentStatus } from "./lib/phase";
@@ -20,7 +21,7 @@ import { noReferences, references, type References } from "./lib/references";
 import { noLive, persisted, type LiveMessage } from "./lib/transcript";
 import { notifyError } from "./notify";
 
-export type Connection = "connecting" | "live" | "polling";
+export type Connection = "connecting" | "live" | "offline";
 
 export interface AppState {
   authed: boolean;
@@ -131,19 +132,44 @@ async function guarded(what: string, f: () => Promise<void>): Promise<void> {
   }
 }
 
+/** While the live stream is up, the shared state (status, spend, chats, requests, apps,
+ * proposals) changes only through it: a refresh asks it for what changed (live.ts), so a slow
+ * answer can never overwrite a newer patch. Null while it is down: refreshes fetch. */
+let viaLive: (() => Promise<void>) | null = null;
+export function refreshViaLive(f: typeof viaLive) {
+  viaLive = f;
+}
+
+/** Apply the live stream's state: the whole of it (`ready`) or what changed. */
+export function applyState(p: StatePatch) {
+  if (p.status) state.status = p.status;
+  if (p.usage) state.usage = p.usage;
+  if (p.dialogs) state.dialogs = p.dialogs;
+  if (p.apps) state.apps = p.apps;
+  if (p.proposals) state.proposals = p.proposals;
+  if (p.all_instances) state.instances = p.instances;
+  else if (p.instances.length || p.removed_instances.length) {
+    const replaced = new Set([...p.removed_instances, ...p.instances.map((i) => i.name)]);
+    state.instances = [...state.instances.filter((i) => !replaced.has(i.name)), ...p.instances];
+  }
+}
+
 export function refreshStatus() {
+  if (viaLive) return viaLive();
   return guarded("Loading hub status", async () => {
     state.status = await call("status", {});
   });
 }
 
 export function refreshUsage() {
+  if (viaLive) return viaLive();
   return guarded("Loading spend", async () => {
     state.usage = await call("usage", {});
   });
 }
 
 export function refreshInstances() {
+  if (viaLive) return viaLive();
   return guarded("Loading chats", async () => {
     state.instances = await call("instances", {});
   });
@@ -155,6 +181,7 @@ let dialogsSeq = 0;
 let proposalsSeq = 0;
 
 export function refreshDialogs() {
+  if (viaLive) return viaLive();
   const seq = ++dialogsSeq;
   return guarded("Loading requests", async () => {
     const dialogs = await call("dialogs", {});
@@ -163,12 +190,14 @@ export function refreshDialogs() {
 }
 
 export function refreshApps() {
+  if (viaLive) return viaLive();
   return guarded("Loading apps", async () => {
     state.apps = await call("apps", {});
   });
 }
 
 export function refreshProposals() {
+  if (viaLive) return viaLive();
   const seq = ++proposalsSeq;
   return guarded("Loading proposals", async () => {
     const proposals = await call("proposals", {});
@@ -187,9 +216,11 @@ export function upsertProposal(p: Proposal) {
 
 export function refreshEvents() {
   return guarded("Loading events", async () => {
-    const fresh = await call("events", { query: { limit: 200 } });
+    const fresh = await call("events", { query: { limit: 100 } });
+    // Events pushed meanwhile may be newer: merged, newest first (ids are time-ordered).
     const known = new Set(fresh.map((e) => e.id));
-    state.events = [...fresh, ...state.events.filter((e) => !known.has(e.id))].slice(0, MAX_EVENTS);
+    const all = [...fresh, ...state.events.filter((e) => !known.has(e.id))];
+    state.events = all.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)).slice(0, MAX_EVENTS);
   });
 }
 
@@ -317,6 +348,7 @@ export function addEvent(ev: BotlerEvent) {
   if (state.events.length > MAX_EVENTS) state.events.length = MAX_EVENTS;
 }
 
+/** Fetch everything (no live stream to bring it). */
 export function refreshAll() {
   return Promise.all([
     refreshStatus(),

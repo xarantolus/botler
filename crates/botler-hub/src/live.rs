@@ -10,6 +10,13 @@
 //! (`after` says which, so a client whose last item differs asks again from its own). Everything
 //! else is broadcast.
 //!
+//! The shared state the web app shows (status, spend, chats, requests, apps, proposals) comes
+//! with `ready` and then as `state` patches: each connection recomputes a part on the hub when
+//! something that may change it happens (shortly after, once for a burst) and sends only what
+//! differs from what it sent before. `{"type": "refresh", "id": n}` asks for that now (after the
+//! client's own change), answered by the `state` carrying `refresh: n`. One ordered stream, so a
+//! slow answer never overwrites something newer.
+//!
 //! Messages are [`ClientMessage`] and [`ServerMessage`]; the web app's types are generated
 //! from them.
 
@@ -28,7 +35,6 @@ use ts_rs::TS;
 
 use crate::auth::Principal;
 use crate::hub::{Hub, Live};
-use crate::notify::DialogNotice;
 use crate::phase::AgentStatus;
 use crate::sessions::Window;
 
@@ -43,6 +49,10 @@ const SESSION_PAGE: usize = 50;
 /// The pi events after which the session file has new entries (or the chat's state changed).
 const SESSION_CHANGES: &[&str] =
     &["message_end", "tool_execution_end", "agent_start", "agent_end", "agent_settled", "compaction_end"];
+/// Changes within this long go out as one `state` patch.
+const STATE_DELAY: Duration = Duration::from_millis(300);
+/// Parts with no change signal (spend, queued deliveries, service health) are compared this often.
+const STATE_EVERY: Duration = Duration::from_secs(30);
 /// Close code for a failed authentication (application range 4000–4999).
 pub const CLOSE_UNAUTHORIZED: u16 = 4401;
 
@@ -60,24 +70,25 @@ pub enum ClientMessage {
         #[ts(optional)]
         after: Option<String>,
     },
+    /// Send what changed now (after the client's own change); answered by the `state` patch with
+    /// this `refresh` id.
+    Refresh { id: u64 },
 }
 
 /// Server to client.
 #[derive(Debug, Serialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ServerMessage {
-    /// Authenticated; changes from now on are delivered.
-    Ready,
+    /// Authenticated: the whole state; changes from now on are delivered.
+    Ready { state: Box<StatePatch> },
+    /// What changed of the shared state.
+    State { patch: Box<StatePatch> },
     /// Authentication failed or the client sent something invalid.
     Error { error: String },
-    /// The client fell behind and missed messages: refetch everything.
-    Lagged { missed: u64 },
     /// An event was journaled.
     Event { event: Event },
     /// An agent's runtime status changed.
     Instance { instance: String, status: AgentStatus },
-    /// A dialog opened or closed: refetch the requests.
-    Dialog { notice: DialogNotice },
     /// A proposal moved (stage, status, decision).
     Proposal { proposal: Box<Proposal> },
     /// The watched chat's session changed: its items after `after` (`view.continues`), or its
@@ -179,6 +190,135 @@ async fn authenticate(hub: &Hub, socket: &mut WebSocket, device: bool) -> Result
     })
 }
 
+/// What changed of the shared state; absent parts did not change.
+#[derive(Debug, Default, Serialize, TS)]
+pub struct StatePatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<crate::wire::HubStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub usage: Option<crate::wire::Usage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dialogs: Option<crate::wire::Dialogs>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub apps: Option<Vec<crate::wire::AppView>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub proposals: Option<Vec<Proposal>>,
+    /// Chats that are new or changed (with `all_instances`: every chat listed).
+    pub instances: Vec<botler_store::Instance>,
+    pub all_instances: bool,
+    /// Chats no longer listed.
+    pub removed_instances: Vec<String>,
+    /// The `refresh` this answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refresh: Option<u64>,
+}
+
+/// Parts of the shared state to recompute.
+#[derive(Clone, Copy, Debug, Default)]
+struct Parts {
+    status: bool,
+    usage: bool,
+    instances: bool,
+    dialogs: bool,
+    apps: bool,
+    proposals: bool,
+}
+
+impl Parts {
+    const ALL: Parts = Parts { status: true, usage: true, instances: true, dialogs: true, apps: true, proposals: true };
+
+    /// What may have changed with event `kind`.
+    fn after_event(kind: &str) -> Parts {
+        let proposal = kind == "proposal.updated";
+        Parts {
+            status: proposal || kind.starts_with("breaker.") || kind.starts_with("runnable.") || kind == "manual",
+            instances: true,
+            dialogs: proposal || kind.starts_with("dialog."),
+            apps: proposal || kind.starts_with("runnable."),
+            ..Parts::default()
+        }
+    }
+}
+
+/// The shared state a connection sent, to send only what differs.
+#[derive(Default)]
+struct Sent {
+    status: Option<serde_json::Value>,
+    usage: Option<serde_json::Value>,
+    dialogs: Option<serde_json::Value>,
+    apps: Option<serde_json::Value>,
+    proposals: Option<serde_json::Value>,
+    instances: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Recompute `parts`; what differs from `sent` (all of it with `all`) goes into the patch.
+async fn patch(hub: &Hub, sent: &mut Sent, parts: Parts, all: bool) -> Result<StatePatch, crate::api::ApiError> {
+    fn differs<T: Serialize>(
+        value: T,
+        sent: &mut Option<serde_json::Value>,
+        all: bool,
+    ) -> Result<Option<T>, crate::api::ApiError> {
+        let v = serde_json::to_value(&value).map_err(|e| {
+            crate::api::ApiError(axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("encoding the state: {e}"))
+        })?;
+        if !all && sent.as_ref() == Some(&v) {
+            return Ok(None);
+        }
+        *sent = Some(v);
+        Ok(Some(value))
+    }
+    let mut out = StatePatch { all_instances: all, ..StatePatch::default() };
+    if parts.status {
+        out.status = differs(crate::api::status_view(hub).await?, &mut sent.status, all)?;
+    }
+    if parts.usage {
+        out.usage = differs(crate::api::usage_view(hub).await?, &mut sent.usage, all)?;
+    }
+    if parts.dialogs {
+        out.dialogs = differs(crate::api::dialogs_view(hub).await?, &mut sent.dialogs, all)?;
+    }
+    if parts.apps {
+        out.apps = differs(crate::api::apps_view(hub).await?, &mut sent.apps, all)?;
+    }
+    if parts.proposals {
+        out.proposals = differs(hub.store.recent_proposals(50).await?, &mut sent.proposals, all)?;
+    }
+    if parts.instances {
+        let mut now = std::collections::HashMap::new();
+        for inst in hub.store.all_instances(200).await? {
+            let v = serde_json::to_value(&inst).map_err(|e| {
+                crate::api::ApiError(axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("encoding a chat: {e}"))
+            })?;
+            if all || sent.instances.get(&inst.name) != Some(&v) {
+                out.instances.push(inst.clone());
+            }
+            now.insert(inst.name, v);
+        }
+        out.removed_instances = sent.instances.keys().filter(|n| !now.contains_key(*n)).cloned().collect();
+        sent.instances = now;
+    }
+    Ok(out)
+}
+
+impl StatePatch {
+    fn is_empty(&self) -> bool {
+        self.status.is_none()
+            && self.usage.is_none()
+            && self.dialogs.is_none()
+            && self.apps.is_none()
+            && self.proposals.is_none()
+            && self.instances.is_empty()
+            && self.removed_instances.is_empty()
+            && !self.all_instances
+    }
+}
+
 /// The chat a connection follows.
 struct Watched {
     instance: String,
@@ -197,7 +337,7 @@ impl Watched {
 
 /// The watched chat's session after what the client has; moves `after` on.
 async fn session(hub: &Hub, w: &mut Watched) -> Result<Option<ServerMessage>, crate::api::ApiError> {
-    let Some(inst) = hub.store.resolve_instance(&w.instance).await.map_err(crate::hub::HubError::from)? else {
+    let Some(inst) = hub.store.resolve_instance(&w.instance).await? else {
         return Ok(None);
     };
     let window = Window { last: Some(SESSION_PAGE), after: w.after.as_deref(), before: None };
@@ -220,12 +360,37 @@ async fn serve(hub: Arc<Hub>, mut socket: WebSocket, device: bool) -> Result<(),
     if let Err(why) = authenticate(&hub, &mut socket, device).await? {
         return reject(&mut socket, why).await;
     }
-    // Subscribe before saying ready, so nothing emitted after `ready` is missed.
+    // Subscribe before taking the state, so no change after it is missed.
     let mut rx = hub.live.subscribe();
-    send(&mut socket, &ServerMessage::Ready).await?;
+    let mut sent = Sent::default();
+    let state = match patch(&hub, &mut sent, Parts::ALL, true).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "could not take the state for a live connection");
+            return reject(&mut socket, format!("the hub could not read its state: {e}")).await;
+        }
+    };
+    send(&mut socket, &ServerMessage::Ready { state: Box::new(state) }).await?;
     let mut watched: Option<Watched> = None;
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.tick().await;
+    let mut every = tokio::time::interval(STATE_EVERY);
+    every.tick().await;
+    // Parts to recompute, when, and the refreshes waiting for it.
+    let mut dirty = Parts::default();
+    let mut state_due: Option<tokio::time::Instant> = None;
+    let mut refreshes: Vec<u64> = Vec::new();
+    let mark = |dirty: &mut Parts, more: Parts, due: &mut Option<tokio::time::Instant>, delay: Duration| {
+        let Parts { status, usage, instances, dialogs, apps, proposals } = more;
+        dirty.status |= status;
+        dirty.usage |= usage;
+        dirty.instances |= instances;
+        dirty.dialogs |= dialogs;
+        dirty.apps |= apps;
+        dirty.proposals |= proposals;
+        let at = tokio::time::Instant::now() + delay;
+        *due = Some(due.map_or(at, |d| d.min(at)));
+    };
     loop {
         let due = watched.as_ref().and_then(|w| w.due);
         tokio::select! {
@@ -235,20 +400,54 @@ async fn serve(hub: Arc<Hub>, mut socket: WebSocket, device: bool) -> Result<(),
                         if let Some(w) = watched.as_mut().filter(|w| event.to.as_deref() == Some(w.instance.as_str())) {
                             w.changed();
                         }
+                        mark(&mut dirty, Parts::after_event(&event.kind), &mut state_due, STATE_DELAY);
                         ServerMessage::Event { event }
                     }
                     Ok(Live::Instance { instance, status }) => {
                         if let Some(w) = watched.as_mut().filter(|w| w.instance == instance) {
                             w.changed();
                         }
+                        let parts = Parts { status: true, usage: true, instances: true, ..Parts::default() };
+                        mark(&mut dirty, parts, &mut state_due, STATE_DELAY);
                         ServerMessage::Instance { instance, status }
                     }
-                    Ok(Live::Dialog { notice }) => ServerMessage::Dialog { notice },
-                    Ok(Live::Proposal { proposal }) => ServerMessage::Proposal { proposal },
-                    Err(RecvError::Lagged(missed)) => ServerMessage::Lagged { missed },
+                    Ok(Live::Dialog { .. }) => {
+                        let parts = Parts { status: true, dialogs: true, ..Parts::default() };
+                        mark(&mut dirty, parts, &mut state_due, STATE_DELAY);
+                        continue;
+                    }
+                    Ok(Live::Proposal { proposal }) => {
+                        mark(&mut dirty, Parts { status: true, ..Parts::default() }, &mut state_due, STATE_DELAY);
+                        ServerMessage::Proposal { proposal }
+                    }
+                    // Missed changes: compare everything.
+                    Err(RecvError::Lagged(_)) => {
+                        mark(&mut dirty, Parts::ALL, &mut state_due, Duration::ZERO);
+                        continue;
+                    }
                     Err(RecvError::Closed) => return Ok(()),
                 };
                 send(&mut socket, &msg).await?;
+            }
+            _ = every.tick() => {
+                let parts = Parts { status: true, usage: true, instances: true, dialogs: true, apps: true, ..Parts::default() };
+                mark(&mut dirty, parts, &mut state_due, Duration::ZERO);
+            }
+            _ = tokio::time::sleep_until(state_due.unwrap_or_else(tokio::time::Instant::now)), if state_due.is_some() => {
+                state_due = None;
+                let parts = std::mem::take(&mut dirty);
+                match patch(&hub, &mut sent, parts, false).await {
+                    Ok(mut p) => {
+                        p.refresh = refreshes.drain(..).max();
+                        if !p.is_empty() || p.refresh.is_some() {
+                            send(&mut socket, &ServerMessage::State { patch: Box::new(p) }).await?;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "could not compute the state for a live connection");
+                        send(&mut socket, &ServerMessage::Error { error: format!("the hub could not read its state: {e}") }).await?;
+                    }
+                }
             }
             pi = next_pi(&mut watched) => {
                 let Some(w) = watched.as_mut() else { continue };
@@ -292,6 +491,10 @@ async fn serve(hub: Arc<Hub>, mut socket: WebSocket, device: bool) -> Result<(),
                             // A client with items gets what came after them right away.
                             let due = after.is_some().then(tokio::time::Instant::now);
                             watched = Some(Watched { instance, after, pi, due });
+                        }
+                        Ok(ClientMessage::Refresh { id }) => {
+                            refreshes.push(id);
+                            mark(&mut dirty, Parts::ALL, &mut state_due, Duration::ZERO);
                         }
                         Ok(ClientMessage::Auth { .. }) => {}
                         Err(e) => send(&mut socket, &ServerMessage::Error { error: format!("invalid message: {e}") }).await?,

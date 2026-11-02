@@ -18,8 +18,8 @@ const toggling = ref(false);
 const connection = computed(() =>
   state.connection === "live"
     ? { label: "Live", color: "success" as const, help: "Changes stream in over the live connection." }
-    : state.connection === "polling"
-      ? { label: "Polling", color: "warning" as const, help: "The live connection is down; refreshing every few seconds while reconnecting." }
+    : state.connection === "offline"
+      ? { label: "Reconnecting", color: "warning" as const, help: "The live connection is down: what is shown may be out of date until it is back." }
       : { label: "Connecting", color: "neutral" as const, help: "Connecting to the hub." },
 );
 

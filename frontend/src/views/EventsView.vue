@@ -95,7 +95,7 @@ function onSelect(_e: Event, row: TableRow<BotlerEvent>) {
       <UBadge
         :color="state.connection === 'live' ? 'success' : 'warning'"
         variant="subtle"
-        :label="state.connection === 'live' ? 'live' : 'refreshing'"
+        :label="state.connection === 'live' ? 'live' : 'reconnecting'"
       />
     </template>
     <template #toolbar>
