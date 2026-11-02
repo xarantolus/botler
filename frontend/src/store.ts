@@ -246,26 +246,57 @@ export function refreshSession(name: string, mode: "new" | "latest" | "all" = "n
         params: { instance: name },
         query: { file: sessionFile ?? undefined, last: mode === "all" ? undefined : SESSION_PAGE, after },
       });
-      // The user moved on, or a later refresh was sent (an answer may overtake an older one).
+      // The user moved on, or a later refresh or push came (an answer may overtake an older one).
       if (sessionFor !== name || seq !== sessionSeq) return;
-      // New items continue what is shown only if that still ends where this asked from.
-      const prev = state.session;
-      if (after !== undefined && s.continues && prev && lastId(prev.items) === after) {
-        state.session = { ...s, items: [...prev.items, ...s.items], earlier: prev.earlier };
-      } else state.session = s;
-      // The session has the streamed message now: show it from there.
-      if (persisted(state.session.items, state.streaming)) state.streaming = noLive();
-      state.sessionError = null;
-      // The fetch is newer than any earlier live status.
-      const now = currentStatus(s.phase, null);
-      if (now) state.liveStatus[s.instance.name] = now;
-      else delete state.liveStatus[s.instance.name];
-      trackWake(s.instance.name, s.phase?.phase === "waking" || s.instance.state === "starting");
+      if (!applySession(after ?? null, s)) return;
+      sessionLoaded?.(name, shownLast(name));
     } catch (e) {
       if (sessionFor === name) state.sessionError = e instanceof Error ? e.message : String(e);
       throw e;
     }
   });
+}
+
+/** Show `s`: the items after item `after` (null: a page to show instead). False when they do
+ * not continue what is shown (it moved on meanwhile): nothing changes. */
+function applySession(after: string | null, s: SessionView): boolean {
+  const prev = state.session;
+  if (after !== null && s.continues) {
+    if (!prev || prev.instance.name !== s.instance.name || lastId(prev.items) !== after) return false;
+    state.session = { ...s, items: [...prev.items, ...s.items], earlier: prev.earlier };
+  } else state.session = s;
+  // The session has the streamed message now: show it from there.
+  if (persisted(state.session.items, state.streaming)) state.streaming = noLive();
+  state.sessionError = null;
+  // The session is newer than any earlier live status.
+  const now = currentStatus(s.phase, null);
+  if (now) state.liveStatus[s.instance.name] = now;
+  else delete state.liveStatus[s.instance.name];
+  trackWake(s.instance.name, s.phase?.phase === "waking" || s.instance.state === "starting");
+  return true;
+}
+
+/** Told when a chat's items were loaded over HTTP, with its last item (the live stream then
+ * follows from there). */
+let sessionLoaded: ((name: string, last: string | null) => void) | null = null;
+export function onSessionLoaded(f: typeof sessionLoaded) {
+  sessionLoaded = f;
+}
+
+/** The live stream's update of the chat on screen (`session`): applied when it continues what is
+ * shown, and newer than any answer still on its way. False when it does not continue it (the
+ * stream should follow from what is shown instead). */
+export function pushedSession(after: string | null, s: SessionView): boolean {
+  // Another chat, or an older session file of it on screen: not for what is shown.
+  if (sessionFor !== s.instance.name || sessionFile !== null) return true;
+  if (!applySession(after, s)) return false;
+  sessionSeq++;
+  return true;
+}
+
+/** The last item of the chat on screen, if any. */
+export function shownLast(name: string): string | null {
+  return state.session?.instance.name === name ? (lastId(state.session.items) ?? null) : null;
 }
 
 export function clearSession() {

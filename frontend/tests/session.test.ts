@@ -17,7 +17,7 @@ vi.mock("../src/api/client", async (orig) => ({
   ),
 }));
 
-import { refreshSession, showEarlier, state } from "../src/store";
+import { pushedSession, refreshSession, showEarlier, state } from "../src/store";
 
 const item = (id: string) => ({ kind: "note", id, at: null, text: id, from: "x", provenance: "trusted", event_kind: "message", delivery: "d", event: "e", local_time: null, gap: null });
 const view = (ids: string[], earlier: number, continues: boolean) => ({
@@ -75,5 +75,16 @@ describe("session pages", () => {
     await answer(1, view(["n3"], 9, true));
     await answer(0, view(["n3"], 9, true));
     expect(ids()).toEqual(["n1", "n2", "n3"]);
+
+    // Pushed: appended when it continues what is shown, refused when it does not, and newer than
+    // an answer still on its way (which is then dropped).
+    void refreshSession("c");
+    expect(pushedSession("n3", view(["n4"], 9, true) as never)).toBe(true);
+    expect(pushedSession("n3", view(["n4"], 9, true) as never)).toBe(false);
+    await answer(0, view(["n4"], 9, true));
+    expect(ids()).toEqual(["n1", "n2", "n3", "n4"]);
+    // A latest page replaces.
+    expect(pushedSession(null, view(["m"], 20, false) as never)).toBe(true);
+    expect([ids(), state.session?.earlier]).toEqual([["m"], 20]);
   });
 });

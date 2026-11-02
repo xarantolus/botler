@@ -82,7 +82,6 @@ pub struct Applied {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Live {
     Event { event: Event },
-    Pi { instance: String, event: serde_json::Value },
     Instance { instance: String, status: crate::phase::AgentStatus },
     Dialog { notice: crate::notify::DialogNotice },
     Proposal { proposal: Box<botler_store::Proposal> },
@@ -111,6 +110,9 @@ pub struct Hub {
     /// Woken when services may need starting or stopping (apply, resume, a service exit).
     pub reconcile_notify: Notify,
     pub live: broadcast::Sender<Live>,
+    /// Each watched chat's pi events (streaming text, tool calls), apart from `live`: they are
+    /// many, and only a viewer of that chat wants them.
+    pi: std::sync::Mutex<std::collections::HashMap<String, broadcast::Sender<serde_json::Value>>>,
     pub agents: crate::agents::Agents,
     /// Serialises image builds so the same tag is never built twice concurrently.
     pub build_lock: Mutex<()>,
@@ -131,6 +133,23 @@ impl std::fmt::Debug for Hub {
 }
 
 impl Hub {
+    /// Hand a pi event of `instance` to its viewers, if it has any.
+    pub fn send_pi(&self, instance: &str, event: impl FnOnce() -> serde_json::Value) {
+        let mut pi = self.pi.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(tx) = pi.get(instance)
+            && tx.send(event()).is_err()
+        {
+            // Its last viewer left.
+            pi.remove(instance);
+        }
+    }
+
+    /// Follow `instance`'s pi events.
+    pub fn watch_pi(&self, instance: &str) -> broadcast::Receiver<serde_json::Value> {
+        let mut pi = self.pi.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        pi.entry(instance.to_string()).or_insert_with(|| broadcast::channel(512).0).subscribe()
+    }
+
     /// Assemble a hub over an existing data directory whose repo already has a main branch.
     pub async fn open(paths: Paths, config: HubConfig, containers: Arc<dyn Containers>) -> Result<Arc<Self>> {
         let stale_worktrees = crate::migrate::layout(&paths)?;
@@ -166,6 +185,7 @@ impl Hub {
             schedule_notify: Notify::new(),
             reconcile_notify: Notify::new(),
             live,
+            pi: Default::default(),
             agents: crate::agents::Agents::default(),
             build_lock: Mutex::new(()),
             home_lock: Mutex::new(()),

@@ -4,8 +4,11 @@
 //! the client authenticates with its first message, `{"type": "auth", "token": "..."}` (an empty
 //! token for a signed-in device, whose cookie came with the upgrade from the web app's origin), within
 //! [`AUTH_TIMEOUT`]. The server answers `{"kind": "ready"}` (from then on every change arrives)
-//! or `{"kind": "error"}` and closes. `{"type": "watch", "instance": "..."}` selects the one chat
-//! whose pi events (streaming text, tool calls) the client wants; everything else is broadcast.
+//! or `{"kind": "error"}` and closes. `{"type": "watch", "instance": "...", "after": "<item id>"}`
+//! selects the one chat on screen: its pi events (streaming text, tool calls) come through, and
+//! whenever its session changes, `session` brings the items after the last one the client has
+//! (`after` says which, so a client whose last item differs asks again from its own). Everything
+//! else is broadcast.
 //!
 //! Messages are [`ClientMessage`] and [`ServerMessage`]; the web app's types are generated
 //! from them.
@@ -27,11 +30,19 @@ use crate::auth::Principal;
 use crate::hub::{Hub, Live};
 use crate::notify::DialogNotice;
 use crate::phase::AgentStatus;
+use crate::sessions::Window;
 
 /// How long a new connection may take to authenticate.
 pub const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 /// Keep-alive pings, so idle connections survive proxies.
 const PING_EVERY: Duration = Duration::from_secs(30);
+/// Changes to the watched chat within this long go out as one `session` message.
+const SESSION_DELAY: Duration = Duration::from_millis(250);
+/// Items a `session` message carries when it cannot continue the client's (the latest ones).
+const SESSION_PAGE: usize = 50;
+/// The pi events after which the session file has new entries (or the chat's state changed).
+const SESSION_CHANGES: &[&str] =
+    &["message_end", "tool_execution_end", "agent_start", "agent_end", "agent_settled", "compaction_end"];
 /// Close code for a failed authentication (application range 4000–4999).
 pub const CLOSE_UNAUTHORIZED: u16 = 4401;
 
@@ -41,8 +52,14 @@ pub const CLOSE_UNAUTHORIZED: u16 = 4401;
 pub enum ClientMessage {
     /// Must be the first message.
     Auth { token: String },
-    /// Receive pi events for this chat (or none).
-    Watch { instance: Option<String> },
+    /// Follow this chat (or none): its pi events, and its session's items after `after` (the
+    /// last item the client has; without it, the latest page once something changes).
+    Watch {
+        instance: Option<String>,
+        #[serde(default)]
+        #[ts(optional)]
+        after: Option<String>,
+    },
 }
 
 /// Server to client.
@@ -63,6 +80,9 @@ pub enum ServerMessage {
     Dialog { notice: DialogNotice },
     /// A proposal moved (stage, status, decision).
     Proposal { proposal: Box<Proposal> },
+    /// The watched chat's session changed: its items after `after` (`view.continues`), or its
+    /// latest page (`after` null: replace what is shown).
+    Session { after: Option<String>, view: Box<crate::wire::SessionView> },
     /// A raw pi RPC event of the watched chat (`message_update`, `tool_execution_end`, ...).
     Pi {
         instance: String,
@@ -159,6 +179,43 @@ async fn authenticate(hub: &Hub, socket: &mut WebSocket, device: bool) -> Result
     })
 }
 
+/// The chat a connection follows.
+struct Watched {
+    instance: String,
+    /// The last item the client has.
+    after: Option<String>,
+    pi: tokio::sync::broadcast::Receiver<serde_json::Value>,
+    /// When to send the session's new items.
+    due: Option<tokio::time::Instant>,
+}
+
+impl Watched {
+    fn changed(&mut self) {
+        self.due.get_or_insert_with(|| tokio::time::Instant::now() + SESSION_DELAY);
+    }
+}
+
+/// The watched chat's session after what the client has; moves `after` on.
+async fn session(hub: &Hub, w: &mut Watched) -> Result<Option<ServerMessage>, crate::api::ApiError> {
+    let Some(inst) = hub.store.resolve_instance(&w.instance).await.map_err(crate::hub::HubError::from)? else {
+        return Ok(None);
+    };
+    let window = Window { last: Some(SESSION_PAGE), after: w.after.as_deref(), before: None };
+    let view = crate::api::session_view(hub, inst, None, window).await?;
+    let after = w.after.clone().filter(|_| view.continues);
+    if let Some(last) = view.items.last() {
+        w.after = Some(last.id().to_string());
+    }
+    Ok(Some(ServerMessage::Session { after, view: Box::new(view) }))
+}
+
+async fn next_pi(w: &mut Option<Watched>) -> Result<serde_json::Value, RecvError> {
+    match w {
+        Some(w) => w.pi.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
 async fn serve(hub: Arc<Hub>, mut socket: WebSocket, device: bool) -> Result<(), LiveError> {
     if let Err(why) = authenticate(&hub, &mut socket, device).await? {
         return reject(&mut socket, why).await;
@@ -166,34 +223,76 @@ async fn serve(hub: Arc<Hub>, mut socket: WebSocket, device: bool) -> Result<(),
     // Subscribe before saying ready, so nothing emitted after `ready` is missed.
     let mut rx = hub.live.subscribe();
     send(&mut socket, &ServerMessage::Ready).await?;
-    let mut watched: Option<String> = None;
+    let mut watched: Option<Watched> = None;
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.tick().await;
     loop {
+        let due = watched.as_ref().and_then(|w| w.due);
         tokio::select! {
             change = rx.recv() => {
                 let msg = match change {
-                    Ok(Live::Event { event }) => ServerMessage::Event { event },
-                    Ok(Live::Instance { instance, status }) => ServerMessage::Instance { instance, status },
+                    Ok(Live::Event { event }) => {
+                        if let Some(w) = watched.as_mut().filter(|w| event.to.as_deref() == Some(w.instance.as_str())) {
+                            w.changed();
+                        }
+                        ServerMessage::Event { event }
+                    }
+                    Ok(Live::Instance { instance, status }) => {
+                        if let Some(w) = watched.as_mut().filter(|w| w.instance == instance) {
+                            w.changed();
+                        }
+                        ServerMessage::Instance { instance, status }
+                    }
                     Ok(Live::Dialog { notice }) => ServerMessage::Dialog { notice },
                     Ok(Live::Proposal { proposal }) => ServerMessage::Proposal { proposal },
-                    Ok(Live::Pi { instance, event }) => {
-                        if watched.as_deref() != Some(instance.as_str()) {
-                            continue;
-                        }
-                        ServerMessage::Pi { instance, event }
-                    }
                     Err(RecvError::Lagged(missed)) => ServerMessage::Lagged { missed },
                     Err(RecvError::Closed) => return Ok(()),
                 };
                 send(&mut socket, &msg).await?;
+            }
+            pi = next_pi(&mut watched) => {
+                let Some(w) = watched.as_mut() else { continue };
+                match pi {
+                    Ok(event) => {
+                        if event.get("type").and_then(serde_json::Value::as_str).is_some_and(|t| SESSION_CHANGES.contains(&t)) {
+                            w.changed();
+                        }
+                        let instance = w.instance.clone();
+                        send(&mut socket, &ServerMessage::Pi { instance, event }).await?;
+                    }
+                    // Streamed text was missed: the session brings what was written.
+                    Err(RecvError::Lagged(_)) => w.changed(),
+                    Err(RecvError::Closed) => w.pi = hub.watch_pi(&w.instance),
+                }
+            }
+            _ = tokio::time::sleep_until(due.unwrap_or_else(tokio::time::Instant::now)), if due.is_some() => {
+                let Some(w) = watched.as_mut() else { continue };
+                w.due = None;
+                match session(&hub, w).await {
+                    Ok(Some(msg)) => send(&mut socket, &msg).await?,
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::error!(chat = %w.instance, error = %e, "could not read the watched chat's session");
+                        send(&mut socket, &ServerMessage::Error { error: format!("reading {}: {e}", w.instance) }).await?;
+                    }
+                }
             }
             incoming = socket.recv() => {
                 match incoming {
                     None | Some(Ok(Message::Close(_))) => return Ok(()),
                     Some(Err(e)) => return Err(e.into()),
                     Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientMessage>(&text) {
-                        Ok(ClientMessage::Watch { instance }) => watched = instance,
+                        Ok(ClientMessage::Watch { instance: None, .. }) => watched = None,
+                        Ok(ClientMessage::Watch { instance: Some(instance), after }) => {
+                            // The same chat keeps its pi stream (nothing streamed is missed).
+                            let pi = match watched.take() {
+                                Some(w) if w.instance == instance => w.pi,
+                                _ => hub.watch_pi(&instance),
+                            };
+                            // A client with items gets what came after them right away.
+                            let due = after.is_some().then(tokio::time::Instant::now);
+                            watched = Some(Watched { instance, after, pi, due });
+                        }
                         Ok(ClientMessage::Auth { .. }) => {}
                         Err(e) => send(&mut socket, &ServerMessage::Error { error: format!("invalid message: {e}") }).await?,
                     },

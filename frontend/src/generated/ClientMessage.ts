@@ -3,4 +3,4 @@
 /**
  * Client to server.
  */
-export type ClientMessage = { "type": "auth", token: string, } | { "type": "watch", instance: string | null, };
+export type ClientMessage = { "type": "auth", token: string, } | { "type": "watch", instance: string | null, after?: string, };

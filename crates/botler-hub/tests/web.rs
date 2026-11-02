@@ -131,21 +131,54 @@ async fn live_streams_emitted_events() {
     assert_eq!(m["event"]["id"], ev.id.to_string());
     assert_eq!(m["event"]["type"], "test.ping");
 
-    // Pi events reach only a client watching that chat.
-    ws.send(Message::text(json!({ "type": "watch", "instance": "main" }).to_string())).await.unwrap();
-    // The watch message is processed before the next broadcast only once the server has read it.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    e.hub
-        .live
-        .send(botler_hub::hub::Live::Pi { instance: "other".into(), event: json!({ "type": "agent_start" }) })
+    // Pi events reach only a client watching that chat, and its session follows: the items
+    // after the last one the client has, saying which that was.
+    e.hub.store.set_secret(&e.hub.secret_key, "OPENROUTER_API_KEY", "sk").await.unwrap();
+    let hi = Event::new(botler_core::event::kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+        .to("botler")
+        .payload(json!({"text": "hi"}));
+    e.hub.emit(hi).await.unwrap();
+    e.route().await;
+    let file = e.hub.store.instance("botler").await.unwrap().session_file;
+    let dir = e.hub.paths.sessions("botler");
+    std::fs::create_dir_all(&dir).unwrap();
+    let entry = |id: &str, parent: Option<&str>, role: &str| {
+        format!(
+            "{}\n",
+            json!({"type": "message", "id": id, "parentId": parent, "timestamp": "2026-10-30T10:00:00Z",
+                   "message": {"role": role, "content": [{"type": "text", "text": id}]}})
+        )
+    };
+    let path = dir.join(file);
+    std::fs::write(&path, entry("u1", None, "user") + &entry("a1", Some("u1"), "assistant")).unwrap();
+    let session = |m: &Value| m["kind"] == "session";
+    let next_session = async |ws: &mut _| loop {
+        let m = next_json(ws).await;
+        if session(&m) {
+            return m;
+        }
+    };
+    // An item the client has that is not in the session: the latest page, to replace.
+    ws.send(Message::text(json!({ "type": "watch", "instance": "botler", "after": "gone" }).to_string()))
+        .await
         .unwrap();
-    e.hub
-        .live
-        .send(botler_hub::hub::Live::Pi { instance: "main".into(), event: json!({ "type": "agent_end" }) })
-        .unwrap();
+    let m = next_session(&mut ws).await;
+    assert_eq!((m["after"].clone(), m["view"]["continues"].clone()), (Value::Null, json!(false)), "{m}");
+    let last = m["view"]["items"].as_array().unwrap().last().map(|i| i["id"].clone()).unwrap_or(Value::Null);
+    assert_eq!(last, "a1");
+    let more = std::fs::read_to_string(&path).unwrap() + &entry("u2", Some("a1"), "user");
+    std::fs::write(&path, more).unwrap();
+    e.hub.send_pi("other", || json!({ "type": "agent_start" }));
+    e.hub.send_pi("botler", || json!({ "type": "agent_end" }));
     let m = next_json(&mut ws).await;
-    assert_eq!((m["kind"].as_str(), m["instance"].as_str()), (Some("pi"), Some("main")));
+    assert_eq!((m["kind"].as_str(), m["instance"].as_str()), (Some("pi"), Some("botler")), "{m}");
     assert_eq!(m["event"]["type"], "agent_end");
+    let m = next_session(&mut ws).await;
+    assert_eq!((m["after"].clone(), m["view"]["continues"].clone()), (last, json!(true)), "{m}");
+    assert_eq!(
+        m["view"]["items"].as_array().unwrap().iter().map(|i| i["id"].clone()).collect::<Vec<_>>(),
+        [json!("u2")]
+    );
 }
 
 /// While the agent works, a queued message waits in the hub (listed in the session, cancellable)

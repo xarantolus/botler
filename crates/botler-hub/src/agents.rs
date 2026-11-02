@@ -922,10 +922,7 @@ fn list_files(dir: &Path, ext: &str) -> Vec<String> {
 /// Consume pi's events: live view, busy tracking, usage and budgets.
 async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<PiEvent>) {
     while let Some(ev) = events.recv().await {
-        let event = crate::live::without_image_data(ev.raw.clone());
-        if hub.live.send(Live::Pi { instance: agent.instance.clone(), event }).is_err() {
-            tracing::trace!("no live viewers");
-        }
+        hub.send_pi(&agent.instance, || crate::live::without_image_data(ev.raw.clone()));
         match &ev.kind {
             PiEventKind::AgentStart => {
                 agent.busy.store(true, Ordering::SeqCst);

@@ -170,7 +170,14 @@ fn bearer(h: &HeaderMap) -> Option<String> {
 }
 
 /// Errors as JSON with a fitting status code.
-struct ApiError(StatusCode, String);
+#[derive(Debug)]
+pub struct ApiError(pub StatusCode, pub String);
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.1, self.0)
+    }
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -694,6 +701,18 @@ async fn session(
         .resolve_instance(&instance)
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no chat {instance}")))?;
+    let window = crate::sessions::Window { last: q.last, after: q.after.as_deref(), before: q.before.as_deref() };
+    Ok(Json(session_view(&hub, inst, q.file.as_deref(), window).await?))
+}
+
+/// A chat's session (`window` of its items) with what the web app shows around it; the live
+/// stream pushes the same for the chat on screen.
+pub async fn session_view(
+    hub: &Hub,
+    inst: botler_store::Instance,
+    file: Option<&str>,
+    window: crate::sessions::Window<'_>,
+) -> Result<SessionView, ApiError> {
     let busy = hub.agents.get(&inst.name).await.is_some_and(|a| a.busy());
     let deliveries = hub.store.pending_deliveries(&inst.name).await?;
     let pending = deliveries.len();
@@ -707,14 +726,13 @@ async fn session(
         }
     }
     let phase = hub.agents.phase(&inst.name).await;
-    let window = crate::sessions::Window { last: q.last, after: q.after.as_deref(), before: q.before.as_deref() };
-    let page = crate::sessions::read_page(&hub, &inst.name, q.file.as_deref(), window).await?;
-    let sessions = crate::sessions::files(&hub, &inst.name).await?;
-    let file = q.file.unwrap_or_else(|| inst.session_file.clone());
+    let page = crate::sessions::read_page(hub, &inst.name, file, window).await?;
+    let sessions = crate::sessions::files(hub, &inst.name).await?;
+    let file = file.map_or_else(|| inst.session_file.clone(), str::to_string);
     let tool_renders =
         hub.applied().await.defs.tools.values().filter_map(|t| Some((t.pi_name(), t.render.clone()?))).collect();
-    let queued = queued(&hub, &inst.name, &page.delivered).await?;
-    Ok(Json(SessionView {
+    let queued = queued(hub, &inst.name, &page.delivered).await?;
+    Ok(SessionView {
         instance: inst,
         busy,
         pending,
@@ -727,7 +745,7 @@ async fn session(
         sessions,
         file,
         handover,
-    }))
+    })
 }
 
 #[derive(Deserialize, ts_rs::TS)]

@@ -6,6 +6,8 @@ import type { ClientMessage, ServerMessage } from "./generated";
 import { noLive } from "./lib/transcript";
 import {
   addEvent,
+  onSessionLoaded,
+  pushedSession,
   refreshAll,
   refreshDialogs,
   refreshEvents,
@@ -13,6 +15,7 @@ import {
   refreshSession,
   refreshStatus,
   refreshUsage,
+  shownLast,
   state,
   trackWake,
   upsertProposal,
@@ -41,13 +44,22 @@ function send(msg: ClientMessage) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
 }
 
-/** Follow one chat's pi events (or none). */
+/** Follow one chat (or none): its pi events, and its session's new items once its first page
+ * is loaded (`onSessionLoaded`). */
 export function watch(instance: string | null) {
   watched = instance;
   state.streaming = noLive();
   state.compacting = null;
   send({ type: "watch", instance });
 }
+
+/** Have the stream continue the chat on screen from its last item. */
+function follow() {
+  if (watched) send({ type: "watch", instance: watched, after: shownLast(watched) ?? undefined });
+}
+onSessionLoaded((name) => {
+  if (name === watched) follow();
+});
 
 function startPolling() {
   stopPolling();
@@ -60,7 +72,6 @@ function startPolling() {
   if (state.connection === "live") {
     // Slow refresh for what the stream does not carry (spend, queued deliveries).
     every(30_000, () => Promise.all([refreshStatus(), refreshUsage(), refreshInstances()]));
-    every(15_000, () => watched && refreshSession(watched));
   } else {
     every(2_500, () => watched && refreshSession(watched));
     every(4_000, () => Promise.all([refreshStatus(), refreshInstances(), refreshDialogs(), refreshEvents()]));
@@ -95,7 +106,6 @@ export function onPi(instance: string, ev: Record<string, unknown>) {
   }
   if (type === "compaction_end") {
     state.compacting = null;
-    soon("session", () => refreshSession(instance));
     return;
   }
   if (type === "message_update") {
@@ -111,16 +121,7 @@ export function onPi(instance: string, ev: Record<string, unknown>) {
     state.streaming.ended = true;
     if (typeof message.timestamp === "number") state.streaming.ts ??= message.timestamp;
   }
-  if (
-    type === "message_end" ||
-    type === "agent_start" ||
-    type === "agent_end" ||
-    type === "agent_settled" ||
-    type === "tool_execution_start" ||
-    type === "tool_execution_end"
-  ) {
-    soon("session", () => refreshSession(instance));
-  }
+  // What pi writes to the session arrives as `session`.
 }
 
 function onMessage(msg: ServerMessage) {
@@ -128,7 +129,7 @@ function onMessage(msg: ServerMessage) {
     case "ready":
       backoff = 1000;
       setConnection("live");
-      if (watched) send({ type: "watch", instance: watched });
+      follow();
       // Catch up on whatever happened while disconnected.
       void refreshAll();
       return;
@@ -148,16 +149,12 @@ function onMessage(msg: ServerMessage) {
       }
       // New chats, titles and activity show up in the list.
       soon("instances", refreshInstances, 1000);
-      if (watched && (msg.event.to === watched || msg.event.source.kind === "user")) {
-        soon("session", () => watched && refreshSession(watched), 500);
-      }
       return;
     }
     case "instance":
       state.liveStatus[msg.instance] = msg.status;
       trackWake(msg.instance, msg.status.status === "waking");
       soon("instances", refreshInstances, 500);
-      if (msg.instance === watched && msg.status.status !== "waking") soon("session", () => refreshSession(msg.instance));
       return;
     case "dialog":
       soon("dialogs", refreshDialogs, 100);
@@ -165,6 +162,10 @@ function onMessage(msg: ServerMessage) {
       return;
     case "pi":
       onPi(msg.instance, msg.event);
+      return;
+    case "session":
+      // Not continuing what is shown (an answer overtook it, or one was missed): follow from it.
+      if (!pushedSession(msg.after, msg.view)) follow();
       return;
     case "proposal":
       upsertProposal(msg.proposal);
@@ -206,7 +207,7 @@ function connect() {
 function wakeUp() {
   if (stopped || document.hidden) return;
   if (socket) {
-    if (watched) void refreshSession(watched);
+    follow();
     return;
   }
   window.clearTimeout(reconnectTimer);
