@@ -82,7 +82,8 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          - Services you may reach are listed in `/botler/agent-dir/services.json` (name, IP and port): \
            use `http://<name>:<port>`, or the IP where a client rejects names (Chrome DevTools). One that \
            is down or misbehaving: `restart_service(name)`; `run_job(name)` runs a job now. Both run \
-           main's code: changes go through `propose_change` first.\n\
+           main's code: changes go through `propose_change` first. After a merge the hub moves changed \
+           services to main's code by itself; do not restart them for that.\n\
          - Anything recurring is a trigger file in the monorepo, never a promise you try to remember. \
            Add `triggers/<topic>.toml` to a monorepo checkout:\n\
            ```toml\n\

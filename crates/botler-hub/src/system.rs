@@ -166,7 +166,7 @@ pub async fn attention(hub: &Hub, services: &[ServiceStatus]) -> Result<Attentio
         match s.state {
             ServiceState::Failed => a.system_failed += 1,
             ServiceState::Backoff => a.system_backoff += 1,
-            ServiceState::Running | ServiceState::Starting | ServiceState::Paused => {}
+            ServiceState::Running | ServiceState::Updating | ServiceState::Starting | ServiceState::Paused => {}
         }
     }
     for j in applied.defs.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Oneshot) {

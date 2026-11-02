@@ -234,6 +234,7 @@ pub async fn status(hub: &Hub) -> Result<Vec<ServiceStatus>> {
         let state = match last.map(|r| r.status) {
             _ if paused => ServiceState::Paused,
             _ if failed => ServiceState::Failed,
+            Some(RunStatus::Running) if updating(hub, &def.name).await => ServiceState::Updating,
             Some(RunStatus::Running) => ServiceState::Running,
             Some(RunStatus::Failed | RunStatus::Timeout) => ServiceState::Backoff,
             _ => ServiceState::Starting,
@@ -266,25 +267,43 @@ pub async fn status(hub: &Hub) -> Result<Vec<ServiceStatus>> {
     Ok(out)
 }
 
-/// Image tags being built for a changed service (one build each), by hub.
-static PREBUILDS: std::sync::LazyLock<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+/// The image tag being built for a changed service, by `<hub> <service>`, and whether its build
+/// failed (then the old one keeps serving and it is not retried for this tag).
+static PREBUILDS: std::sync::LazyLock<tokio::sync::Mutex<std::collections::HashMap<String, (String, bool)>>> =
     std::sync::LazyLock::new(Default::default);
+
+/// The service runs an older image while the one for the applied code is built; it swaps to it
+/// by itself once built.
+pub async fn updating(hub: &Hub, service: &str) -> bool {
+    PREBUILDS.lock().await.get(&format!("{} {service}", hub.id)).is_some_and(|(_, failed)| !failed)
+}
 
 /// Build the image of `run`'s service at `commit` in the background, then reconcile again. A
 /// failed build is reported and not retried for this tag: the old one keeps serving.
 async fn prebuild(hub: &Arc<Hub>, run: &Run, commit: &str, tag: String) {
-    let key = format!("{} {tag}", hub.id);
-    if !PREBUILDS.lock().await.insert(key.clone()) {
-        return;
+    let key = format!("{} {}", hub.id, run.runnable);
+    {
+        let mut builds = PREBUILDS.lock().await;
+        if builds.get(&key).is_some_and(|(t, _)| *t == tag) {
+            return;
+        }
+        builds.insert(key.clone(), (tag.clone(), false));
     }
     tracing::info!(service = %run.runnable, %tag, "building the changed service's image; the running one serves until then");
     let (hub, run, commit) = (hub.clone(), run.clone(), commit.to_string());
     tokio::spawn(async move {
-        match images::ensure_job_image(&hub, &run.runnable, &commit).await {
-            Ok(_) => {
-                PREBUILDS.lock().await.remove(&key);
-                hub.reconcile_notify.notify_one();
+        let built = images::ensure_job_image(&hub, &run.runnable, &commit).await;
+        {
+            let mut builds = PREBUILDS.lock().await;
+            if builds.get(&key).is_some_and(|(t, _)| *t == tag) {
+                match built {
+                    Ok(_) => builds.remove(&key),
+                    Err(_) => builds.insert(key, (tag, true)),
+                };
             }
+        }
+        match built {
+            Ok(_) => hub.reconcile_notify.notify_one(),
             Err(e) => {
                 let why = format!("its new image did not build, so it keeps running the old one: {e}");
                 if let Err(e2) = failures::report(&hub, jobs::failure(&run, "build", None, why)).await {

@@ -4,4 +4,8 @@ export type ServiceRestarted = {
 /**
  * The run that was stopped, if one was running.
  */
-stopped: string | null, };
+stopped: string | null, 
+/**
+ * Why it was not restarted: it is already being moved to main's code.
+ */
+note: string | null, };

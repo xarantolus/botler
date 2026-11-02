@@ -356,12 +356,23 @@ async fn a_changed_service_keeps_serving_while_its_new_image_builds() {
     services::reconcile(&e.hub).await.unwrap();
     assert_eq!(current(&e).await.id, first.id, "the old one serves while the new image builds");
     assert_eq!(current(&e).await.status, RunStatus::Running);
+    // Shown as updating, and an agent's restart leaves it to the swap.
+    assert_eq!(services::status(&e.hub).await.unwrap()[0].state, botler_hub::wire::ServiceState::Updating);
+    let agent = ops::Caller {
+        principal: Principal::Agent { instance: "botler".into(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    let out = ops::call(&e.hub, &agent, "restart_service", json!({"service": "app"})).await.unwrap();
+    assert!(out["stopped"].is_null() && out["note"].as_str().unwrap().contains("swaps"), "{out}");
+    assert_eq!(current(&e).await.id, first.id);
     for _ in 0..100 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         services::reconcile(&e.hub).await.unwrap();
         let now = current(&e).await;
         if now.id != first.id {
             assert_eq!(now.status, RunStatus::Running);
+            assert_eq!(services::status(&e.hub).await.unwrap()[0].state, botler_hub::wire::ServiceState::Running);
             return;
         }
     }

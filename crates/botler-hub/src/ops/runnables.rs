@@ -78,11 +78,13 @@ pub struct RestartService {
 pub struct ServiceRestarted {
     /// The run that was stopped, if one was running.
     pub stopped: Option<String>,
+    /// Why it was not restarted: it is already being moved to main's code.
+    pub note: Option<String>,
 }
 
 impl Op for RestartService {
     const NAME: &'static str = "restart_service";
-    const DESCRIPTION: &'static str = "Restart a service (main's code): it is stopped and started again right away, e.g. when it hangs or its tools are missing. Chats that use it reconnect by themselves once it is back.";
+    const DESCRIPTION: &'static str = "Restart a service (main's code): it is stopped and started again right away, e.g. when it hangs or its tools are missing. Chats that use it reconnect by themselves once it is back. Not needed after a merge: the hub moves a service whose code changed to main's code by itself (it keeps serving while its new image builds, then swaps), and leaves one that is doing so alone.";
     const WHO: Who = Who::UserAndAgents;
     type Output = ServiceRestarted;
 
@@ -93,6 +95,11 @@ impl Op for RestartService {
         let applied = hub.applied().await;
         if !applied.defs.jobs.get(&self.service).is_some_and(|j| j.spec.lifetime == Lifetime::Service) {
             return Err(HubError::Undefined { kind: "service", name: self.service }.into());
+        }
+        if crate::services::updating(hub, &self.service).await {
+            let note = "not restarted: its image for main's code is being built, and the hub swaps it to that \
+                        by itself once built (a restart now would only wait for the same build)";
+            return Ok(ServiceRestarted { stopped: None, note: Some(note.into()) });
         }
         let run = hub.store.runs_for(&self.service, 1).await?.into_iter().next();
         let stopped = match run.filter(|r| r.status == RunStatus::Running) {
@@ -107,6 +114,6 @@ impl Op for RestartService {
             None => None,
         };
         hub.reconcile_notify.notify_one();
-        Ok(ServiceRestarted { stopped })
+        Ok(ServiceRestarted { stopped, note: None })
     }
 }

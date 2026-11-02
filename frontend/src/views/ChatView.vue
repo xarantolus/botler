@@ -227,7 +227,9 @@ function showRequest() {
 }
 
 const composer = useTemplateRef<{ focus: () => void }>("composer");
-watch(name, () => void nextTick(() => composer.value?.focus()));
+// Not on touch screens: focusing there pops up the keyboard over the chat.
+const coarse = window.matchMedia("(pointer: coarse)");
+watch(name, () => void nextTick(() => coarse.matches || composer.value?.focus()));
 const loading = computed(() => !!name.value && !session.value && !state.sessionError);
 </script>
 

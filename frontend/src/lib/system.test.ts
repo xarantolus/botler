@@ -45,6 +45,7 @@ describe("states", () => {
   it("colors services and failed runs", () => {
     expect(serviceStateColor("failed")).toBe("error");
     expect(serviceStateColor("backoff")).toBe("warning");
+    expect(serviceStateColor("updating")).toBe("info");
     expect(serviceStateColor("running")).toBe("success");
     expect(lastFailed({ recent_runs: [] })).toBe(false);
     expect(lastFailed({ recent_runs: [{ status: "timeout" }] } as never)).toBe(true);

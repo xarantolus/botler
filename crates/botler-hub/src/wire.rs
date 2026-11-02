@@ -92,6 +92,9 @@ pub struct ServiceStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ServiceState {
     Running,
+    /// Running an older image while the one for main's code is built (after a merge changed it);
+    /// it swaps to it by itself once built.
+    Updating,
     /// About to start (or being started).
     Starting,
     /// Exited; restarted once its backoff is over.

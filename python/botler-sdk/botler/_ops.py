@@ -583,7 +583,7 @@ def run_job(*, job: str) -> dict[str, Any]:
 
 
 def restart_service(*, service: str) -> dict[str, Any]:
-    """Restart a service (main's code): it is stopped and started again right away, e.g. when it hangs or its tools are missing. Chats that use it reconnect by themselves once it is back."""
+    """Restart a service (main's code): it is stopped and started again right away, e.g. when it hangs or its tools are missing. Chats that use it reconnect by themselves once it is back. Not needed after a merge: the hub moves a service whose code changed to main's code by itself (it keeps serving while its new image builds, then swaps), and leaves one that is doing so alone."""
     return call("restart_service", {"service": service})
 
 

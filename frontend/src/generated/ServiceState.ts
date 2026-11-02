@@ -3,4 +3,4 @@
 /**
  * Where a service is in its life, as the reconciler sees it.
  */
-export type ServiceState = "running" | "starting" | "backoff" | "failed" | "paused";
+export type ServiceState = "running" | "updating" | "starting" | "backoff" | "failed" | "paused";
