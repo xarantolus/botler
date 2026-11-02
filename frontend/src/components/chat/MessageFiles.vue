@@ -51,7 +51,23 @@ async function zoom(f: FileRef, e: MouseEvent) {
     const img = thumbs.get(x.path);
     return { src: urls[x.path], msrc: urls[x.path], alt: x.name, width: img?.naturalWidth || 1600, height: img?.naturalHeight || 1200 };
   });
-  new PhotoSwipe({ dataSource, index: Math.max(0, shown.indexOf(f)), showHideAnimationType: "fade" }).init();
+  const pswp = new PhotoSwipe({ dataSource, index: Math.max(0, shown.indexOf(f)), showHideAnimationType: "fade" });
+  // Back (a phone's back gesture) closes the gallery rather than leaving the page under it: the
+  // gallery has a history entry of its own, removed again when it is closed otherwise.
+  history.pushState(history.state, "");
+  let popped = false;
+  const onPop = () => {
+    popped = true;
+    // PhotoSwipe ignores closing while it opens.
+    if (pswp.opener.isOpen) pswp.close();
+    else pswp.on("openingAnimationEnd", () => pswp.close());
+  };
+  window.addEventListener("popstate", onPop, { once: true });
+  pswp.on("destroy", () => {
+    window.removeEventListener("popstate", onPop);
+    if (!popped) history.back();
+  });
+  pswp.init();
 }
 
 async function activate(f: FileRef) {

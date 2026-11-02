@@ -59,6 +59,9 @@ describe("MessageFiles", () => {
     // An image opens the gallery.
     await w.find("a.cursor-zoom-in").trigger("click");
     await vi.waitFor(() => expect(document.querySelector(".pswp")).not.toBeNull(), { timeout: 5000 });
+    // Back closes it.
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await vi.waitFor(() => expect(document.querySelector(".pswp")).toBeNull(), { timeout: 5000 });
     const video = w.find("video");
     expect([video.attributes("controls"), video.attributes("preload")]).toEqual(["", "metadata"]);
     expect(w.find("audio").attributes("controls")).toBe("");
@@ -66,7 +69,7 @@ describe("MessageFiles", () => {
     expect(buttons).toEqual(["report.pdf · 1000 B", "page.html · 2.0 KB"]);
     // Nothing that can run script becomes a blob URL of its own type.
     expect(blobs).toEqual(["image/png", "video/mp4", "audio/ogg"]);
-  });
+  }, 15_000);
 
   it("opens a PDF in a new tab and downloads anything else", async () => {
     const tab = { location: { href: "" }, close: vi.fn() };

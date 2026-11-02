@@ -4,6 +4,7 @@
 // modal on top.
 import type { NavigationMenuItem } from "@nuxt/ui";
 import { defineShortcuts } from "@nuxt/ui/composables/defineShortcuts";
+import { useMediaQuery } from "@vueuse/core";
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSidebarSwipe } from "../../lib/swipe";
@@ -29,6 +30,9 @@ function skipToContent() {
 }
 
 useSidebarSwipe();
+// On phones the sidebar is a menu that slides in: kept built while closed, so opening it (a swipe,
+// the button) only slides it in rather than first building the chat list.
+const phone = useMediaQuery("(max-width: 1023.98px)");
 
 const nav = computed((): NavigationMenuItem[] =>
   sections.value.map((s) => ({
@@ -60,6 +64,7 @@ const nav = computed((): NavigationMenuItem[] =>
       :default-size="18"
       :max-size="26"
       class="bg-elevated/25"
+      :menu="{ unmountOnHide: !phone }"
       :ui="{ footer: 'lg:border-t lg:border-default', body: 'gap-5' }"
     >
       <template #header="{ collapsed }">
