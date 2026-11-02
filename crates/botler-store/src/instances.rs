@@ -41,7 +41,8 @@ pub struct Instance {
     pub pinned: bool,
     /// The user named it: agents keep its title.
     pub titled_by_user: bool,
-    /// When the user or the chat last wrote in it (the list's order); its creation before that.
+    /// When the user, another chat or the chat itself last wrote in it (the list's order); its
+    /// creation before that.
     pub last_message_at: DateTime<Utc>,
 }
 
@@ -235,7 +236,7 @@ impl Store {
         Ok(())
     }
 
-    /// Someone wrote in chat `name` (the user, or the chat answering them).
+    /// Someone wrote in chat `name` (the user or another chat, or the chat answering them).
     pub async fn touch_message(&self, name: &str) -> Result<()> {
         sqlx::query("UPDATE instances SET last_message_at = ? WHERE name = ?")
             .bind(ts(Utc::now()))

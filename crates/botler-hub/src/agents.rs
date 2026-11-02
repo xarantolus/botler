@@ -419,6 +419,10 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
             }
             if ev.source == Source::User {
                 agent.since().talked();
+            }
+            // A message, from the user or another chat, is what the chat list's time shows (and
+            // the reply to it); hub events and timers are not.
+            if ev.source == Source::User || ev.kind == botler_core::event::kinds::MESSAGE {
                 agent.answering.store(true, Ordering::SeqCst);
                 hub.store.touch_message(&d.instance).await?;
             }

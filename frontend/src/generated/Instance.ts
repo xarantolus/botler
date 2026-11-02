@@ -32,6 +32,7 @@ pinned: boolean,
  */
 titled_by_user: boolean, 
 /**
- * When the user or the chat last wrote in it (the list's order); its creation before that.
+ * When the user, another chat or the chat itself last wrote in it (the list's order); its
+ * creation before that.
  */
 last_message_at: string, };
