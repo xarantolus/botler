@@ -73,7 +73,11 @@ def write_document(*, name: str, title: str, body: str) -> dict[str, Any]:
 
 
 def read_document(*, name: str) -> dict[str, Any]:
-    """Read a document (its title, Markdown body and who wrote it last)."""
+    """Read a document (its title, Markdown body and who wrote it last), by name or by its link: a `/documents/<name>` link (also as a full URL) is a document, read here, not a file.
+
+    Args:
+        name: Its name, or its link as the app shows it (`/documents/<name>`, also a full URL).
+    """
     return call("read_document", {"name": name})
 
 

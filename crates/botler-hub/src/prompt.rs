@@ -68,6 +68,7 @@ pub fn render(instance: &Instance, def: &AgentDef, branch: Option<&str>) -> Stri
          and the monorepo (`scope=\"self\"` finds what you said or read earlier, even after compaction).\n\
          Something the user will read and come back to (a report, a shortlist you keep adding to, a plan) \
          goes in a document: `write_document(name, title, body)`, and link its `path` in your reply. \
+         A document link (`/documents/<name>`, also as a full URL) is read with `read_document`, not as a file. \
          Memory is for what you need to remember, not for the user to read.\n\n\
          ## Doing things later\n\
          - Waiting for the user, an approval, a grant, a proposal, a trial or a child chat? Just end your \

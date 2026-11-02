@@ -26,6 +26,9 @@ async fn agents_write_documents_the_user_reads() {
     assert_eq!(out["updated"], true);
 
     let doc = ops::call(&e.hub, &user, "read_document", json!({"name": "flat-shortlist"})).await.unwrap();
+    // Its link reads it too.
+    let link = json!({"name": "http://myhost:7420/documents/flat-shortlist"});
+    assert_eq!(ops::call(&e.hub, &user, "read_document", link).await.unwrap(), doc);
     assert!(doc["body"].as_str().unwrap().contains("Old Town"));
     assert_eq!(doc["previous_body"], "- Riverside, €1400");
     assert_eq!(doc["author"], format!("agent:{chat}"));

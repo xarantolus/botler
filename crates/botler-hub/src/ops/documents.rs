@@ -82,17 +82,28 @@ impl Op for WriteDocument {
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]
 pub struct ReadDocument {
+    /// Its name, or its link as the app shows it (`/documents/<name>`, also a full URL).
     pub name: String,
+}
+
+/// The document name in `name`, also when it is given as its link (`/documents/<name>`, a full
+/// URL with a query or fragment).
+fn document_name(name: &str) -> &str {
+    let name = name.trim();
+    let name = name.rsplit_once("/documents/").map_or(name, |(_, rest)| rest);
+    let name = name.strip_prefix("documents/").unwrap_or(name);
+    name.split(['?', '#', '/']).next().unwrap_or(name)
 }
 
 impl Op for ReadDocument {
     const NAME: &'static str = "read_document";
-    const DESCRIPTION: &'static str = "Read a document (its title, Markdown body and who wrote it last).";
+    const DESCRIPTION: &'static str = "Read a document (its title, Markdown body and who wrote it last), by name or by its link: a `/documents/<name>` link (also as a full URL) is a document, read here, not a file.";
     const WHO: Who = Who::Everyone;
     type Output = Document;
 
     async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<Document, OpError> {
-        hub.store.document(&self.name).await?.ok_or_else(|| OpError::BadRequest(format!("no document {}", self.name)))
+        let name = document_name(&self.name);
+        hub.store.document(name).await?.ok_or_else(|| OpError::BadRequest(format!("no document {name}")))
     }
 }
 
@@ -149,5 +160,22 @@ impl Op for DeleteDocument {
 
     async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<DocumentDeleted, OpError> {
         Ok(DocumentDeleted { deleted: hub.store.delete_document(&self.name).await? })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_link_names_its_document() {
+        for given in [
+            "flat-budget",
+            " /documents/flat-budget ",
+            "documents/flat-budget",
+            "http://myhost:7420/documents/flat-budget",
+            "http://myhost:7420/documents/flat-budget?x=1#rent",
+            "/documents/flat-budget/",
+        ] {
+            assert_eq!(super::document_name(given), "flat-budget", "{given}");
+        }
     }
 }
