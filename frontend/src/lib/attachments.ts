@@ -81,19 +81,34 @@ const isUploaded = (v: unknown): v is Uploaded =>
 
 /** Hub tools whose results list the files an agent sent (`FilesAttached`, `MessageSent`). */
 const SENDS_FILES = /(^|_)(attach_files|send_message)$/;
+const ATTACHES = /(^|_)attach_files$/;
 
 type ToolResult = Extract<SessionItem, { kind: "tool_result" }>;
 
-/** What a tool result shows besides its text: the images it returned and the files it sent. */
+/** The files a tool result's JSON lists (`FilesAttached`, `MessageSent`). */
+function listedFiles(result: ToolResult): FileRef[] {
+  if (result.is_error || !SENDS_FILES.test(result.tool)) return [];
+  try {
+    const v = JSON.parse(result.text) as { files?: unknown };
+    return Array.isArray(v.files) ? v.files.filter(isUploaded).map(uploadRef) : [];
+  } catch {
+    // Not the op's JSON (an older or failed result): nothing to show.
+    return [];
+  }
+}
+
+/** What a tool result shows besides its text: the images it returned and the files it sent to
+ * another chat. Files attached to the reply are shown with the reply (`attachedFiles`). */
 export function resultFiles(result: ToolResult, source: SessionSource | null): FileRef[] {
   const out = source ? result.images.map((img) => imageRef(source, result.id, img)) : [];
-  if (!result.is_error && SENDS_FILES.test(result.tool)) {
-    try {
-      const v = JSON.parse(result.text) as { files?: unknown };
-      if (Array.isArray(v.files)) out.push(...v.files.filter(isUploaded).map(uploadRef));
-    } catch {
-      // Not the op's JSON (an older or failed result): nothing to show.
-    }
-  }
+  if (!ATTACHES.test(result.tool)) out.push(...listedFiles(result));
+  return out;
+}
+
+/** The files the agent attached to its reply while the call ran: the hub's record (also from
+ * inside a script), and for older chats an `attach_files` call's own result. */
+export function attachedFiles(result: ToolResult): FileRef[] {
+  const out = result.files.map(uploadRef);
+  if (ATTACHES.test(result.tool)) out.push(...listedFiles(result).filter((f) => !out.some((o) => o.path === f.path)));
   return out;
 }

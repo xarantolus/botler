@@ -411,6 +411,7 @@ describe("MessageParts", () => {
           dialog_id: "q1",
           proposal_id: null,
           images: [],
+          files: [],
         },
       ],
       dialogs: [d],

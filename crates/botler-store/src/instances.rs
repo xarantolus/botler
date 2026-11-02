@@ -346,7 +346,7 @@ impl Store {
     }
 
     /// Delete an archived chat for good: its row and what only it uses (queued deliveries,
-    /// timers it set or that resume it, its state, its breaker). The event journal, runs, usage,
+    /// timers it set or that resume it, its state, its breaker, its attachments' record). The event journal, runs, usage,
     /// dialogs and proposals are history and stay. Returns false if it is not archived.
     pub async fn delete_archived_instance(&self, name: &str) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
@@ -365,6 +365,7 @@ impl Store {
             ("DELETE FROM timers WHERE status = 'pending' AND target = ?", &target),
             ("DELETE FROM kv WHERE owner = ?", &agent),
             ("DELETE FROM breakers WHERE subject = ?", &subject),
+            ("DELETE FROM attachments WHERE instance = ?", name),
         ] {
             sqlx::query(sql).bind(v).execute(&mut *tx).await?;
         }

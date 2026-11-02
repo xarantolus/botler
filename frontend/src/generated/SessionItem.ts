@@ -41,7 +41,12 @@ proposal_id: string | null,
 /**
  * Images the tool returned (a screenshot, a picture it read), without their bytes.
  */
-images: Array<ImageRef>, } | { "kind": "note", id: string, at: string | null, text: string, from: string, provenance: string, event_kind: string, delivery: string, event: string, local_time: string | null, gap: string | null, } | { "kind": "compaction", id: string, at: string | null, summary: string, } | { "kind": "session_started", id: string, at: string | null, 
+images: Array<ImageRef>, 
+/**
+ * Files the agent attached to its reply while this call ran (`attach_files`, also from
+ * inside a script): the chat shows them with the reply.
+ */
+files: Array<Uploaded>, } | { "kind": "note", id: string, at: string | null, text: string, from: string, provenance: string, event_kind: string, delivery: string, event: string, local_time: string | null, gap: string | null, } | { "kind": "compaction", id: string, at: string | null, summary: string, } | { "kind": "session_started", id: string, at: string | null, 
 /**
  * The previous session file (`?file=` reads it).
  */

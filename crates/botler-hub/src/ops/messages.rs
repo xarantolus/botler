@@ -155,7 +155,9 @@ impl Op for AttachFiles {
         }
         let files = agent_files(hub, caller, &self.files).await?;
         let names: Vec<String> = files.iter().map(|f| f.file.clone()).collect();
-        crate::channels::attached(hub, caller.agent("")?, &names).await?;
+        let me = caller.agent("")?;
+        hub.store.add_attachments(me, &names).await?;
+        crate::channels::attached(hub, me, &names).await?;
         Ok(FilesAttached { files })
     }
 }

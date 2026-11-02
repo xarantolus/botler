@@ -3,6 +3,7 @@
 //! The hub is the only writer. Every table holds facts that cannot be derived from the monorepo;
 //! anything derivable (next fire times, rollups, search indexes) is recomputed, never stored.
 
+mod attachments;
 mod breakers;
 mod channels;
 mod deliveries;

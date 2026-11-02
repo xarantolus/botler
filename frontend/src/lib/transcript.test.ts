@@ -46,6 +46,7 @@ const result = (id: string, callId: string | null, text: string, extra: Partial<
   dialog_id: null,
   proposal_id: null,
   images: [],
+  files: [],
   ...extra,
 });
 
@@ -371,9 +372,10 @@ describe("attachments", () => {
     expect(t.messages.map((m) => m.metadata?.files)).toEqual([[photoRef], undefined]);
   });
 
-  it("shows a tool's images and the files an agent sent after the call", () => {
+  it("shows a tool's images after the call, and the files the agent attached with its reply", () => {
     const shot = { index: 1, mime: "image/png" };
     const sent = { file: "f1/demo mp4.mp4", size: 9, mime: "video/mp4" };
+    const scripted = { file: "f2/cat.gif", size: 4, mime: "image/gif" };
     const t = sessionTranscript(
       [
         user("u1", "go"),
@@ -382,23 +384,34 @@ describe("attachments", () => {
             { id: "c1", name: "screenshot", arguments: {} },
             { id: "c2", name: "botler_attach_files", arguments: {} },
             { id: "c3", name: "bash", arguments: {} },
+            { id: "c4", name: "codemode", arguments: {} },
           ],
         }),
         result("r1", "c1", "the page", { tool: "screenshot", images: [shot] }),
+        // An older chat: only the call's own result lists them.
         result("r2", "c2", JSON.stringify({ files: [sent] }), { tool: "botler_attach_files" }),
         result("r3", "c3", JSON.stringify({ files: [sent] })),
+        // Attached from inside a script: the hub's record.
+        result("r4", "c4", "done", { tool: "codemode", files: [scripted, sent] }),
+        assistant("a2", { text: "Here they are." }),
       ],
       [],
       { instance: "chat-1", file: "s 1.jsonl" },
     );
-    const parts = t.messages[1]!.parts.map((p) => (p.type === "data-files" ? p.data.files : p.type));
+    const reply = t.messages[1]!;
+    const parts = reply.parts.map((p) => (p.type === "data-files" ? p.data.files : p.type));
     expect(parts).toEqual([
       "dynamic-tool",
       [{ name: "image-r1-1.png", mime: "image/png", size: null, path: "/api/v1/sessions/chat-1/images/r1/1?file=s%201.jsonl" }],
       "dynamic-tool",
-      [{ name: "demo mp4.mp4", mime: "video/mp4", size: 9, path: "/api/v1/uploads/f1/demo%20mp4.mp4" }],
       // Only the hub's own tools send files.
       "dynamic-tool",
+      "dynamic-tool",
+      "text",
+    ]);
+    expect(reply.metadata?.files).toEqual([
+      { name: "demo mp4.mp4", mime: "video/mp4", size: 9, path: "/api/v1/uploads/f1/demo%20mp4.mp4" },
+      { name: "cat.gif", mime: "image/gif", size: 4, path: "/api/v1/uploads/f2/cat.gif" },
     ]);
   });
 });

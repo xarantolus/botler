@@ -59,6 +59,9 @@ pub enum Item {
         proposal_id: Option<String>,
         /// Images the tool returned (a screenshot, a picture it read), without their bytes.
         images: Vec<ImageRef>,
+        /// Files the agent attached to its reply while this call ran (`attach_files`, also from
+        /// inside a script): the chat shows them with the reply.
+        files: Vec<crate::uploads::Uploaded>,
     },
     /// A note that was added without starting a turn (e.g. an acknowledgement from another
     /// agent); the agent reads it with whatever wakes it next.
@@ -372,6 +375,7 @@ pub fn parse_entry(e: &Value) -> Option<Item> {
                         dialog_id,
                         proposal_id,
                         images,
+                        files: Vec::new(),
                     })
                 }
                 _ => None,
@@ -547,9 +551,39 @@ pub async fn read_page(hub: &Hub, instance: &str, file: Option<&str>, window: Wi
         (None, Some(j)) => (keep(j), j, true),
         (None, None) => (keep(items.len()), items.len(), false),
     };
+    // An attachment belongs to the first tool result written after it (the call it was made in);
+    // one from before an item that is no result (another session, an earlier turn) to none.
+    let attached = hub.store.attachments(instance).await?;
+    let mut attached = attached.iter().peekable();
+    let mut attached_to: Vec<Vec<&str>> = Vec::with_capacity(items.len());
+    for item in &items {
+        let mut files = Vec::new();
+        let at = match item {
+            Item::User { at, .. }
+            | Item::Assistant { at, .. }
+            | Item::ToolResult { at, .. }
+            | Item::Note { at, .. }
+            | Item::Compaction { at, .. }
+            | Item::SessionStarted { at, .. } => at.as_deref(),
+        };
+        // An entry without a usable time (pi's own) leaves the attachments to the next one.
+        if let Some(at) = at.and_then(|a| chrono::DateTime::parse_from_rfc3339(a).ok()) {
+            while let Some((_, file)) = attached.next_if(|(t, _)| *t <= at) {
+                if matches!(item, Item::ToolResult { .. }) {
+                    files.push(file.as_str());
+                }
+            }
+        }
+        attached_to.push(files);
+    }
     // Only the items shown are completed from the events (a query each).
     let mut out = Vec::new();
-    for mut item in items.into_iter().take(end).skip(earlier) {
+    for (mut item, names) in items.into_iter().zip(attached_to).take(end).skip(earlier) {
+        if let Item::ToolResult { files, .. } = &mut item {
+            for name in names {
+                files.extend(crate::uploads::info(hub, name).await?);
+            }
+        }
         if let Item::User { event: Some(ev), message_text, files, .. } = &mut item
             && let Some((text, attached)) = message_of(hub, ev).await?
         {

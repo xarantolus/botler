@@ -21,7 +21,7 @@
 
 import type { ChatStatus, UIMessage } from "ai";
 import type { Dialog, QueuedMessage, SessionItem } from "../generated";
-import { resultFiles, uploadRef, type FileRef, type SessionSource } from "./attachments";
+import { attachedFiles, resultFiles, uploadRef, type FileRef, type SessionSource } from "./attachments";
 import { envelopeOf, isUserMessage, type Envelope } from "./envelope";
 import { linkedDialog } from "./events";
 
@@ -180,8 +180,11 @@ export function sessionTranscript(items: SessionItem[], dialogs: Dialog[], sourc
     }
     return turn;
   };
-  /** The part for a tool result: its dialog's card when it opened one, else the call. */
-  const resultParts = (call: Parameters<typeof toolPart>[0], r: ToolResult | null, id: string): TranscriptPart[] => {
+  /** The part for a tool result: its dialog's card when it opened one, else the call. Files the
+   * agent attached meanwhile go with the turn's reply (`turn`'s files, shown below it). */
+  const resultParts = (turn: TranscriptMessage, call: Parameters<typeof toolPart>[0], r: ToolResult | null, id: string): TranscriptPart[] => {
+    const meta = turn.metadata!;
+    for (const f of r ? attachedFiles(r) : []) if (!meta.files?.some((o) => o.path === f.path)) (meta.files ??= []).push(f);
     if (r && (r.dialog_id || r.proposal_id)) {
       const d = linkedDialog(r, dialogs);
       if (d) return [{ type: "data-dialog", id: d.id, data: d }];
@@ -236,7 +239,7 @@ export function sessionTranscript(items: SessionItem[], dialogs: Dialog[], sourc
             messageOf[ref] = m.id;
             toolOf[ref] = call;
           }
-          m.parts.push(...resultParts(c, r, call));
+          m.parts.push(...resultParts(m, c, r, call));
         });
         if (it.error) m.parts.push({ type: "data-error", data: { text: it.error } });
         break;
@@ -244,7 +247,8 @@ export function sessionTranscript(items: SessionItem[], dialogs: Dialog[], sourc
       case "tool_result": {
         if (paired.has(it.id)) break;
         // A result without its call (e.g. the call was compacted away).
-        currentTurn(it).parts.push(...resultParts(null, it, it.id));
+        const t = currentTurn(it);
+        t.parts.push(...resultParts(t, null, it, it.id));
         break;
       }
       case "note":

@@ -187,6 +187,31 @@ async fn agents_send_files_from_their_home() {
     assert_eq!(files[1]["mime"], "application/pdf");
     let stored = e.hub.paths.uploads().join(files[0]["file"].as_str().unwrap());
     assert_eq!(std::fs::read(stored).unwrap(), b"mp4 bytes");
+    // The chat shows them with the result of the call they were attached in (a script, here),
+    // not with a call from before.
+    let session = e.hub.store.instance(&chat).await.unwrap().session_file;
+    let entries = [
+        json!({"type": "message", "id": "r0", "parentId": null, "timestamp": "2000-01-01T00:00:00Z",
+            "message": {"role": "toolResult", "toolCallId": "c0", "toolName": "bash", "content": []}}),
+        json!({"type": "message", "id": "a1", "parentId": "r0", "timestamp": "2000-01-01T00:00:01Z",
+            "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "c1", "name": "codemode", "arguments": {}}]}}),
+        json!({"type": "message", "id": "r1", "parentId": "a1", "timestamp": "2100-01-01T00:00:00Z",
+            "message": {"role": "toolResult", "toolCallId": "c1", "toolName": "codemode", "content": []}}),
+    ];
+    std::fs::create_dir_all(e.hub.paths.sessions(&chat)).unwrap();
+    let lines: String = entries.iter().map(|x| format!("{x}\n")).collect();
+    std::fs::write(e.hub.paths.sessions(&chat).join(session), lines).unwrap();
+    let items = botler_hub::sessions::read(&e.hub, &chat, None, None).await.unwrap().0;
+    let attached: Vec<Vec<&str>> = items
+        .iter()
+        .filter_map(|it| match it {
+            botler_hub::sessions::Item::ToolResult { files, .. } => {
+                Some(files.iter().map(|f| f.file.as_str()).collect())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(attached, [vec![], vec![files[0]["file"].as_str().unwrap(), files[1]["file"].as_str().unwrap()]]);
 
     for (path, why) in [
         ("/tmp/shot.png", "not in your home"),
