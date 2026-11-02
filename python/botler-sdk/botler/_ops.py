@@ -128,7 +128,7 @@ def list_chats() -> dict[str, Any]:
 
 
 def propose_change(*, branch: str, title: str) -> dict[str, Any]:
-    """Propose your pushed branch (agents/<you>/...) for merging into main. Runs asynchronously: rebase, validation, a plain-language deployment summary (what will run when, what needs the user's approval), the gate (gate/run), a reviewer, maybe the user. Progress arrives as proposal.updated events; nothing takes effect until it is merged.
+    """Propose your pushed branch (agents/<you>/...) for merging into main. Runs asynchronously: rebase, validation, a plain-language deployment summary (what will run when, what needs the user's approval), the gate (gate/run), a reviewer, maybe the user. Progress arrives as proposal.updated events; nothing takes effect until it is merged. Proposing the same branch again (after new commits) replaces its earlier proposal and that one's approval request: no need to withdraw it first.
 
     Args:
         branch: Your pushed branch, e.g. `agents/botler/work`.
@@ -233,9 +233,10 @@ def list_requests() -> dict[str, Any]:
 
 
 def cancel_request(*, id: str, reason: str) -> dict[str, Any]:
-    """Withdraw one of your outstanding requests by id when it no longer matters, e.g. the user answered it in the chat (it disappears for the user; a late answer is rejected). Withdrawing a proposal's approval request withdraws the proposal.
+    """Withdraw one of your outstanding requests by id when it no longer matters, e.g. the user answered it in the chat (it disappears for the user; a late answer is rejected). Withdrawing a proposal's approval request, or giving the proposal's id, withdraws the proposal (unless it is merging already).
 
     Args:
+        id: The request's id (from `list_requests`), or one of your proposals' id.
         reason: Why it is no longer needed.
     """
     return call("cancel_request", {"id": id, "reason": reason})

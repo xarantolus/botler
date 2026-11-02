@@ -60,7 +60,16 @@ pub async fn propose(hub: &Arc<Hub>, instance: &str, branch: &str, title: &str) 
     if hub.repo.is_ancestor(&head, &main).await? {
         return Err(HubError::Forbidden("nothing to propose: the branch has no commits that are not on main".into()));
     }
-    open(hub, instance, branch, &head, title).await
+    let p = open(hub, instance, branch, &head, title).await?;
+    // Proposing a branch again replaces its earlier proposals still in flight (and their asks).
+    for old in hub.store.in_flight_proposals().await? {
+        if old.id != p.id && old.instance == instance && old.branch.as_deref() == Some(branch) {
+            let why =
+                format!("superseded by proposal {} of the same branch (it replaces this one; nothing to do)", p.id);
+            cancel(hub, &old.id, &why).await?;
+        }
+    }
+    Ok(p)
 }
 
 /// Start a proposal for `head` (on `branch`) on behalf of `instance`, which hears about its
@@ -858,14 +867,29 @@ async fn fail(hub: &Hub, id: &str, why: &str) -> Result<()> {
     if !hub.store.set_proposal_outcome(id, ProposalStatus::Failed, why).await? {
         return Ok(()); // decided meanwhile
     }
-    // Nobody is asked about a dead proposal.
-    let reason = format!("the proposal failed: {}", why.lines().next().unwrap_or(why));
+    close_asks(hub, id, &format!("the proposal failed: {}", why.lines().next().unwrap_or(why))).await?;
+    update(hub, id, "failed", why).await
+}
+
+/// End proposal `id` wherever it is short of merging (superseded, withdrawn by its agent), with
+/// its approval request. Returns whether it ended (false: finished already, or merging).
+pub async fn cancel(hub: &Hub, id: &str, why: &str) -> Result<bool> {
+    if !hub.store.cancel_proposal(id, why).await? {
+        return Ok(false);
+    }
+    close_asks(hub, id, why).await?;
+    update(hub, id, "failed", why).await?;
+    Ok(true)
+}
+
+/// Nobody is asked about a dead proposal.
+async fn close_asks(hub: &Hub, id: &str, reason: &str) -> Result<()> {
     for d in hub.store.open_dialogs().await? {
         if d.kind == DialogKind::Approval && d.proposal_id.as_deref() == Some(id) {
-            hub.store.close_dialog(&d.id, DialogStatus::Aborted, &reason).await?;
+            hub.store.close_dialog(&d.id, DialogStatus::Aborted, reason).await?;
         }
     }
-    update(hub, id, "failed", why).await
+    Ok(())
 }
 
 /// Steps on the way to an outcome: the proposing agent reads them with whatever wakes it next

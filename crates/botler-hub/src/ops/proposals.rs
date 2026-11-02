@@ -30,7 +30,7 @@ pub struct Proposed {
 
 impl Op for ProposeChange {
     const NAME: &'static str = "propose_change";
-    const DESCRIPTION: &'static str = "Propose your pushed branch (agents/<you>/...) for merging into main. Runs asynchronously: rebase, validation, a plain-language deployment summary (what will run when, what needs the user's approval), the gate (gate/run), a reviewer, maybe the user. Progress arrives as proposal.updated events; nothing takes effect until it is merged.";
+    const DESCRIPTION: &'static str = "Propose your pushed branch (agents/<you>/...) for merging into main. Runs asynchronously: rebase, validation, a plain-language deployment summary (what will run when, what needs the user's approval), the gate (gate/run), a reviewer, maybe the user. Progress arrives as proposal.updated events; nothing takes effect until it is merged. Proposing the same branch again (after new commits) replaces its earlier proposal and that one's approval request: no need to withdraw it first.";
     const WHO: Who = Who::UserAndAgents;
     const ENDS_TURN: bool = true;
     type Output = Proposed;

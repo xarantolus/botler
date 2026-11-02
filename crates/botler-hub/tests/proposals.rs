@@ -324,3 +324,38 @@ async fn a_failed_gate_says_which_check_it_stopped_at() {
     assert!(report.starts_with("stopped at check 2 of "), "{report}");
     assert!(report.contains(": events manifest") && report.contains("manifest is stale"), "{report}");
 }
+
+#[tokio::test]
+async fn proposing_a_branch_again_supersedes_its_earlier_proposal_and_its_ask() {
+    let e = env().await;
+    let p = propose(&e, "botler", "grant", &[("agents/botler/agent.toml", GRANT)]).await;
+    let other = start(&e, "other").await;
+    let p = wait_for(&e, &p.id, &[ProposalStatus::Reviewing]).await;
+    approve(&e, &p).await;
+    let p = wait_for(&e, &p.id, &[ProposalStatus::AwaitingUser]).await;
+    assert_eq!(approval_dialogs(&e, &p.id).await, 1);
+
+    // New commits on the same branch, proposed again.
+    e.push("agents/botler/grant", &[("agents/botler/agent.toml", GRANT), ("README.md", "with notes\n")]).await;
+    let q = transactions::propose(&e.hub, "botler", "agents/botler/grant", "grant, revised").await.unwrap();
+    let old = e.hub.store.proposal(&p.id).await.unwrap();
+    assert_eq!(old.status, ProposalStatus::Failed);
+    assert!(old.review_notes.unwrap().contains(&format!("superseded by proposal {}", q.id)));
+    assert_eq!(approval_dialogs(&e, &p.id).await, 0, "the user is not asked about it any more");
+    assert_ne!(e.hub.store.proposal(&q.id).await.unwrap().status, ProposalStatus::Failed);
+    // Another branch's proposal is not touched.
+    assert_ne!(e.hub.store.proposal(&other.id).await.unwrap().status, ProposalStatus::Failed);
+
+    // Its agent withdraws the new one by the proposal's id (not only its request's).
+    let agent = botler_hub::ops::Caller {
+        principal: botler_hub::auth::Principal::Agent { instance: "botler".into(), wake: "w".into() },
+        capabilities: vec![],
+        runnable: None,
+    };
+    let args = serde_json::json!({"id": q.id, "reason": "not needed"});
+    let out = botler_hub::ops::call(&e.hub, &agent, "cancel_request", args).await.unwrap();
+    assert_eq!(out["cancelled"], true);
+    let q = e.hub.store.proposal(&q.id).await.unwrap();
+    assert_eq!(q.status, ProposalStatus::Failed);
+    assert!(q.review_notes.unwrap().contains("withdrawn by botler: not needed"));
+}

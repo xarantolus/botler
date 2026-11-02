@@ -325,6 +325,19 @@ impl Store {
         Ok(n == 1)
     }
 
+    /// End proposal `id` (failed, with `detail`: superseded or withdrawn) unless it is merging
+    /// already: a merge in progress cannot be stopped. Returns whether it was ended.
+    pub async fn cancel_proposal(&self, id: &str, detail: &str) -> Result<bool> {
+        let n = sqlx::query("UPDATE proposals SET status = 'failed', review_notes = COALESCE(review_notes || char(10), '') || ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user') AND COALESCE(stage, '') != 'merge'")
+            .bind(detail)
+            .bind(ts(Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(n == 1)
+    }
+
     pub async fn set_proposal_merged(&self, id: &str, commit: &str) -> Result<()> {
         sqlx::query("UPDATE proposals SET status = 'merged', merged_commit = ?, updated_at = ? WHERE id = ? AND status IN ('gating', 'reviewing', 'awaiting_user')")
             .bind(commit)

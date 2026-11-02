@@ -89,6 +89,7 @@ impl Op for ListRequests {
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]
 pub struct CancelRequest {
+    /// The request's id (from `list_requests`), or one of your proposals' id.
     pub id: String,
     /// Why it is no longer needed.
     pub reason: String,
@@ -103,13 +104,26 @@ pub struct RequestCancelled {
 
 impl Op for CancelRequest {
     const NAME: &'static str = "cancel_request";
-    const DESCRIPTION: &'static str = "Withdraw one of your outstanding requests by id when it no longer matters, e.g. the user answered it in the chat (it disappears for the user; a late answer is rejected). Withdrawing a proposal's approval request withdraws the proposal.";
+    const DESCRIPTION: &'static str = "Withdraw one of your outstanding requests by id when it no longer matters, e.g. the user answered it in the chat (it disappears for the user; a late answer is rejected). Withdrawing a proposal's approval request, or giving the proposal's id, withdraws the proposal (unless it is merging already).";
     const WHO: Who = Who::UserAndAgents;
     type Output = RequestCancelled;
 
     async fn call(self, hub: &Arc<Hub>, caller: &Caller) -> Result<RequestCancelled, OpError> {
         let instance = caller.agent("only agents have requests")?;
-        let d = hub.store.dialog(&self.id).await?;
+        let d = match hub.store.dialog(&self.id).await {
+            Ok(d) => d,
+            // A proposal's id: withdraw the proposal (and so its approval request).
+            Err(botler_store::Error::NotFound { .. }) => {
+                let p = hub.store.proposal(&self.id).await?;
+                if p.instance != instance {
+                    return Err(OpError::Forbidden("that proposal is not yours".into()));
+                }
+                let why = format!("withdrawn by {instance}: {}", self.reason);
+                let cancelled = crate::transactions::cancel(hub, &p.id, &why).await?;
+                return Ok(RequestCancelled { cancelled, id: self.id });
+            }
+            Err(e) => return Err(e.into()),
+        };
         if d.instance != instance {
             return Err(OpError::Forbidden("that request is not yours".into()));
         }

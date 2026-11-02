@@ -97,7 +97,7 @@ impl Env {
         }
         git(&work, &["add", "-A"]);
         git(&work, &["commit", "-q", "-m", "agent change"]);
-        git(&work, &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")]);
+        git(&work, &["push", "-q", "origin", &format!("+HEAD:refs/heads/{branch}")]);
         self.hub.repo.rev(&format!("refs/heads/{branch}")).await.unwrap().unwrap()
     }
 
