@@ -39,10 +39,16 @@ function drag(target: EventTarget, x0: number, x1: number, end: "touchend" | "to
 }
 
 describe("swiping the sidebar", () => {
-  it("opens left to right and closes right to left, also when the browser cancels the touch", async () => {
+  it("opens left to right and closes right to left while the finger moves, also when the browser cancels the touch", async () => {
     mount(defineComponent({ setup: () => useSidebarSwipe(), render: () => null }));
     const chat = document.createElement("div");
     document.body.append(chat);
+    shell.sidebar = false;
+    // Open before the finger lifts.
+    touch("touchstart", chat, 40, 300);
+    touch("touchmove", chat, 130, 305);
+    expect(shell.sidebar).toBe(true);
+    touch("touchend", chat, 130, 305);
     shell.sidebar = false;
     drag(chat, 40, 220, "touchcancel");
     await flushPromises();
