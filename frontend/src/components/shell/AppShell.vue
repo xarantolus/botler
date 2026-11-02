@@ -4,10 +4,9 @@
 // modal on top.
 import type { NavigationMenuItem } from "@nuxt/ui";
 import { defineShortcuts } from "@nuxt/ui/composables/defineShortcuts";
-import { useEventListener, useMediaQuery } from "@vueuse/core";
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ownsSwipe, swipe } from "../../lib/swipe";
+import { useSidebarSwipe } from "../../lib/swipe";
 import { sections } from "../../navigation";
 import { shell } from "../../shell";
 import { SHORTCUTS } from "../../shortcuts";
@@ -29,31 +28,7 @@ function skipToContent() {
   body.focus();
 }
 
-// On phones the sidebar is a drawer: swiping left to right opens it, right to left closes it.
-const phone = useMediaQuery("(max-width: 1023.98px)");
-let start: { x: number; y: number } | null = null;
-useEventListener(
-  document,
-  "touchstart",
-  (e: TouchEvent) => {
-    const t = e.touches[0];
-    start = phone.value && e.touches.length === 1 && t && !ownsSwipe(e.target) ? { x: t.clientX, y: t.clientY } : null;
-  },
-  { passive: true },
-);
-useEventListener(
-  document,
-  "touchend",
-  (e: TouchEvent) => {
-    const t = e.changedTouches[0];
-    if (!start || !t) return;
-    const dir = swipe(start.x, start.y, t.clientX, t.clientY);
-    start = null;
-    if (dir === "right" && !shell.sidebar) shell.sidebar = true;
-    if (dir === "left" && shell.sidebar) shell.sidebar = false;
-  },
-  { passive: true },
-);
+useSidebarSwipe();
 
 const nav = computed((): NavigationMenuItem[] =>
   sections.value.map((s) => ({
