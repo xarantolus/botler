@@ -1143,6 +1143,7 @@ fn is_builtin_event(kind: &str) -> bool {
         ENVIRONMENT_UPDATED,
         TRIAL_FINISHED,
         CHAT_STOPPED,
+        RUNNABLE_WAITING,
         HANDOVER_REQUESTED,
         SESSION_STARTED,
     ]

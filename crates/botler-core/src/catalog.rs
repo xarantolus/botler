@@ -326,6 +326,13 @@ pub const BUILTIN: &[BuiltinEvent] = &[
         guidance: "Use what is new from now on (new tools are in your tool list). An unavailable share is reported to the user as an incident: if your task needs it, say so; never work around it. Nothing to answer otherwise.",
     },
     BuiltinEvent {
+        kind: kinds::RUNNABLE_WAITING,
+        summary: "A job run your event started has not started yet: its image is being built (e.g. after a merge changed it), which can take minutes.",
+        fields: &[("runnable", "the job"), ("run_id", "the run"), ("reason", "what it waits for")],
+        follow_up: &[FollowUp { tool: "get_run_logs", args: &[("run_id", "run_id")], why: "whether it has started" }],
+        guidance: "The run starts by itself and reports as usual. Do not emit the event again: that starts a second run.",
+    },
+    BuiltinEvent {
         kind: kinds::CHAT_STOPPED,
         summary: "The user stopped a chat: its turn was aborted and what was queued for it cancelled.",
         fields: &[
@@ -517,6 +524,7 @@ mod tests {
             kinds::CHAT_RESTORED,
             kinds::ENVIRONMENT_UPDATED,
             kinds::CHAT_STOPPED,
+            kinds::RUNNABLE_WAITING,
             kinds::WEBHOOK_RECEIVED,
             kinds::HANDOVER_REQUESTED,
             kinds::SESSION_STARTED,

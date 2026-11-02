@@ -2,7 +2,7 @@
 //! launch and exit handling that services (`services.rs`) use too.
 
 use botler_core::defs::{Environment, JobDef, Lifetime, Overlap};
-use botler_core::payloads::{BuiltinPayload, RunnableFinishedPayload};
+use botler_core::payloads::{BuiltinPayload, RunnableFinishedPayload, RunnableWaitingPayload};
 use botler_core::{Event, Source};
 use botler_runtime::Mount;
 use std::sync::Arc;
@@ -176,6 +176,7 @@ pub(crate) async fn launch_job(
         Some(c) => c.clone(),
         None => hub.applied().await.commit.clone(),
     };
+    tell_if_building(hub, run, &commit).await?;
     let image = images::ensure_job_image(hub, &run.runnable, &commit).await?;
     let service = run.kind == RunKind::Service;
     // A service's token lives as long as its run: `Caller::resolve` refuses it once the run ends.
@@ -427,6 +428,24 @@ pub async fn requester(hub: &Hub, run: &Run) -> Result<Option<String>> {
         botler_core::Source::Agent(chat) => Some(chat),
         _ => None,
     })
+}
+
+/// The chat whose event started `run` hears when the run first waits for its image to build, so a
+/// slow start (minutes after a merge) does not look like a dropped request.
+async fn tell_if_building(hub: &Hub, run: &Run, commit: &str) -> Result<()> {
+    if run.kind != RunKind::Oneshot {
+        return Ok(());
+    }
+    // The tag names the base image's id.
+    images::ensure_base(hub).await?;
+    let tag = images::tag(hub, &images::Recipe::job(&run.runnable), commit).await?;
+    if hub.containers.image_id(&tag).await?.is_some() {
+        return Ok(());
+    }
+    let Some(chat) = requester(hub, run).await? else { return Ok(()) };
+    let reason = "its image is being built (its code or a base image changed); it starts once that is done".into();
+    let payload = RunnableWaitingPayload { runnable: run.runnable.clone(), run_id: run.id.clone(), reason };
+    crate::router::note(hub, &chat, BuiltinPayload::RunnableWaiting(payload)).await
 }
 
 /// A `monorepo = true` job: the hub's git endpoint through the forwarder, as for agents (git

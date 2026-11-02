@@ -22,6 +22,7 @@ const BUILTIN = {
   "chat.restored": true,
   "environment.updated": true,
   "chat.stopped": true,
+  "runnable.waiting": true,
   "webhook.received": true,
   "handover.requested": true,
   "session.started": true,
@@ -53,6 +54,7 @@ const EVENT_ICONS: Record<BuiltinPayload["type"], string> = {
   "chat.restored": "i-lucide-archive-restore",
   "environment.updated": "i-lucide-refresh-cw",
   "chat.stopped": "i-lucide-circle-stop",
+  "runnable.waiting": "i-lucide-hourglass",
   "webhook.received": "i-lucide-webhook",
   "handover.requested": "i-lucide-history",
   "session.started": "i-lucide-history",
@@ -124,6 +126,8 @@ export function eventSummary(ev: BotlerEvent): string {
       return `${b.payload.chat} stopped${b.payload.reason ? `: ${b.payload.reason}` : ""}`;
     case "environment.updated":
       return `restarted: ${b.payload.changes.join("; ")}`;
+    case "runnable.waiting":
+      return `${b.payload.runnable} waits: ${b.payload.reason}`;
     case "webhook.received":
       return `webhook ${b.payload.name} called`;
   }

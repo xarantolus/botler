@@ -61,6 +61,16 @@ pub struct RunnableFailedPayload {
     pub event_id: Option<String>,
 }
 
+/// `runnable.waiting`: a job run that this chat's event started waits before it can start (its
+/// image is being built, e.g. after a merge changed it). A quiet note: the run starts by itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct RunnableWaitingPayload {
+    pub runnable: String,
+    pub run_id: String,
+    /// What it waits for, in words.
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct RunnableFinishedPayload {
     pub runnable: String,
@@ -430,6 +440,8 @@ pub enum BuiltinPayload {
     EnvironmentUpdated(EnvironmentUpdatedPayload),
     #[serde(rename = "chat.stopped")]
     ChatStopped(ChatStoppedPayload),
+    #[serde(rename = "runnable.waiting")]
+    RunnableWaiting(RunnableWaitingPayload),
     #[serde(rename = "handover.requested")]
     HandoverRequested(HandoverRequestedPayload),
     #[serde(rename = "session.started")]
@@ -475,6 +487,7 @@ impl BuiltinPayload {
             Self::ChatRestored(_) => kinds::CHAT_RESTORED,
             Self::EnvironmentUpdated(_) => kinds::ENVIRONMENT_UPDATED,
             Self::ChatStopped(_) => kinds::CHAT_STOPPED,
+            Self::RunnableWaiting(_) => kinds::RUNNABLE_WAITING,
             Self::WebhookReceived(_) => kinds::WEBHOOK_RECEIVED,
             Self::HandoverRequested(_) => kinds::HANDOVER_REQUESTED,
             Self::SessionStarted(_) => kinds::SESSION_STARTED,
@@ -503,6 +516,7 @@ impl BuiltinPayload {
             Self::ChatRestored(p) => serde_json::to_value(p),
             Self::EnvironmentUpdated(p) => serde_json::to_value(p),
             Self::ChatStopped(p) => serde_json::to_value(p),
+            Self::RunnableWaiting(p) => serde_json::to_value(p),
             Self::WebhookReceived(p) => serde_json::to_value(p),
             Self::HandoverRequested(p) => serde_json::to_value(p),
             Self::SessionStarted(p) => serde_json::to_value(p),
@@ -542,6 +556,7 @@ pub fn builtin_schema(kind: &str) -> Option<serde_json::Value> {
         kinds::CHAT_RESTORED => s::<ChatRestoredPayload>(),
         kinds::ENVIRONMENT_UPDATED => s::<EnvironmentUpdatedPayload>(),
         kinds::CHAT_STOPPED => s::<ChatStoppedPayload>(),
+        kinds::RUNNABLE_WAITING => s::<RunnableWaitingPayload>(),
         kinds::WEBHOOK_RECEIVED => s::<WebhookReceivedPayload>(),
         kinds::HANDOVER_REQUESTED => s::<HandoverRequestedPayload>(),
         kinds::SESSION_STARTED => s::<SessionStartedPayload>(),
@@ -598,6 +613,7 @@ mod tests {
             (kinds::CHAT_RESTORED, fields::<ChatRestoredPayload>()),
             (kinds::ENVIRONMENT_UPDATED, fields::<EnvironmentUpdatedPayload>()),
             (kinds::CHAT_STOPPED, fields::<ChatStoppedPayload>()),
+            (kinds::RUNNABLE_WAITING, fields::<RunnableWaitingPayload>()),
             (kinds::WEBHOOK_RECEIVED, fields::<WebhookReceivedPayload>()),
             (kinds::HANDOVER_REQUESTED, fields::<HandoverRequestedPayload>()),
             (kinds::SESSION_STARTED, fields::<SessionStartedPayload>()),

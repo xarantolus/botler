@@ -353,6 +353,17 @@ pub async fn tag(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<String> {
     Ok(resolve(hub, recipe, commit).await?.tag)
 }
 
+/// The tag of `recipe` at `commit` and of the monorepo images it builds on, all of which a build
+/// of it needs.
+async fn tags_with_bases(hub: &Hub, recipe: &Recipe, commit: &str) -> Result<Vec<String>> {
+    let r = resolve(hub, recipe, commit).await?;
+    let mut tags = vec![r.tag];
+    for base in r.monorepo {
+        tags.extend(Box::pin(tags_with_bases(hub, &Recipe::agent(&base.image), commit)).await?);
+    }
+    Ok(tags)
+}
+
 const PI: &str = "pi";
 
 /// Export name of the pi resources at `commit`, keyed by their tree hash so commits that leave
@@ -393,7 +404,8 @@ pub async fn collect_garbage(hub: &Hub) -> Result<()> {
     }
     for run in hub.store.active_runs().await? {
         if let Some(commit) = &run.commit_id {
-            tags.insert(tag(hub, &Recipe::job(&run.runnable), commit).await?);
+            // A queued run's image may not be built yet: keep what it builds on.
+            tags.extend(tags_with_bases(hub, &Recipe::job(&run.runnable), commit).await?);
         }
     }
     let root = hub.paths.exports();
@@ -462,6 +474,11 @@ pub async fn prebuild_loop(hub: Arc<Hub>) {
         if !paused && done.as_ref() != Some(&applied.commit) {
             let recipes = applied.defs.images.iter().map(|i| Recipe::agent(i));
             for recipe in recipes.chain(applied.defs.jobs.keys().map(|j| Recipe::job(j))) {
+                // A newer commit was applied: its images are the ones wanted now (an old one's
+                // build would only hold up theirs, and its bases may be collected meanwhile).
+                if hub.applied().await.commit != applied.commit {
+                    break;
+                }
                 let Err(e) = ensure(&hub, &recipe, &applied.commit).await else { continue };
                 tracing::error!(dockerfile = recipe.dockerfile, error = %e, "image build failed");
                 let failure = crate::failures::Failure {
@@ -477,7 +494,9 @@ pub async fn prebuild_loop(hub: Arc<Hub>) {
                     tracing::error!(error = %e, "could not report the failed image build");
                 }
             }
-            done = Some(applied.commit.clone());
+            if hub.applied().await.commit == applied.commit {
+                done = Some(applied.commit.clone());
+            }
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
     }

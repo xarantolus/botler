@@ -241,6 +241,31 @@ async fn a_monorepo_job_clones_through_the_hub_and_pushes_for_its_chat() {
         botler_hub::api::router(e.hub.clone()).oneshot(req)
     };
     assert_eq!(refs_of(run_id.clone()).await.unwrap().status(), axum::http::StatusCode::OK);
+    // Its image had to be built first, which the chat hears as a quiet note (a slow start is no
+    // dropped request); a run whose image is there starts without one.
+    let waiting = || async {
+        let mut n = 0;
+        for d in e.hub.store.pending_deliveries(&chat).await.unwrap() {
+            let ev = e.hub.store.event(&d.event_id).await.unwrap();
+            if ev.kind == "runnable.waiting" {
+                assert!(d.quiet);
+                assert_eq!(ev.payload["runnable"], "coder");
+                n += 1;
+            }
+        }
+        n
+    };
+    assert_eq!(waiting().await, 1);
+    e.hub.store.finish_run(&run_id, botler_store::RunStatus::Succeeded, Some(0), None).await.unwrap();
+    let again = botler_hub::ops::call(&e.hub, &agent, "run_job", serde_json::json!({"job": "coder"})).await.unwrap();
+    let again = jobs::container_name(&e.hub, again["run_id"].as_str().unwrap());
+    for _ in 0..200 {
+        if e.fake.containers().contains_key(&again) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(waiting().await, 1);
 
     // Without `monorepo`, a job has none of it, and turning it on asks the user.
     e.commit(&refs(&job("plain", "command = [\"true\"]\n"))).await;
