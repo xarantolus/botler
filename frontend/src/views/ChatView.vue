@@ -112,8 +112,9 @@ const queuedNote = computed(() => (badge.value?.type === "error" ? "the agent ca
 
 // ---- scrolling ----
 // Only this follows new content, and only while the view is at the end: when the transcript
-// grows, an end stays the end; anywhere else the position stays put (the browser's scroll
-// anchoring holds it when content above changes). The kit's own scrolling is off (ChatTranscript).
+// grows, an end stays the end; anywhere else the position stays put (the virtual list corrects it
+// when messages above get their real height; the browser's scroll anchoring is off, or both would
+// move it). The kit's own scrolling is off (ChatTranscript).
 const body = useTemplateRef<HTMLElement>("body");
 const transcriptView = useTemplateRef<{ scrollToMessage: (id: string) => boolean }>("transcriptView");
 /** The panel body, which scrolls the transcript. */
@@ -147,8 +148,10 @@ watch(body, (el, _, onCleanup) => {
   const s = el?.closest<HTMLElement>("[data-slot=body]");
   if (!el || !s) return;
   let height = 0;
+  s.style.overflowAnchor = "none";
   const grown = new ResizeObserver(() => {
-    if (atBottom.value) s.scrollTop = s.scrollHeight;
+    // Not while the user scrolls: messages measured above would pull them back to the end.
+    if (atBottom.value && Date.now() - userScrolled >= 1000) s.scrollTop = s.scrollHeight;
     else if (s.scrollHeight > height) unseen.value = true;
     height = s.scrollHeight;
   });
@@ -340,6 +343,7 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
             ref="transcriptView"
             :key="name"
             :earlier="session?.earlier ?? 0"
+            :following="atBottom"
             :messages="transcript.messages"
             :status="transcript.status"
             :queued-note="queuedNote"

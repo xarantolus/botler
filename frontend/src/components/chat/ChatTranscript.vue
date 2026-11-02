@@ -26,6 +26,8 @@ const props = defineProps<{
   instance: string;
   /** Session items before these, not loaded. */
   earlier: number;
+  /** The view follows the end (ChatView): nothing loads above, and the end stays in place. */
+  following: boolean;
 }>();
 
 const list = useTemplateRef<HTMLElement>("list");
@@ -68,18 +70,23 @@ async function loadEarlier() {
     loadingEarlier.value = false;
   }
 }
-// Messages added above: the one that was first stays where it was.
+// Messages added above: the one that was first stays where it was (at the end, the end stays).
 watch(
   () => props.messages[0]?.metadata?.key ?? props.messages[0]?.id,
   (_, before) => {
+    if (props.following) return;
     const i = props.messages.findIndex((m) => (m.metadata?.key ?? m.id) === before);
     if (i > 0) void nextTick(() => virtualizer.value.scrollToIndex(i, { align: "start" }));
   },
 );
 const top = useTemplateRef<HTMLElement>("top");
-useIntersectionObserver(top, ([entry]) => {
-  if (entry?.isIntersecting) void loadEarlier();
-});
+// Only once the user scrolled up: a chat opening at its end has the top in view for a moment.
+const topInView = ref(false);
+useIntersectionObserver(top, ([entry]) => (topInView.value = !!entry?.isIntersecting));
+watch(
+  () => topInView.value && !props.following,
+  (load) => load && void loadEarlier(),
+);
 
 const now = ref(Date.now());
 const timer = window.setInterval(() => (now.value = Date.now()), 1000);
