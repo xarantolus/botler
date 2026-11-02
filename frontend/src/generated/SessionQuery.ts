@@ -8,4 +8,13 @@ file?: string,
 /**
  * Only the last this many items (`earlier` says how many come before); default all.
  */
-last?: number, };
+last?: number, 
+/**
+ * Only the items after this item id, when it is on the active branch (`continues` says so):
+ * a refresh of a chat on screen carries only what is new.
+ */
+after?: string, 
+/**
+ * Only items before this item id (with `last`: the `last` of them), scrolling back.
+ */
+before?: string, };

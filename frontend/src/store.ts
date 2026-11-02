@@ -11,6 +11,7 @@ import type {
   HubStatus,
   Instance,
   Proposal,
+  SessionItem,
   SessionView,
   Usage,
 } from "./generated";
@@ -195,42 +196,65 @@ export function refreshEvents() {
 let sessionFor: string | null = null;
 /** An earlier session file of that chat being viewed (from a handover), or null for the current. */
 let sessionFile: string | null = null;
-/** Session items a chat loads at first, and how many more "Show earlier" adds. */
-export const SESSION_PAGE = 200;
-/** How many of the latest items of the chat on screen are loaded (null: all). */
-let sessionLast: number | null = SESSION_PAGE;
+/** Session items a chat loads at first, and how many more each step back adds. */
+export const SESSION_PAGE = 50;
 
-/** Load more of the chat on screen, further back (all of it with `all`, e.g. to reach a link). */
+const lastId = (items: SessionItem[]) => items[items.length - 1]?.id;
+
+let earlierSeq = 0;
+/** Load the chat on screen further back: the page before its first item (all of it with `all`,
+ * e.g. to reach a link). A page that no longer adjoins what is shown (the chat or its branch
+ * changed meanwhile) is dropped. */
 export function showEarlier(name: string, all = false) {
-  const shown = state.session?.instance.name === name ? state.session.items.length : 0;
-  sessionLast = all ? null : shown + SESSION_PAGE;
-  return refreshSession(name);
+  const s = state.session;
+  if (all || s?.instance.name !== name || !s.items.length) return refreshSession(name, all ? "all" : "latest");
+  const first = s.items[0]!.id;
+  const file = sessionFile;
+  const seq = ++earlierSeq;
+  return guarded(`Loading chat ${name}`, async () => {
+    const page = await call("session", { params: { instance: name }, query: { file: file ?? undefined, last: SESSION_PAGE, before: first } });
+    const now = state.session;
+    if (seq !== earlierSeq || sessionFor !== name || sessionFile !== file || now?.items[0]?.id !== first || !page.continues) return;
+    now.items = [...page.items, ...now.items];
+    now.earlier = page.earlier;
+  });
 }
 
 /** View one of the chat's session files (null: the current one). */
 export function showSessionFile(name: string, file: string | null) {
   sessionFor = name; // so refreshSession keeps the file
   sessionFile = file;
-  sessionLast = SESSION_PAGE;
-  return refreshSession(name);
+  return refreshSession(name, "latest");
 }
 
 let sessionSeq = 0;
-export function refreshSession(name: string) {
+/** Bring the chat on screen up to date. `new`: only the items after the last one shown (the
+ * latest page when none is shown, or its branch moved); `latest`: the latest page afresh; `all`:
+ * the whole chat. */
+export function refreshSession(name: string, mode: "new" | "latest" | "all" = "new") {
   if (sessionFor !== name) {
     sessionFile = null;
-    sessionLast = SESSION_PAGE;
+    if (mode === "new") mode = "latest";
   }
   sessionFor = name;
+  const shown = state.session?.instance.name === name ? state.session : null;
+  const after = mode === "new" && shown ? lastId(shown.items) : undefined;
   const seq = ++sessionSeq;
   return guarded(`Loading chat ${name}`, async () => {
     try {
-      const s = await call("session", { params: { instance: name }, query: { file: sessionFile ?? undefined, last: sessionLast ?? undefined } });
+      const s = await call("session", {
+        params: { instance: name },
+        query: { file: sessionFile ?? undefined, last: mode === "all" ? undefined : SESSION_PAGE, after },
+      });
       // The user moved on, or a later refresh was sent (an answer may overtake an older one).
       if (sessionFor !== name || seq !== sessionSeq) return;
-      state.session = s;
+      // New items continue what is shown only if that still ends where this asked from.
+      const prev = state.session;
+      if (after !== undefined && s.continues && prev && lastId(prev.items) === after) {
+        state.session = { ...s, items: [...prev.items, ...s.items], earlier: prev.earlier };
+      } else state.session = s;
       // The session has the streamed message now: show it from there.
-      if (persisted(s.items, state.streaming)) state.streaming = noLive();
+      if (persisted(state.session.items, state.streaming)) state.streaming = noLive();
       state.sessionError = null;
       // The fetch is newer than any earlier live status.
       const now = currentStatus(s.phase, null);

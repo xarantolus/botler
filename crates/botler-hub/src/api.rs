@@ -18,6 +18,7 @@ use rmcp::transport::streamable_http_server::session::never::NeverSessionManager
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use serde::Deserialize;
 use serde_json::Value;
+use tower_http::compression::CompressionLayer;
 
 use crate::auth::Principal;
 use crate::hub::{Hub, HubError};
@@ -93,6 +94,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/channels", get(channels))
         .route("/api/v1/channels/codes", post(channel_code))
         .route("/api/v1/channels/bindings/{id}", delete(revoke_binding))
+        // JSON shrinks about tenfold; git and the live socket stay as they are.
+        .route_layer(CompressionLayer::new())
         .route("/git/monorepo.git/{*rest}", any(git))
         .layer(middleware::from_fn_with_state(hub.clone(), authenticate));
     Router::new()
@@ -108,8 +111,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         )
         .merge(authed)
         // The web app is public static content; every API call it makes carries the user token.
-        .route("/legacy", get(crate::web::legacy))
-        .fallback(crate::web::app)
+        .route("/legacy", get(crate::web::legacy).layer(CompressionLayer::new()))
+        .fallback_service(any(crate::web::app).layer(CompressionLayer::new()))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
         .with_state(hub)
 }
@@ -443,14 +446,11 @@ async fn cancel_message(
 
 /// The user's messages not in the session (`items`) yet: those handed to pi as steers in its
 /// current run (it adds them once the running tool calls are done), then those the hub holds.
-async fn queued(hub: &Hub, instance: &str, items: &[crate::sessions::Item]) -> Result<Vec<QueuedMessage>, ApiError> {
-    let in_session: std::collections::HashSet<&str> = items
-        .iter()
-        .filter_map(|it| match it {
-            crate::sessions::Item::User { delivery: Some(d), .. } => Some(d.as_str()),
-            _ => None,
-        })
-        .collect();
+async fn queued(
+    hub: &Hub,
+    instance: &str,
+    in_session: &std::collections::HashSet<String>,
+) -> Result<Vec<QueuedMessage>, ApiError> {
     let steered = match hub.agents.get(instance).await {
         Some(a) if a.busy() => a.steered(),
         _ => Vec::new(),
@@ -673,6 +673,13 @@ pub struct SessionQuery {
     /// Only the last this many items (`earlier` says how many come before); default all.
     #[ts(optional)]
     last: Option<usize>,
+    /// Only the items after this item id, when it is on the active branch (`continues` says so):
+    /// a refresh of a chat on screen carries only what is new.
+    #[ts(optional)]
+    after: Option<String>,
+    /// Only items before this item id (with `last`: the `last` of them), scrolling back.
+    #[ts(optional)]
+    before: Option<String>,
 }
 
 async fn session(
@@ -700,19 +707,21 @@ async fn session(
         }
     }
     let phase = hub.agents.phase(&inst.name).await;
-    let (items, earlier) = crate::sessions::read(&hub, &inst.name, q.file.as_deref(), q.last).await?;
+    let window = crate::sessions::Window { last: q.last, after: q.after.as_deref(), before: q.before.as_deref() };
+    let page = crate::sessions::read_page(&hub, &inst.name, q.file.as_deref(), window).await?;
     let sessions = crate::sessions::files(&hub, &inst.name).await?;
     let file = q.file.unwrap_or_else(|| inst.session_file.clone());
     let tool_renders =
         hub.applied().await.defs.tools.values().filter_map(|t| Some((t.pi_name(), t.render.clone()?))).collect();
-    let queued = queued(&hub, &inst.name, &items).await?;
+    let queued = queued(&hub, &inst.name, &page.delivered).await?;
     Ok(Json(SessionView {
         instance: inst,
         busy,
         pending,
         phase,
-        items,
-        earlier,
+        items: page.items,
+        earlier: page.earlier,
+        continues: page.continues,
         tool_renders,
         queued,
         sessions,

@@ -112,6 +112,25 @@ async fn goto_and_label_go_through_the_extension_only_while_idle() {
     let (last, earlier) = botler_hub::sessions::read(&e.hub, "botler", None, Some(1)).await.unwrap();
     assert_eq!((last.len(), earlier), (1, items.len() - 1));
     assert!(matches!(&last[0], botler_hub::sessions::Item::Assistant { text, .. } if text == "Trains booked."));
+    // Back one at a time from the latest, then forward from the first: each item exactly once.
+    use botler_hub::sessions::{Window, read_page};
+    let ids: Vec<String> = items.iter().map(|i| i.id().to_string()).collect();
+    let mut back = vec![last[0].id().to_string()];
+    loop {
+        let w = Window { last: Some(1), before: Some(back[0].as_str()), ..Window::default() };
+        let p = read_page(&e.hub, "botler", None, w).await.unwrap();
+        assert!(p.continues);
+        let Some(item) = p.items.first() else { break };
+        back.insert(0, item.id().to_string());
+    }
+    assert_eq!(back, ids);
+    let w = Window { after: Some(ids[0].as_str()), ..Window::default() };
+    let p = read_page(&e.hub, "botler", None, w).await.unwrap();
+    assert_eq!((p.continues, p.earlier, p.items.len()), (true, 1, ids.len() - 1));
+    // An item no longer on the branch: the latest page, not continuing.
+    let w = Window { last: Some(1), after: Some("u3"), ..Window::default() };
+    let p = read_page(&e.hub, "botler", None, w).await.unwrap();
+    assert_eq!((p.continues, p.items.len()), (false, 1));
     assert_eq!(call(&e, "session_tree", json!({"chat": "botler"})).await.unwrap()["leaf"], "n1");
     assert!(matches!(
         call(&e, "goto_entry", json!({"chat": "botler", "entry": "nope"})).await,

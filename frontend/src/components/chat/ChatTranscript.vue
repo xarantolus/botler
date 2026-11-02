@@ -6,10 +6,12 @@
 // busy). While pi compacts the conversation, a line says so and for how long. Each message is its
 // own component (TranscriptEntry), so a chunk re-renders only the message it changes.
 // Virtual: only the messages near the viewport are in the page (the panel body scrolls them), each
-// measured once rendered. The hub sends the latest part of a long chat; "Show earlier" asks for more.
+// measured once rendered. The hub sends the latest part of a long chat; scrolling up to its top
+// loads the page before it ("Show earlier" does the same by hand), keeping what is in view in place.
 import { useVirtualizer } from "@tanstack/vue-virtual";
 import type { ChatStatus } from "ai";
-import { computed, onBeforeUnmount, ref, useTemplateRef } from "vue";
+import { useIntersectionObserver } from "@vueuse/core";
+import { computed, nextTick, onBeforeUnmount, ref, useTemplateRef, watch } from "vue";
 import { elapsed } from "../../lib/time";
 import type { TranscriptMessage } from "../../lib/transcript";
 import { showEarlier, state } from "../../store";
@@ -55,6 +57,30 @@ function scrollToMessage(id: string): boolean {
 }
 defineExpose({ scrollToMessage });
 
+/** Loading the page before the first message (one at a time). */
+const loadingEarlier = ref(false);
+async function loadEarlier() {
+  if (loadingEarlier.value || !props.earlier) return;
+  loadingEarlier.value = true;
+  try {
+    await showEarlier(props.instance);
+  } finally {
+    loadingEarlier.value = false;
+  }
+}
+// Messages added above: the one that was first stays where it was.
+watch(
+  () => props.messages[0]?.metadata?.key ?? props.messages[0]?.id,
+  (_, before) => {
+    const i = props.messages.findIndex((m) => (m.metadata?.key ?? m.id) === before);
+    if (i > 0) void nextTick(() => virtualizer.value.scrollToIndex(i, { align: "start" }));
+  },
+);
+const top = useTemplateRef<HTMLElement>("top");
+useIntersectionObserver(top, ([entry]) => {
+  if (entry?.isIntersecting) void loadEarlier();
+});
+
 const now = ref(Date.now());
 const timer = window.setInterval(() => (now.value = Date.now()), 1000);
 onBeforeUnmount(() => window.clearInterval(timer));
@@ -68,16 +94,17 @@ const compacting = computed(() => {
 
 <template>
   <div :data-status="props.status" class="flex w-full flex-1 flex-col gap-5">
-    <UButton
-      v-if="props.earlier"
-      class="self-center"
-      color="neutral"
-      variant="soft"
-      size="sm"
-      icon="i-lucide-chevrons-up"
-      :label="`Show earlier (${props.earlier} more)`"
-      @click="showEarlier(props.instance)"
-    />
+    <div v-if="props.earlier" ref="top" class="self-center">
+      <UButton
+        :loading="loadingEarlier"
+        color="neutral"
+        variant="soft"
+        size="sm"
+        icon="i-lucide-chevrons-up"
+        :label="`Show earlier (${props.earlier} more)`"
+        @click="loadEarlier"
+      />
+    </div>
     <div ref="list" class="relative w-full" :style="{ height: `${virtualizer.getTotalSize()}px` }">
       <div
         v-for="row in rows"

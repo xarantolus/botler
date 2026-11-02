@@ -20,9 +20,14 @@ pending: number,
  */
 phase: WakePhase | null, items: Array<SessionItem>, 
 /**
- * Items of this session before `items` (`last` left them out).
+ * Items of this session before `items` (`last` or `after` left them out).
  */
 earlier: number, 
+/**
+ * `items` adjoin the `after` / `before` item asked for: the caller keeps what it has and
+ * adds them; false means they are the latest page (that item is no longer on the branch).
+ */
+continues: boolean, 
 /**
  * Render hints of the Python tools that declare one, by the name pi calls them (`web_search`).
  */

@@ -44,6 +44,24 @@ async fn serves_the_app_and_the_legacy_page() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+/// The API and the app are compressed for clients that accept it.
+#[tokio::test]
+async fn responses_are_compressed() {
+    let e = env().await;
+    let app = botler_hub::api::router(e.hub.clone());
+    let token = e.hub.tokens.issue(&Principal::User, chrono::Duration::hours(1), Utc::now());
+    for path in ["/api/v1/status", "/"] {
+        let req = Request::get(path)
+            .header("authorization", format!("Bearer {token}"))
+            .header("accept-encoding", "gzip")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{path}");
+        assert_eq!(resp.headers().get("content-encoding").map(|v| v.to_str().unwrap()), Some("gzip"), "{path}");
+    }
+}
+
 async fn serve(e: &common::Env) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

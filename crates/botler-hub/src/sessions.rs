@@ -91,6 +91,19 @@ pub enum Item {
     },
 }
 
+impl Item {
+    pub fn id(&self) -> &str {
+        match self {
+            Item::User { id, .. }
+            | Item::Assistant { id, .. }
+            | Item::ToolResult { id, .. }
+            | Item::Note { id, .. }
+            | Item::Compaction { id, .. }
+            | Item::SessionStarted { id, .. } => id,
+        }
+    }
+}
+
 /// An image block of a session entry, served by
 /// `GET /api/v1/sessions/<instance>/images/<entry>/<index>?file=<session file>`: the view never
 /// carries the bytes, so a refresh stays small.
@@ -471,10 +484,41 @@ pub async fn image(
 /// The active branch of one of an instance's sessions (default: the current one), oldest first.
 /// The session's items, at most the `last` ones (all without), and how many come before them.
 pub async fn read(hub: &Hub, instance: &str, file: Option<&str>, last: Option<usize>) -> Result<(Vec<Item>, usize)> {
+    let page = read_page(hub, instance, file, Window { last, ..Window::default() }).await?;
+    Ok((page.items, page.earlier))
+}
+
+/// Part of a session's active branch.
+pub struct Page {
+    pub items: Vec<Item>,
+    /// How many items come before `items`.
+    pub earlier: usize,
+    /// The item asked for (`after` or `before`) is on the branch: `items` adjoin it.
+    pub continues: bool,
+    /// The deliveries anywhere on the branch.
+    pub delivered: std::collections::HashSet<String>,
+}
+
+/// Which items of the active branch to read.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Window<'a> {
+    /// At most this many (all without): the latest, or those right before `before`.
+    pub last: Option<usize>,
+    /// All items after this one (a live chat's update carries only what is new).
+    pub after: Option<&'a str>,
+    /// Items before this one (scrolling back).
+    pub before: Option<&'a str>,
+}
+
+/// The items of `window`; one whose `after` / `before` item is not on the branch (it moved:
+/// a compaction, a goto) gets the latest `last` items with `continues` false.
+pub async fn read_page(hub: &Hub, instance: &str, file: Option<&str>, window: Window<'_>) -> Result<Page> {
     let path = session_path(hub, instance, file).await?;
     let raw = match tokio::fs::read_to_string(&path).await {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Page { items: Vec::new(), earlier: 0, continues: false, delivered: Default::default() });
+        }
         Err(e) => return Err(HubError::Io(e)),
     };
     let entries: Vec<Value> = raw.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
@@ -489,10 +533,23 @@ pub async fn read(hub: &Hub, instance: &str, file: Option<&str>, last: Option<us
     branch.reverse();
 
     let items: Vec<Item> = branch.into_iter().filter_map(parse_entry).collect();
-    let earlier = last.map_or(0, |n| items.len().saturating_sub(n));
+    let delivered = items
+        .iter()
+        .filter_map(|it| match it {
+            Item::User { delivery: Some(d), .. } => Some(d.clone()),
+            _ => None,
+        })
+        .collect();
+    let at = |id: Option<&str>| id.and_then(|a| items.iter().position(|it| it.id() == a));
+    let keep = |end: usize| window.last.map_or(0, |n| end.saturating_sub(n));
+    let (earlier, end, continues) = match (at(window.after), at(window.before)) {
+        (Some(i), _) => (i + 1, items.len(), true),
+        (None, Some(j)) => (keep(j), j, true),
+        (None, None) => (keep(items.len()), items.len(), false),
+    };
     // Only the items shown are completed from the events (a query each).
     let mut out = Vec::new();
-    for mut item in items.into_iter().skip(earlier) {
+    for mut item in items.into_iter().take(end).skip(earlier) {
         if let Item::User { event: Some(ev), message_text, files, .. } = &mut item
             && let Some((text, attached)) = message_of(hub, ev).await?
         {
@@ -516,7 +573,7 @@ pub async fn read(hub: &Hub, instance: &str, file: Option<&str>, last: Option<us
         }
         out.push(item);
     }
-    Ok((out, earlier))
+    Ok(Page { items: out, earlier, continues, delivered })
 }
 
 #[cfg(test)]

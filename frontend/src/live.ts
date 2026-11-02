@@ -201,11 +201,12 @@ function connect() {
 }
 
 /** Back from the background (a phone, the installed app) or online again: reconnect now instead
- * of after the backoff, and catch up. */
+ * of after the backoff (its `ready` catches up). A socket that stayed open carried everything but
+ * maybe a moment of the chat on screen: only its new items are asked for. */
 function wakeUp() {
   if (stopped || document.hidden) return;
   if (socket) {
-    void refreshAll();
+    if (watched) void refreshSession(watched);
     return;
   }
   window.clearTimeout(reconnectTimer);

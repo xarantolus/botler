@@ -245,8 +245,11 @@ pub struct SessionView {
     /// Waking progress, or why the last wake failed.
     pub phase: Option<WakePhase>,
     pub items: Vec<Item>,
-    /// Items of this session before `items` (`last` left them out).
+    /// Items of this session before `items` (`last` or `after` left them out).
     pub earlier: usize,
+    /// `items` adjoin the `after` / `before` item asked for: the caller keeps what it has and
+    /// adds them; false means they are the latest page (that item is no longer on the branch).
+    pub continues: bool,
     /// Render hints of the Python tools that declare one, by the name pi calls them (`web_search`).
     pub tool_renders: BTreeMap<String, ToolRender>,
     /// The user's messages not in the session yet, oldest first: held by the hub (waiting for
