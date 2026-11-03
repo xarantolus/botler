@@ -1,53 +1,85 @@
 # Install
 
-botler runs on any Linux host as your own unprivileged user: one binary, one data directory
-(default `~/.local/share/botler`, or `$XDG_DATA_HOME/botler`; override with `--data` or
-`BOTLER_DATA`) and rootless Podman.
+botler runs on a Linux machine as your own unprivileged user: one binary, one data directory
+(`~/.local/share/botler`) and rootless Podman. There is no setup step: the first `botler serve`
+creates everything it needs.
 
 ## Requirements
 
-- **Rootless Podman 4.x or newer** (developed on 4.9). `podman info --format '{{.Host.Security.Rootless}}'`
-  must print `true`. Docker also works (`botler serve --runtime docker`), but Podman is the target.
-- **subuid/subgid ranges** for your user, needed for the agent base image:
+- **Linux with rootless Podman 4.x or newer.** `podman info --format '{{.Host.Security.Rootless}}'`
+  must print `true`. Docker also works (`--runtime docker`), but Podman is the target.
+- **subuid/subgid ranges** for your user (most distributions add them when the user is created):
   ```sh
   grep "^$USER:" /etc/subuid /etc/subgid      # both must list a range
   # if not:
   sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$USER"
   podman system migrate
   ```
-- **Lingering**, so your user services keep running after you log out and start at boot:
-  `sudo loginctl enable-linger "$USER"`.
-- `git`, `tar`, `curl` (for ntfy push) and (optionally) `zstd` on `PATH`. To build: Rust 1.90 or newer.
+- `git` and `tar` on `PATH`; `zstd` is optional (smaller backups), `curl` for push notifications.
+- An [OpenRouter](https://openrouter.ai) API key: agents use models through it, and you set a
+  daily budget per agent.
 
-## Steps
+## Run it
+
+1. **Get the binary.** Download `botler-<version>-<arch>-linux` from the
+   [releases](https://github.com/xarantolus/botler/releases) and put it on your `PATH` as `botler`,
+   or build it (Rust 1.90+ and Node.js 22+; `build.rs` builds the web app):
+   ```sh
+   cargo install --locked --path crates/botler-hub --root ~/.local
+   ```
+2. **Give it your OpenRouter key** (optional here; the web app asks for it otherwise):
+   ```sh
+   mkdir -p ~/.config/botler/secrets
+   install -m 600 /dev/stdin ~/.config/botler/secrets/OPENROUTER_API_KEY   # paste, Enter, Ctrl-D
+   ```
+3. **Start it:**
+   ```sh
+   botler serve
+   ```
+   The first start creates `~/.local/share/botler` with your monorepo, builds the agent image
+   (a few minutes) and logs a sign-in link:
+   ```
+   no device is signed in yet: open http://127.0.0.1:7420/#code=K7QM2XPA
+   ```
+   Open it on the same machine and say hello to Botler. The code is valid for 10 minutes;
+   `botler login-code` prints a new one. Sign in other devices with a code from **Settings →
+   Devices**.
+
+### Keep it running
+
+To start it at boot and keep it running after you log out, run it as a user service:
 
 ```sh
-# 1. Build and install to ~/.local/bin/botler
-cargo install --locked --path crates/botler-hub --root ~/.local
-
-# 2. Create the data directory and the monorepo
-botler init
-
-# 3. Enter your OpenRouter key (read from stdin: paste, then Enter and Ctrl-D)
-botler secret set OPENROUTER_API_KEY
-
-# 4. Run the hub as a user service
+sudo loginctl enable-linger "$USER"
 mkdir -p ~/.config/systemd/user
-cp packaging/botler.service ~/.config/systemd/user/
+cp packaging/botler.service ~/.config/systemd/user/     # or download it from the repo
 systemctl --user daemon-reload
 systemctl --user enable --now botler
-journalctl --user -u botler -f              # first start builds the agent base image (minutes)
-
-# 5. A user token for the web app and API (default 90 days; --days N)
-botler token
+journalctl --user -u botler -f                          # the sign-in link is logged here
 ```
 
-On the host itself, open `http://127.0.0.1:7420` and paste the token; from other devices, see
-below. The unit runs
-`~/.local/bin/botler serve --data ~/.local/share/botler`; edit `ExecStart` if you use another data
-directory. On `systemctl --user stop botler`, the hub stops its agent containers before exiting.
+On `systemctl --user stop botler`, the hub stops its agent containers before exiting.
+`botler status`, `botler pause` (the kill switch) and `botler resume` work while it runs.
 
-`botler status`, `botler pause` (kill switch) and `botler resume` work while the hub runs.
+### Configuration (optional)
+
+Everything has a default. `~/.config/botler/config.toml` can set:
+
+```toml
+data = "~/.local/share/botler"     # the data directory
+listen = "127.0.0.1:7420"          # the web app and API
+runtime = "podman"                 # or "docker"
+# A git remote the monorepo's main is pushed to after every change, e.g. a private repository
+# (pushed with your git and SSH configuration). Used when the monorepo is created; change it
+# later in Settings.
+mirror = "git@github.com:you/botler-monorepo.git"
+```
+
+Flags (`--data`, `--listen`, `--runtime`) and `BOTLER_DATA`, `BOTLER_LISTEN`, `BOTLER_RUNTIME`
+override it. Each file in `~/.config/botler/secrets/` sets the secret it is named after on every
+start (`OPENROUTER_API_KEY`, or any other secret the monorepo declares); the hub stores secrets
+encrypted, and you can also enter them in the web app (**Secrets**) or with
+`botler secret set <NAME>`.
 
 ## Exposing it privately
 
@@ -115,10 +147,11 @@ the chat unpacks it before it wakes.
 
 ```sh
 botler backup ~/botler-before-upgrade.tar.zst
-git pull && cargo install --locked --path crates/botler-hub --root ~/.local
+# replace the binary (a new release, or: git pull && cargo install --locked --path crates/botler-hub --root ~/.local)
 systemctl --user restart botler
 ```
 
 On start the hub migrates the database, unpacks the new version's pi extension and SDK, and
-builds the agent base image for the new version (tagged with it; old tags can be removed with
-`podman image prune`).
+builds the agent base image for the new version (`botler gc` removes images nothing uses any
+more). When the new version ships a newer monorepo template, the hub proposes merging it into your
+monorepo; it shows up like any other change for you to approve.

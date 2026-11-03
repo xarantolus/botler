@@ -1,6 +1,6 @@
 #!/bin/sh
 # botler's mount entrypoint, bind-mounted read-only into containers that hold network shares
-# (docs/spikes/fuse-mounts.md). The hub writes /botler/mounts/list, one share per line:
+# (rclone over FUSE). The hub writes /botler/mounts/list, one share per line:
 #   name|rclone remote|remote path|mount point|ro or rw|extra rclone flags
 # and passes each share's connection as RCLONE_CONFIG_<REMOTE>_* (the password in plain text;
 # it is obscured here). Per share it writes <name>.state (ok | failed), <name>.error and

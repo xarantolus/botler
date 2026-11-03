@@ -1,6 +1,6 @@
 # Primitives: how botler stays small and extensible
 
-This brings together the user's feedback so far into one model. **The goal:** most requests become *monorepo content built by agents*, not hub features. `ARCHITECTURE.md` describes the mechanisms. This document says which few concepts exist and where new work belongs.
+**The goal:** most requests become *monorepo content built by agents*, not hub features. `ARCHITECTURE.md` describes the mechanisms. This document says which few concepts exist and where new work belongs.
 
 ## The test for "does this need a core feature?"
 
@@ -163,29 +163,3 @@ New request kinds count as core features under rule 3 of the test. Everything el
 - **UI shell:** the approval and secret surfaces must never be agent-authored.
 
 **Self-hosting:** the core runs nothing self-hosted beyond what it needs. Agents may run services for the user.
-
-## Structural changes this implies (relative to today's code)
-
-1. **One op registry.**
-   - Each op is defined once with typed input and output (schemars + ts-rs).
-   - MCP tools, the HTTP ops endpoint, the Python SDK, TypeScript bindings and the terminating pi tools are all generated from it.
-   - Done: each op is one `ops::Op` impl (its input type) in the module of its domain, listed once in `ops::OPS`; a new op is one impl plus one line there.
-2. **One `Environment` type** shared by agents, jobs and services. Spawn-time overrides are merged in, and anything beyond the definition goes through grant checks. Done: `defs::Environment`, flattened into `agent.toml` and `job.toml`; `environment::container_spec` in the hub builds every container from it, and `Environment::extend` reports what an override adds (not wired to spawns yet).
-3. **One grants table and policy:**
-   - It replaces per-definition secret lists as the only mechanism; fixed grants become definition-held grants.
-   - It adds `request_access`.
-   - Escalation detection in `change.rs` becomes "diff of grants".
-4. **Handover as a primitive:** `handover(target)` covers archive → most relevant agent, and Botler rolling over into a fresh session (target = self).
-5. **Hub reached over a Unix socket** mounted into containers. The hub can then listen on localhost only, which makes Grants the only way to reach the network.
-
-## Build order from here
-
-1. **In flight:** template upgrades, services and published ports, memory, the search fallback.
-2. **Op registry (1) and Environment (2).** These are refactors with no behaviour change, done before more ops land.
-3. **Grants and `request_access` (3).** Secret grants per chat at spawn; memory-guided.
-4. **Search index:** sessions, journal, monorepo, memory; `search` with self scope.
-5. **Handover primitive (4):** Botler rollover.
-6. **Unix-socket hub (5)** plus binding to localhost.
-7. **Uploads, share target, ntfy:** a new user channel, so rule 3 applies.
-8. **Session tree** (rewind and fork), **actions**, **webhooks**, `replay_event`.
-9. **Apps extras:** the user's login in front of apps, starting on the first request, previews. Basic apps already work as published services.

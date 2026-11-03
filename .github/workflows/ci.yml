@@ -14,6 +14,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # build.rs builds the web app (frontend/dist) into the binary.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       # Tests use git (repo, smart HTTP), tar and zstd/gzip (backup); all ship with ubuntu-latest.
       - run: git --version && tar --version && zstd --version
       - run: cargo fmt --all --check
@@ -63,4 +69,10 @@ jobs:
       # botler/_ops.py is generated from the hub's OPS specs; this fails when it is stale.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # build.rs builds the web app (frontend/dist) into the binary.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - run: cargo test -p botler --test sdk

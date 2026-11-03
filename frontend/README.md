@@ -81,7 +81,9 @@ npm run e2e          # end-to-end smoke test (local only: needs Podman and a bui
 pointed at a scripted stub in the same file, and drives the app in headless Chromium: sign in,
 send, answer a question inline, reject a proposal, and run a job from the System view when there
 is one. It cleans up after itself; the first run builds the agent image. Its header lists the
-environment variables (Chromium binary, screenshots, where the data directory goes).
+environment variables (Chromium binary, screenshots, where the data directory goes); the throwaway
+hub itself is `e2e/harness.mjs`. `node e2e/screenshots.mjs` uses the same harness to take the
+README's screenshots (`docs/screenshots/`) from scripted, realistic conversations.
 
 `npm run build` writes a hash of the sources (`src/`, `public/`, `index.html`, the package and
 config files; tests excluded) to `dist/.source-hash`. `cargo test` recomputes it

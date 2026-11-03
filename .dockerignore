@@ -1,0 +1,3 @@
+# The dev container build (run-container.sh) needs only .devcontainer/.
+*
+!.devcontainer
