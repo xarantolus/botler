@@ -6,59 +6,61 @@ creates everything it needs.
 
 ## Requirements
 
-- **Linux with rootless Podman 4.x or newer.** `podman info --format '{{.Host.Security.Rootless}}'`
-  must print `true`. Docker also works (`--runtime docker`), but Podman is the target.
-- **subuid/subgid ranges** for your user (most distributions add them when the user is created):
-  ```sh
-  grep "^$USER:" /etc/subuid /etc/subgid      # both must list a range
-  # if not:
-  sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$USER"
-  podman system migrate
-  ```
-- `git` and `tar` on `PATH`; `zstd` is optional (smaller backups), `curl` for push notifications.
+- **Linux with rootless Podman 4.x or newer** (`sudo apt install podman`, `sudo dnf install
+  podman`, ...). Docker also works (`--runtime docker`), but Podman is the target.
+- **subuid/subgid ranges** for your user; most distributions add them when the user is created.
+- `git` and `tar`; `zstd` is optional (smaller backups), `curl` for push notifications.
+- To build it: **Rust 1.90+** ([rustup](https://rustup.rs)) and **Node.js 22+** with npm (the
+  build compiles the web app into the binary).
 - An [OpenRouter](https://openrouter.ai) API key: agents use models through it, and you set a
   daily budget per agent.
 
-## Run it
+`botler service check` checks the host and tells you what is missing (`botler service install`,
+below, runs the same check first).
 
-1. **Get the binary.** Download `botler-<version>-<arch>-linux` from the
-   [releases](https://github.com/xarantolus/botler/releases) and put it on your `PATH` as `botler`,
-   or build it (Rust 1.90+ and Node.js 22+; `build.rs` builds the web app):
-   ```sh
-   cargo install --locked --path crates/botler-hub --root ~/.local
-   ```
-2. **Give it your OpenRouter key** (optional here; the web app asks for it otherwise):
-   ```sh
-   mkdir -p ~/.config/botler/secrets
-   install -m 600 /dev/stdin ~/.config/botler/secrets/OPENROUTER_API_KEY   # paste, Enter, Ctrl-D
-   ```
-3. **Start it:**
-   ```sh
-   botler serve
-   ```
-   The first start creates `~/.local/share/botler` with your monorepo, builds the agent image
-   (a few minutes) and logs a sign-in link:
-   ```
-   no device is signed in yet: open http://127.0.0.1:7420/#code=K7QM2XPA
-   ```
-   Open it on the same machine and say hello to Botler. The code is valid for 10 minutes;
-   `botler login-code` prints a new one. Sign in other devices with a code from **Settings →
-   Devices**.
-
-### Keep it running
-
-To start it at boot and keep it running after you log out, run it as a user service:
+## Install
 
 ```sh
-sudo loginctl enable-linger "$USER"
-mkdir -p ~/.config/systemd/user
-cp packaging/botler.service ~/.config/systemd/user/     # or download it from the repo
-systemctl --user daemon-reload
-systemctl --user enable --now botler
-journalctl --user -u botler -f                          # the sign-in link is logged here
+cargo install --locked --git https://github.com/xarantolus/botler botler
 ```
 
-On `systemctl --user stop botler`, the hub stops its agent containers before exiting.
+That puts `botler` in `~/.cargo/bin`. Add `--root <dir>` to put it elsewhere, e.g.
+`--root ~/apps/botler` gives `~/apps/botler/bin/botler`.
+
+Give it your OpenRouter key (optional here; the web app asks for it otherwise):
+
+```sh
+mkdir -p ~/.config/botler/secrets
+install -m 600 /dev/stdin ~/.config/botler/secrets/OPENROUTER_API_KEY   # paste, Enter, Ctrl-D
+```
+
+## Run it
+
+As a user service that starts at boot and keeps running after you log out:
+
+```sh
+botler service install
+journalctl --user -u botler -f        # the sign-in link is logged here
+```
+
+It checks the host first (rootless Podman, subordinate ids, git, lingering) and prints the fix
+for anything missing. Then it writes `~/.config/systemd/user/botler.service` for this binary, and
+enables and starts it. `botler service uninstall` removes the service again; your data stays.
+
+To try it in the foreground instead, run `botler serve`.
+
+The first start creates `~/.local/share/botler` with your monorepo, builds the agent image
+(a few minutes) and logs a sign-in link:
+
+```
+no device is signed in yet: open http://127.0.0.1:7420/#code=K7QM2XPA
+```
+
+Open it on the same machine and say hello to Botler. The code is valid for 10 minutes;
+`botler login-code` prints a new one. Sign in other devices with a code from **Settings →
+Devices**.
+
+`systemctl --user stop botler` stops the hub; it stops its agent containers before exiting.
 `botler status`, `botler pause` (the kill switch) and `botler resume` work while it runs.
 
 ### Configuration (optional)
@@ -147,7 +149,7 @@ the chat unpacks it before it wakes.
 
 ```sh
 botler backup ~/botler-before-upgrade.tar.zst
-# replace the binary (a new release, or: git pull && cargo install --locked --path crates/botler-hub --root ~/.local)
+cargo install --locked --git https://github.com/xarantolus/botler botler   # the same --root as before
 systemctl --user restart botler
 ```
 

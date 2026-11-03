@@ -58,17 +58,19 @@ MCP), keep notes and memory, set timers, read and send files, and mount your net
 
 ## Getting started
 
-You need Linux with rootless Podman and an OpenRouter API key. Then:
+You need Linux with rootless Podman, Rust and Node.js to build it, and an OpenRouter API key:
 
 ```sh
+cargo install --locked --git https://github.com/xarantolus/botler botler
 mkdir -p ~/.config/botler/secrets
 install -m 600 /dev/stdin ~/.config/botler/secrets/OPENROUTER_API_KEY   # paste the key, Enter, Ctrl-D
-botler serve
+botler service install
 ```
 
-The first start creates your monorepo, builds the agent image, and prints a link that signs your
-browser in. [`docs/INSTALL.md`](docs/INSTALL.md) covers getting the binary, running it as a
-service, reaching it from your phone (Tailscale), backups and upgrades.
+`botler service install` checks the host, then runs botler as a user service. The first start
+creates your monorepo, builds the agent image, and logs a link that signs your browser in
+(`journalctl --user -u botler -f`). [`docs/INSTALL.md`](docs/INSTALL.md) has the details, reaching
+it from your phone (Tailscale), configuration, backups and upgrades.
 
 ## Developing
 

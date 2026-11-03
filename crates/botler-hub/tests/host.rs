@@ -61,3 +61,11 @@ fn the_config_file_is_optional_and_strict() {
     let err = HostConfig::load(&path).unwrap_err().to_string();
     assert!(err.contains("unknown field `lisen`"), "{err}");
 }
+
+#[test]
+fn the_service_unit_runs_this_binary_with_podman_on_its_path() {
+    let unit = host::systemd_unit(std::path::Path::new("/home/me/apps/botler/bin/botler"));
+    assert!(unit.contains("\nExecStart=/home/me/apps/botler/bin/botler serve\n"), "{unit}");
+    assert!(unit.contains("\nEnvironment=PATH=/home/me/apps/botler/bin:%h/.cargo/bin:"), "{unit}");
+    assert!(unit.contains("\nKillMode=mixed\n") && unit.contains("\nWantedBy=default.target\n"), "{unit}");
+}

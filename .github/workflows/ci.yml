@@ -8,7 +8,14 @@ on:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    env:
+      # About 60 test binaries each link the whole hub: with debug info and incremental data they
+      # fill the runner's disk. CI needs neither.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
     steps:
+      # The runner's preinstalled SDKs this job never uses (about 25 GB).
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:

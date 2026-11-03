@@ -122,3 +122,110 @@ pub async fn import_secrets(hub: &Hub, dir: &Path) -> Result<Vec<String>> {
     set.sort();
     Ok(set)
 }
+
+/// The systemd user unit that runs `exe serve` (`botler service install`).
+pub fn systemd_unit(exe: &Path) -> String {
+    let dir = exe.parent().map(|d| format!("{}:", d.display())).unwrap_or_default();
+    format!(
+        "# botler hub as a systemd user service, written by `botler service install`.\n\
+         [Unit]\n\
+         Description=botler hub\n\
+         After=network-online.target\n\
+         Wants=network-online.target\n\
+         \n\
+         [Service]\n\
+         # The data directory, address and mirror come from ~/.config/botler/config.toml (optional);\n\
+         # secrets from files in ~/.config/botler/secrets/ (optional).\n\
+         ExecStart={exe} serve\n\
+         # SIGTERM goes to the hub only; it stops its agent containers, then exits. Anything left after\n\
+         # the timeout is killed.\n\
+         KillMode=mixed\n\
+         TimeoutStopSec=90\n\
+         Restart=always\n\
+         RestartSec=5\n\
+         # Podman and git must be on PATH.\n\
+         Environment=PATH={dir}%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n",
+        exe = exe.display()
+    )
+}
+
+/// Something the host lacks for the hub, and how to fix it.
+#[derive(Debug, PartialEq)]
+pub struct Problem {
+    pub what: String,
+    pub fix: String,
+    /// Without it the hub cannot run at all (otherwise it runs, with a drawback).
+    pub blocking: bool,
+}
+
+/// What this host still needs for the hub: rootless Podman with subordinate ids for the user (or a
+/// working Docker when `runtime` is `docker`), git, and lingering (so the service runs while the
+/// user is logged out). Empty when it is ready.
+pub fn preflight(user: &str, runtime: Option<&str>) -> Vec<Problem> {
+    let run = |program: &str, args: &[&str]| {
+        std::process::Command::new(program)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let mut out = Vec::new();
+    if runtime == Some("docker") {
+        if run("docker", &["info", "--format", "{{.ServerVersion}}"]).is_none() {
+            out.push(Problem {
+                what: "docker is not installed, not running, or you may not use it".into(),
+                fix: "install Docker and add yourself to the `docker` group, or use rootless Podman".into(),
+                blocking: true,
+            });
+        }
+    } else {
+        podman(&run, user, &mut out);
+    }
+    if run("git", &["--version"]).is_none() {
+        out.push(Problem { what: "git is not installed".into(), fix: "install git".into(), blocking: true });
+    }
+    if run("loginctl", &["show-user", user, "--property=Linger", "--value"]).as_deref() != Some("yes") {
+        out.push(Problem {
+            what: "lingering is off: the service stops when you log out and does not start at boot".into(),
+            fix: format!("sudo loginctl enable-linger {user}"),
+            blocking: false,
+        });
+    }
+    out
+}
+
+fn podman(run: &dyn Fn(&str, &[&str]) -> Option<String>, user: &str, out: &mut Vec<Problem>) {
+    match run("podman", &["info", "--format", "{{.Host.Security.Rootless}}"]).as_deref() {
+        Some("true") => {}
+        Some(_) => out.push(Problem {
+            what: "podman runs as root here; botler runs as your user with rootless Podman".into(),
+            fix: "run botler as an ordinary user (not root or with sudo)".into(),
+            blocking: true,
+        }),
+        None => out.push(Problem {
+            what: "podman is not installed or does not work".into(),
+            fix: "install Podman 4 or newer (e.g. `sudo apt install podman`, `sudo dnf install podman`) and check \
+                  `podman info`"
+                .into(),
+            blocking: true,
+        }),
+    }
+    for file in ["/etc/subuid", "/etc/subgid"] {
+        let listed = std::fs::read_to_string(file)
+            .map(|s| s.lines().any(|l| l.split(':').next() == Some(user)))
+            .unwrap_or(false);
+        if !listed {
+            out.push(Problem {
+                what: format!("{file} has no range for {user} (containers need subordinate ids)"),
+                fix: format!(
+                    "sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 {user} && podman system migrate"
+                ),
+                blocking: true,
+            });
+        }
+    }
+}

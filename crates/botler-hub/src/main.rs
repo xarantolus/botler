@@ -48,6 +48,11 @@ enum Command {
         #[arg(long, env = "BOTLER_RUNTIME")]
         runtime: Option<String>,
     },
+    /// Run the hub as a systemd user service (checks the host first).
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
     /// Print a user token for the web app and API.
     Token {
         #[arg(long, default_value = "90")]
@@ -108,6 +113,16 @@ enum Command {
 enum TemplateCommand {
     /// The newest template snapshot, the template built into this hub, and pending upgrades.
     Status,
+}
+
+#[derive(Subcommand)]
+enum ServiceCommand {
+    /// Only check whether this host has what the hub needs.
+    Check,
+    /// Check the host, write ~/.config/systemd/user/botler.service for this binary, enable and start it.
+    Install,
+    /// Stop and disable the service and remove its unit (the data directory stays).
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -178,6 +193,7 @@ async fn main() -> anyhow::Result<()> {
             serve::serve(hub, shutdown_signal()).await?;
             Ok(())
         }
+        Command::Service { command } => service(command, host.runtime.as_deref()),
         Command::Token { days } => {
             let hub = offline_hub(paths).await?;
             println!("{}", hub.tokens.issue(&Principal::User, chrono::Duration::days(days), chrono::Utc::now()));
@@ -260,6 +276,60 @@ async fn init(paths: &Paths, host: &host::HostConfig) -> anyhow::Result<()> {
     println!("botler initialised in {} (monorepo at {commit})", paths.root.display());
     println!("Start the hub with `botler serve`; it prints a link that signs your browser in.");
     Ok(())
+}
+
+/// Print what the host lacks; an error when something blocks the hub.
+fn check(runtime: Option<&str>) -> anyhow::Result<()> {
+    let user = std::env::var("USER").context("USER is not set")?;
+    let problems = host::preflight(&user, runtime);
+    for p in &problems {
+        println!("{} {}\n    fix: {}", if p.blocking { "missing:" } else { "note:" }, p.what, p.fix);
+    }
+    if problems.iter().any(|p| p.blocking) {
+        bail!("fix the above, then run this again");
+    }
+    Ok(())
+}
+
+fn service(command: ServiceCommand, runtime: Option<&str>) -> anyhow::Result<()> {
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    let unit = PathBuf::from(home).join(".config/systemd/user/botler.service");
+    let systemctl = |args: &[&str]| -> anyhow::Result<()> {
+        let status =
+            std::process::Command::new("systemctl").arg("--user").args(args).status().context("running systemctl")?;
+        if !status.success() {
+            bail!("systemctl --user {} failed ({status})", args.join(" "));
+        }
+        Ok(())
+    };
+    match command {
+        ServiceCommand::Check => {
+            check(runtime)?;
+            println!("this host has what botler needs");
+            Ok(())
+        }
+        ServiceCommand::Install => {
+            check(runtime)?;
+            let exe = std::env::current_exe().context("finding this binary")?;
+            std::fs::create_dir_all(unit.parent().context("unit path")?)?;
+            std::fs::write(&unit, host::systemd_unit(&exe))?;
+            systemctl(&["daemon-reload"])?;
+            systemctl(&["enable", "--now", "botler"])?;
+            println!("wrote {} and started it.", unit.display());
+            println!("The first start builds the agent image (minutes); the sign-in link is in its log:");
+            println!("  journalctl --user -u botler -f");
+            Ok(())
+        }
+        ServiceCommand::Uninstall => {
+            if unit.exists() {
+                systemctl(&["disable", "--now", "botler"])?;
+                std::fs::remove_file(&unit)?;
+                systemctl(&["daemon-reload"])?;
+            }
+            println!("botler's service is removed; the data directory is untouched.");
+            Ok(())
+        }
+    }
 }
 
 async fn validate(paths: &Paths, dir: &std::path::Path) -> anyhow::Result<()> {
