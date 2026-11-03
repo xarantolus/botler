@@ -815,7 +815,7 @@ async fn container_spec(
                 .collect::<BTreeMap<_, _>>(),
         }),
     );
-    servers.extend(mcp_servers(applied, env));
+    servers.extend(mcp_stdio(env));
     // Python tools this agent is granted (`tools` globs); the extension registers them.
     let tools = applied.defs.tools_for(&def.spec.env);
     // Hub ops that end the turn; the extension registers them with `terminate: true`.
@@ -827,6 +827,7 @@ async fn container_spec(
         ("tools.json", to_json(&json!(tools))?),
         ("turn-tools.json", to_json(&ops::turn_ending_tools(&caller))?),
         ("mcp.json", to_json(&json!({ "mcpServers": servers }))?),
+        ("mcp-services.json", to_json(&json!(mcp_services(applied, env)))?),
         ("services.json", to_json(&json!(service_addresses(hub, applied, env).await?))?),
         // Memory indexes are read once per wake, so the prompt stays stable within a session.
         ("botler.md", prompt::render(instance, def, branch) + &crate::memory::index_section(hub, def).await?),
@@ -862,8 +863,6 @@ async fn container_spec(
     Ok(spec)
 }
 
-/// `mcp.json` entries besides the hub: granted services, reached directly on the services network
-/// (they get no botler token), and stdio servers pi starts inside the container.
 /// Where a service this agent may reach is (`/botler/agent-dir/services.json`).
 #[derive(serde::Serialize)]
 struct ServiceAddress {
@@ -889,7 +888,11 @@ async fn service_addresses(hub: &Hub, applied: &crate::hub::Applied, env: &Envir
     Ok(out)
 }
 
-fn mcp_servers(applied: &crate::hub::Applied, env: &Environment) -> serde_json::Map<String, serde_json::Value> {
+/// MCP servers granted services serve, reached directly on the services network (they get no
+/// botler token). The extension registers them (`mcp-services.json`) rather than pi's `mcp.json`:
+/// pi gives up on a configured server it cannot reach as the session starts (the service
+/// restarting just then), while a registered one the extension can register again.
+fn mcp_services(applied: &crate::hub::Applied, env: &Environment) -> serde_json::Map<String, serde_json::Value> {
     let mut servers = serde_json::Map::new();
     for svc in &env.mcp {
         // Validation guarantees a service with a port.
@@ -897,6 +900,12 @@ fn mcp_servers(applied: &crate::hub::Applied, env: &Environment) -> serde_json::
         let url = format!("http://{svc}:{port}/mcp"); // the service's alias on the network
         servers.insert(svc.clone(), json!({ "url": url }));
     }
+    servers
+}
+
+/// `mcp.json` entries for the stdio servers pi starts inside the container.
+fn mcp_stdio(env: &Environment) -> serde_json::Map<String, serde_json::Value> {
+    let mut servers = serde_json::Map::new();
     for (name, s) in &env.mcp_stdio {
         let Some((command, args)) = s.command.split_first() else { continue };
         servers.insert(name.clone(), json!({ "command": command, "args": args, "env": s.env }));

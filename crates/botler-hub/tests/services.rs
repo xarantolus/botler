@@ -265,11 +265,13 @@ async fn granted_agents_join_the_network_and_get_mcp_servers() {
 
     let c = &e.fake.containers()[&agents::container_name(&e.hub, "user")];
     assert_eq!(c.spec.network, NetworkMode::Named(e.hub.network()));
-    let mcp: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir("user").join("mcp.json")).unwrap())
-            .unwrap();
+    let read = |file: &str| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir("user").join(file)).unwrap()).unwrap()
+    };
+    assert_eq!(read("mcp-services.json")["app"], json!({"url": "http://app:8000/mcp"}));
+    let mcp = read("mcp.json");
     let servers = &mcp["mcpServers"];
-    assert_eq!(servers["app"], json!({"url": "http://app:8000/mcp"}));
+    assert!(servers.get("app").is_none(), "the extension registers it");
     assert_eq!(servers["fs"]["command"], "npx");
     assert_eq!(servers["fs"]["args"], json!(["-y", "fs-mcp", "."]));
     assert_eq!(servers["fs"]["env"]["ROOT"], "/home/agent");

@@ -16,6 +16,11 @@
 // their dependencies, installed in /opt/botler/tools-venv; each call runs
 // `python -m botler.tools call <name>` with that venv's Python and installs nothing.
 //
+// MCP servers of granted services (/botler/agent-dir/mcp-services.json) are registered here, not
+// in pi's mcp.json: pi gives up on a configured server it cannot reach as the session starts (the
+// service restarting just then) and never tries it again. A registered server that offers no tools
+// is registered again at the next turn (at most every RETRY_MCP_MS), which makes pi connect anew.
+//
 // Hub ops after which the turn is over (ask_user, propose_change, ...) are registered here too,
 // from /botler/agent-dir/turn-tools.json (rendered by the hub from its op specs): MCP results
 // cannot end a turn, these return `terminate: true` so no model call follows. The hub hides
@@ -28,6 +33,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const TOOLS_FILE = "/botler/agent-dir/tools.json";
 const TURN_TOOLS_FILE = "/botler/agent-dir/turn-tools.json";
+const MCP_SERVICES_FILE = "/botler/agent-dir/mcp-services.json";
+const RETRY_MCP_MS = 15_000;
 const TOOLS_PYTHON = "/opt/botler/tools-venv/bin/python";
 const TOOL_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT = 50_000;
@@ -51,15 +58,15 @@ interface OpDecl {
   parameters: Record<string, unknown>;
 }
 
-function loadJson<T>(path: string): T[] {
+function loadJson<T>(path: string, empty: T): T {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return []; // nothing granted
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return empty; // nothing granted
     throw e;
   }
-  return JSON.parse(text) as T[];
+  return JSON.parse(text) as T;
 }
 
 /** Call hub op `name` (`POST /api/v1/ops/{name}`, as the Python SDK does); throws on failure. */
@@ -170,6 +177,24 @@ export default function botler(pi: ExtensionAPI) {
   let seen = new Set<string>();
   const registered = new Set<string>();
 
+  const services = Object.entries(loadJson<Record<string, { url: string }>>(MCP_SERVICES_FILE, {}));
+  const attempts = new Map<string, { at: number; n: number }>();
+  const connect = (name: string, url: string) => {
+    const n = (attempts.get(name)?.n ?? 0) + 1;
+    attempts.set(name, { at: Date.now(), n });
+    // pi connects a server again only when its config changed, so each attempt is numbered.
+    pi.registerMcpServer(name, n === 1 ? { url } : { url, headers: { "X-Botler-Attempt": String(n) } });
+  };
+  for (const [name, { url }] of services) connect(name, url);
+  pi.on("turn_start", async () => {
+    const tools = pi.getAllTools();
+    for (const [name, { url }] of services) {
+      const namespace = `mcp__${name.replace(/-/g, "_")}`;
+      const offered = tools.some((t) => t.namespace?.name === namespace && t.exposure !== "hidden");
+      if (!offered && Date.now() - (attempts.get(name)?.at ?? 0) >= RETRY_MCP_MS) connect(name, url);
+    }
+  });
+
   // Session tree commands, sent by the hub only while pi is idle (navigating throws mid-turn).
   pi.registerCommand("botler-goto", {
     description: "botler: continue this conversation from an earlier entry",
@@ -188,7 +213,7 @@ export default function botler(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    for (const op of loadJson<OpDecl>(TURN_TOOLS_FILE)) {
+    for (const op of loadJson<OpDecl[]>(TURN_TOOLS_FILE, [])) {
       if (registered.has(op.name)) continue;
       registered.add(op.name);
       pi.registerTool({
@@ -204,7 +229,7 @@ export default function botler(pi: ExtensionAPI) {
         },
       });
     }
-    for (const t of loadJson<ToolDecl>(TOOLS_FILE)) {
+    for (const t of loadJson<ToolDecl[]>(TOOLS_FILE, [])) {
       const name = piToolName(t.name);
       if (registered.has(name)) continue;
       registered.add(name);

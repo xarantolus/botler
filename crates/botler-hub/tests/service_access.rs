@@ -39,7 +39,7 @@ async fn a_service_grant_joins_the_network_without_an_mcp_entry() {
     let read = |f: &str| -> Value {
         serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir(&chat).join(f)).unwrap()).unwrap()
     };
-    assert!(read("mcp.json")["mcpServers"].get("browser").is_none(), "no MCP endpoint for a plain service");
+    assert!(read("mcp-services.json").get("browser").is_none(), "no MCP endpoint for a plain service");
     let listed = read("services.json");
     assert_eq!(listed[0]["name"], "browser");
     assert_eq!((listed[0]["host"].clone(), listed[0]["port"].clone()), (json!("browser"), json!(9222)));
@@ -71,8 +71,9 @@ async fn a_grant_to_a_service_that_serves_mcp_gives_its_tools() {
     agents::dispatch_pending(&e.hub).await.unwrap();
 
     let mcp: Value =
-        serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir(&chat).join("mcp.json")).unwrap()).unwrap();
-    assert_eq!(mcp["mcpServers"]["web"]["url"], "http://web:8000/mcp");
+        serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir(&chat).join("mcp-services.json")).unwrap())
+            .unwrap();
+    assert_eq!(mcp["web"]["url"], "http://web:8000/mcp");
 }
 
 /// A job lists a service in `services` and reaches it by name on the services network (an MCP
