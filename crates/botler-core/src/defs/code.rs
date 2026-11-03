@@ -20,12 +20,13 @@ pub struct JobCode {
 }
 
 impl JobCode {
-    /// Whether `changed` (repo paths) changes the job, against its code before (`None`: new).
-    pub fn touched(&self, before: Option<&JobCode>, changed: &[String]) -> bool {
+    /// The first of `changed` (repo paths) that changes the job, against its code before (`None`:
+    /// new).
+    pub fn touched<'a>(&self, before: Option<&JobCode>, changed: &'a [String]) -> Option<&'a String> {
         let lock_moved = || before.is_none_or(|b| b.locked != self.locked);
-        changed.iter().any(|p| {
-            self.paths.iter().any(|i| p == i || p.starts_with(&format!("{i}/")))
-                && (p != "uv.lock" || self.locked.is_none() || lock_moved())
+        changed.iter().find(|p| {
+            self.paths.iter().any(|i| *p == i || p.starts_with(&format!("{i}/")))
+                && (*p != "uv.lock" || self.locked.is_none() || lock_moved())
         })
     }
 }

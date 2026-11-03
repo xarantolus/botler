@@ -108,11 +108,17 @@ pub enum Escalation {
     /// built from changed. Each run's arguments are approved separately; this approves the code.
     ActionChanged {
         action: String,
+        /// The changed path its image is built from (`None`: it is new).
+        #[serde(default)]
+        via: Option<String>,
     },
     /// A channel (a service that speaks as the user) is new, or its code or anything its image is
     /// built from changed.
     ChannelChanged {
         job: String,
+        /// The changed path its image is built from (`None`: it is new).
+        #[serde(default)]
+        via: Option<String>,
     },
     /// The protection policy itself could not be evaluated; treated as touching everything.
     InvalidPolicy {
@@ -155,12 +161,18 @@ impl Escalation {
                 if *mode == crate::defs::MountMode::ReadWrite { "read-write" } else { "read-only" }
             ),
             Self::GrantAuto { resource } => format!("lets any chat get `{resource}` without asking you"),
-            Self::ActionChanged { action } => {
-                format!("adds or changes the code of action `{action}`, which may use hub-held secrets")
+            Self::ActionChanged { action, via: None } => {
+                format!("adds action `{action}`, which may use hub-held secrets")
             }
-            Self::ChannelChanged { job } => {
-                format!("adds or changes channel `{job}`, which carries messages as you from outside")
+            Self::ActionChanged { action, via: Some(path) } => format!(
+                "changes action `{action}`, which may use hub-held secrets: its image is built from `{path}`, which this change edits"
+            ),
+            Self::ChannelChanged { job, via: None } => {
+                format!("adds channel `{job}`, which carries messages as you from outside")
             }
+            Self::ChannelChanged { job, via: Some(path) } => format!(
+                "changes channel `{job}`, which carries messages as you from outside: its image is built from `{path}`, which this change edits"
+            ),
             Self::InvalidPolicy { detail } => {
                 format!("cannot evaluate protected paths ({detail}); treating all paths as protected")
             }
@@ -419,14 +431,16 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
 
     for j in new.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Action) {
         let was_action = old.jobs.get(&j.name).is_some_and(|o| o.spec.lifetime == Lifetime::Action);
-        if !was_action || j.code.touched(old.jobs.get(&j.name).map(|o| &o.code), changed_paths) {
-            esc.insert(Escalation::ActionChanged { action: j.name.clone() });
+        let via = j.code.touched(old.jobs.get(&j.name).map(|o| &o.code), changed_paths);
+        if !was_action || via.is_some() {
+            esc.insert(Escalation::ActionChanged { action: j.name.clone(), via: via.filter(|_| was_action).cloned() });
         }
     }
     for j in new.jobs.values().filter(|j| j.spec.channel) {
         let was_channel = old.jobs.get(&j.name).is_some_and(|o| o.spec.channel);
-        if !was_channel || j.code.touched(old.jobs.get(&j.name).map(|o| &o.code), changed_paths) {
-            esc.insert(Escalation::ChannelChanged { job: j.name.clone() });
+        let via = j.code.touched(old.jobs.get(&j.name).map(|o| &o.code), changed_paths);
+        if !was_channel || via.is_some() {
+            esc.insert(Escalation::ChannelChanged { job: j.name.clone(), via: via.filter(|_| was_channel).cloned() });
         }
     }
 
@@ -1110,8 +1124,14 @@ mod tests {
                 .collect()
         };
         let added = preview(&old, &new, &["jobs/send/job.toml".into()], Utc::now());
-        assert!(added.escalations.contains(&Escalation::ActionChanged { action: "send".into() }), "a new action");
-        assert_eq!(changed(&["jobs/send/send.py"]), vec![Escalation::ActionChanged { action: "send".into() }]);
+        assert!(
+            added.escalations.contains(&Escalation::ActionChanged { action: "send".into(), via: None }),
+            "a new action"
+        );
+        assert_eq!(
+            changed(&["jobs/send/send.py"]),
+            vec![Escalation::ActionChanged { action: "send".into(), via: Some("jobs/send/send.py".into()) }]
+        );
         assert_eq!(changed(&["packages/shared/mail.py"]).len(), 1, "shared code it is built from");
         assert!(changed(&["jobs/other/run.py", "agents/main/AGENTS.md"]).is_empty());
         assert!(changed(&["jobs/sender/x.py"]).is_empty(), "a prefix is not the directory");
@@ -1132,8 +1152,11 @@ mod tests {
                 .collect()
         };
         let added = preview(&defs(&base()), &new, &["jobs/tg/job.toml".into()], Utc::now());
-        assert!(added.escalations.contains(&Escalation::ChannelChanged { job: "tg".into() }));
-        assert_eq!(changed(&["jobs/tg/bot.py"]), vec![Escalation::ChannelChanged { job: "tg".into() }]);
+        assert!(added.escalations.contains(&Escalation::ChannelChanged { job: "tg".into(), via: None }));
+        assert_eq!(
+            changed(&["jobs/tg/bot.py"]),
+            vec![Escalation::ChannelChanged { job: "tg".into(), via: Some("jobs/tg/bot.py".into()) }]
+        );
         assert!(changed(&["jobs/other/x.py"]).is_empty());
         // Built from its directory and the lock (as the template's channels are): other tools,
         // and lock entries it does not install, are not its code.
@@ -1158,10 +1181,21 @@ mod tests {
         let other_tool = locked(with.clone()).with("uv.lock", lock("2"));
         assert!(esc(&other_tool, &["tools/web/images.py", "tools/web/pyproject.toml", "uv.lock"]).is_empty());
         let its_dep = locked(with.clone()).with("uv.lock", lock("1").replace("0.27", "0.28"));
-        assert_eq!(esc(&its_dep, &["uv.lock"]), vec![Escalation::ChannelChanged { job: "tg".into() }]);
+        assert_eq!(
+            esc(&its_dep, &["uv.lock"]),
+            vec![Escalation::ChannelChanged { job: "tg".into(), via: Some("uv.lock".into()) }]
+        );
         assert!(
-            esc(&other_tool, &["images/agent/Dockerfile"]).contains(&Escalation::ChannelChanged { job: "tg".into() }),
+            esc(&other_tool, &["images/agent/Dockerfile"]).contains(&Escalation::ChannelChanged {
+                job: "tg".into(),
+                via: Some("images/agent/Dockerfile".into())
+            }),
             "the image it builds on"
+        );
+        assert_eq!(
+            Escalation::ChannelChanged { job: "tg".into(), via: Some("packages/shared/x.py".into()) }.explain(),
+            "changes channel `tg`, which carries messages as you from outside: its image is built from \
+             `packages/shared/x.py`, which this change edits"
         );
         // A Dockerfile copying its whole context: everything in it counts.
         let all = locked(with.clone()).with("uv.lock", lock("1")).with("jobs/tg/Dockerfile", "FROM x\nCOPY . /app\n");
