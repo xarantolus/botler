@@ -419,17 +419,13 @@ pub fn preview(old: &Definitions, new: &Definitions, changed_paths: &[String], n
 
     for j in new.jobs.values().filter(|j| j.spec.lifetime == Lifetime::Action) {
         let was_action = old.jobs.get(&j.name).is_some_and(|o| o.spec.lifetime == Lifetime::Action);
-        let inputs = crate::defs::job_inputs(&j.name);
-        let touched = changed_paths.iter().any(|p| inputs.iter().any(|i| p == i || p.starts_with(&format!("{i}/"))));
-        if !was_action || touched {
+        if !was_action || j.code.touched(old.jobs.get(&j.name).map(|o| &o.code), changed_paths) {
             esc.insert(Escalation::ActionChanged { action: j.name.clone() });
         }
     }
     for j in new.jobs.values().filter(|j| j.spec.channel) {
         let was_channel = old.jobs.get(&j.name).is_some_and(|o| o.spec.channel);
-        let inputs = crate::defs::job_inputs(&j.name);
-        let touched = changed_paths.iter().any(|p| inputs.iter().any(|i| p == i || p.starts_with(&format!("{i}/"))));
-        if !was_channel || touched {
+        if !was_channel || j.code.touched(old.jobs.get(&j.name).map(|o| &o.code), changed_paths) {
             esc.insert(Escalation::ChannelChanged { job: j.name.clone() });
         }
     }
@@ -1100,7 +1096,10 @@ mod tests {
     #[test]
     fn action_code_changes_ask_the_user() {
         let action = "lifetime = \"action\"\ncommand = [\"x\"]\nargs = { type = \"object\" }\n";
-        let with = base().with("jobs/send/job.toml", action).with("jobs/send/Dockerfile", "FROM x");
+        let with = base().with("jobs/send/job.toml", action).with(
+            "jobs/send/Dockerfile",
+            "FROM x\nCOPY packages/shared /app/packages/shared\nCOPY jobs/send /app/jobs/send\n",
+        );
         let (old, new) = (defs(&base()), defs(&with));
         let changed = |paths: &[&str]| -> Vec<Escalation> {
             let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
@@ -1136,6 +1135,37 @@ mod tests {
         assert!(added.escalations.contains(&Escalation::ChannelChanged { job: "tg".into() }));
         assert_eq!(changed(&["jobs/tg/bot.py"]), vec![Escalation::ChannelChanged { job: "tg".into() }]);
         assert!(changed(&["jobs/other/x.py"]).is_empty());
+        // Built from its directory and the lock (as the template's channels are): other tools,
+        // and lock entries it does not install, are not its code.
+        let lock = |web: &str| {
+            format!(
+                "version = 1\n\n[[package]]\nname = \"tg-bot\"\nsource = {{ editable = \"jobs/tg\" }}\ndependencies = [{{ name = \"httpx\" }}]\n\n\
+                 [[package]]\nname = \"httpx\"\nversion = \"0.27\"\n\n[[package]]\nname = \"web\"\nversion = \"{web}\"\n"
+            )
+        };
+        let locked = |tree: MemTree| {
+            tree.with(
+                "jobs/tg/Dockerfile",
+                "FROM botler/image-agent\nCOPY pyproject.toml uv.lock /app/\nCOPY jobs/tg /app/jobs/tg\n",
+            )
+            .with("jobs/tg/pyproject.toml", "[project]\nname = \"tg_bot\"\n")
+        };
+        let before = defs(&locked(with.clone()).with("uv.lock", lock("1")));
+        let esc = |after: &MemTree, paths: &[&str]| {
+            let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+            preview(&before, &defs(after), &paths, Utc::now()).escalations
+        };
+        let other_tool = locked(with.clone()).with("uv.lock", lock("2"));
+        assert!(esc(&other_tool, &["tools/web/images.py", "tools/web/pyproject.toml", "uv.lock"]).is_empty());
+        let its_dep = locked(with.clone()).with("uv.lock", lock("1").replace("0.27", "0.28"));
+        assert_eq!(esc(&its_dep, &["uv.lock"]), vec![Escalation::ChannelChanged { job: "tg".into() }]);
+        assert!(
+            esc(&other_tool, &["images/agent/Dockerfile"]).contains(&Escalation::ChannelChanged { job: "tg".into() }),
+            "the image it builds on"
+        );
+        // A Dockerfile copying its whole context: everything in it counts.
+        let all = locked(with.clone()).with("uv.lock", lock("1")).with("jobs/tg/Dockerfile", "FROM x\nCOPY . /app\n");
+        assert_eq!(esc(&all, &["tools/web/images.py"]).len(), 1);
         let oneshot =
             base().with("jobs/tg/job.toml", "command = [\"x\"]\nchannel = true\n").with("jobs/tg/Dockerfile", "FROM x");
         assert!(load(&oneshot).errors().any(|d| d.message.contains("`channel` needs a service")));

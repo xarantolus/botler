@@ -3,6 +3,7 @@
 //! Loading never stops at the first problem: it collects every diagnostic so an agent gets the
 //! whole list of what to fix in one gate run.
 
+mod code;
 mod environment;
 mod grants;
 mod model;
@@ -12,6 +13,7 @@ pub mod tree;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+pub use code::JobCode;
 pub use environment::*;
 pub use grants::*;
 pub use model::*;
@@ -72,6 +74,9 @@ pub struct JobDef {
     pub spec: Job,
     /// The user-editable settings, when the job declares a `Settings` model.
     pub settings: Option<JobSettings>,
+    /// What its image is built from (a change elsewhere is no change of the job).
+    #[serde(skip)]
+    pub code: JobCode,
 }
 
 /// A runnable's settings: the schema from its pydantic `Settings` model (`settings.manifest.json`)
@@ -595,7 +600,8 @@ pub fn load_with(tree: &dyn Tree, default_tz: chrono_tz::Tz) -> LoadReport {
         for t in &spec.triggers {
             raw_triggers.push((path.clone(), t.clone(), Some(Target::Run(name.clone()))));
         }
-        defs.jobs.insert(name.clone(), JobDef { name, spec, settings: None });
+        let code = code::job_code(tree, &name);
+        defs.jobs.insert(name.clone(), JobDef { name, spec, settings: None, code });
     }
 
     for entry in l.list("triggers") {
