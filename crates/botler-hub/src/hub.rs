@@ -44,6 +44,8 @@ pub enum HubError {
     #[error("migrating the data directory: {0}")]
     Migration(String),
     #[error(transparent)]
+    Host(#[from] crate::host::HostError),
+    #[error(transparent)]
     Search(#[from] crate::search::SearchError),
     #[error(transparent)]
     Memory(#[from] crate::memory::MemoryError),

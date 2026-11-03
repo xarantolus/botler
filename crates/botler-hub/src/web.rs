@@ -1,4 +1,4 @@
-//! The web app: the built frontend (`frontend/dist`, committed and compiled into the binary) at
+//! The web app: the built frontend (`frontend/dist`, built by build.rs and compiled into the binary) at
 //! `/`, with a fallback to `index.html` for the app's own routes, and the old single-page UI at
 //! `/legacy`.
 
@@ -136,14 +136,14 @@ mod tests {
         hex::encode(h.finalize())
     }
 
-    /// The committed `frontend/dist` must be built from the committed sources.
+    /// The embedded `frontend/dist` is built from the checkout's sources (build.rs).
     #[test]
     fn embedded_frontend_is_current() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../frontend");
         assert_eq!(
             built_from(),
             Some(source_hash(&root).as_str()),
-            "frontend/dist is stale: run `npm ci && npm run build` in frontend/ and commit dist"
+            "frontend/dist is stale: build.rs rebuilds it (or run `npm run build` in frontend/)"
         );
     }
 

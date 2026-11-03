@@ -19,7 +19,7 @@ src/components/chat/   the chat: title bar, banners, transcript, message parts, 
 src/components/common/ cards and pieces used across views (dialog, envelope, change summary, ...)
 src/views/             one per section: chat, events, requests, runs, incidents, proposals, secrets, memory
 tests/                 component tests (the real kit in happy-dom)
-dist/                  the built app, committed (see below)
+dist/                  the built app (not committed; see below)
 ```
 
 ## The UI kit
@@ -57,16 +57,16 @@ against. After changing any of them:
 
 ```sh
 BOTLER_UPDATE_BINDINGS=1 cargo test -p botler --test bindings   # regenerate src/generated/
-cd frontend && npm run build                                     # then rebuild dist/
 ```
 
 `cargo test` fails when `src/generated/` is stale.
 
-## Building and the committed `dist/`
+## Building `dist/`
 
 The hub embeds `dist/` at compile time (`include_dir`), so the `botler` binary stays a single
-self-contained file and building it needs no Node. The price is that `dist/` is committed and
-must be rebuilt with the sources:
+self-contained file. `dist/` is not committed: the hub's `build.rs` runs `npm ci` (once) and
+`npm run build` whenever `dist/` is missing or older than the sources, so building the hub needs
+Node 22+. By hand:
 
 ```sh
 npm ci
@@ -85,10 +85,10 @@ environment variables (Chromium binary, screenshots, where the data directory go
 
 `npm run build` writes a hash of the sources (`src/`, `public/`, `index.html`, the package and
 config files; tests excluded) to `dist/.source-hash`. `cargo test` recomputes it
-(`web::tests::embedded_frontend_is_current`) and fails when they differ, so a stale `dist/` cannot
-be committed unnoticed. The build reads nothing else: Tailwind scans only `src/` and `index.html`
-(never the committed `dist/`, never tests), and the icon scan the same sources, so rebuilding
-unchanged sources gives an identical `dist/` (CI checks this).
+(`web::tests::embedded_frontend_is_current`) and fails when they differ; `build.rs` uses the same
+check to decide whether to rebuild. The build reads nothing else: Tailwind scans only `src/` and
+`index.html` (never `dist/`, never tests), and the icon scan the same sources, so rebuilding
+unchanged sources gives an identical `dist/`.
 
 Dependencies are pinned to exact versions and `package-lock.json` is committed. Node 22+.
 

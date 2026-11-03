@@ -51,10 +51,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      # dist/ is committed (the hub embeds it): it must match the sources...
-      - run: npm run check-dist
-      # ...and rebuilding must reproduce it exactly.
-      - run: npm run build && git diff --exit-code -- dist
+      - run: npm run build
 
   python-sdk:
     runs-on: ubuntu-latest

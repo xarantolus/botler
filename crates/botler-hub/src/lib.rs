@@ -20,6 +20,7 @@ pub mod gateway;
 pub mod grants;
 pub mod handover;
 pub mod health;
+pub mod host;
 pub mod hub;
 pub mod images;
 pub mod jobs;

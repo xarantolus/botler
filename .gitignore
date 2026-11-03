@@ -7,8 +7,6 @@
 /target/
 node_modules/
 dist/
-# The built web app is committed: the hub embeds it (see frontend/README.md).
-!/frontend/dist/
 __pycache__/
 *.pyc
 .venv/

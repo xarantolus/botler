@@ -8,7 +8,9 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=%h/.local/bin/botler serve --data %h/.local/share/botler
+# The data directory, address and mirror come from ~/.config/botler/config.toml (optional);
+# secrets from files in ~/.config/botler/secrets/ (optional).
+ExecStart=%h/.local/bin/botler serve
 # SIGTERM goes to the hub only; it stops its agent containers, then exits. Anything left after
 # the timeout is killed.
 KillMode=mixed

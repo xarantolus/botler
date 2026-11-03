@@ -1,4 +1,5 @@
-// Records which sources `dist` was built from, so a stale `dist` is caught.
+// Records which sources `dist` was built from, so a stale `dist` is rebuilt (the hub's build.rs
+// runs `check` and builds on failure).
 //
 //   node scripts/source-hash.mjs write   after `vite build` (part of `npm run build`)
 //   node scripts/source-hash.mjs check   exits 1 if dist/.source-hash does not match
@@ -48,7 +49,7 @@ if (mode === "write") {
   const want = sourceHash();
   const have = existsSync(target) ? readFileSync(target, "utf8").trim() : "(none)";
   if (want !== have) {
-    console.error(`frontend/dist is stale (built from ${have}, sources are ${want}). Run \`npm run build\` and commit dist.`);
+    console.error(`frontend/dist is stale (built from ${have}, sources are ${want}). Run \`npm run build\`.`);
     process.exit(1);
   }
   console.log("frontend/dist is current");

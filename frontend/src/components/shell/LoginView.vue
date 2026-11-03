@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Signing a browser in: a one-time code (from a signed-in device under Settings → Devices, or
 // `botler login-code` on the hub) or a user token (`botler token`). The hub then keeps this
-// browser signed in with a cookie scripts cannot read.
+// browser signed in with a cookie scripts cannot read. A link `/#code=<code>` (the hub logs one on
+// its first start) signs in right away; the fragment never reaches a server.
 import type { AuthFormField, FormError, FormSubmitEvent } from "@nuxt/ui";
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { errorText } from "../../notify";
 import { login } from "../../store";
 
@@ -35,17 +36,28 @@ function deviceName(): string {
   return os ? `${browser} on ${os}` : browser;
 }
 
-async function submit(e: FormSubmitEvent<Fields>) {
+async function signIn(secret: string, name: string) {
   busy.value = true;
   error.value = "";
   try {
-    await login(e.data.secret.trim(), e.data.name?.trim() || deviceName());
+    await login(secret, name);
   } catch (err) {
     error.value = errorText(err);
   } finally {
     busy.value = false;
   }
 }
+
+function submit(e: FormSubmitEvent<Fields>) {
+  return signIn(e.data.secret.trim(), e.data.name?.trim() || deviceName());
+}
+
+onMounted(() => {
+  const code = new URLSearchParams(location.hash.slice(1)).get("code");
+  if (!code) return;
+  history.replaceState(history.state, "", location.pathname + location.search);
+  void signIn(code, deviceName());
+});
 </script>
 
 <template>

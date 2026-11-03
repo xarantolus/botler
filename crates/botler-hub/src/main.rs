@@ -7,30 +7,40 @@ use std::sync::Arc;
 use anyhow::{Context, bail};
 use botler_hub::auth::Principal;
 use botler_hub::config::{HubConfig, Paths};
-use botler_hub::{Hub, serve, template};
+use botler_hub::{Hub, host, serve, template};
 use botler_runtime::{Cli as Runtime, Containers};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "botler", version, about = "A personal system of autonomous agents.")]
 struct Args {
-    /// Data directory (database, monorepo, sessions, workspaces).
-    #[arg(long, env = "BOTLER_DATA", default_value_os_t = default_data_dir(), global = true)]
-    data: PathBuf,
+    /// Data directory (database, monorepo, sessions, workspaces) [default: `data` in the config
+    /// file, else ~/.local/share/botler].
+    #[arg(long, env = "BOTLER_DATA", global = true)]
+    data: Option<PathBuf>,
+    /// Host configuration, optional (`data`, `listen`, `runtime`, `mirror`).
+    #[arg(long, env = "BOTLER_CONFIG", default_value_os_t = host::config_dir().join("config.toml"), global = true)]
+    config: PathBuf,
+    /// Secret files, optional: each file named after a declared secret (e.g. `OPENROUTER_API_KEY`)
+    /// sets it when the hub starts.
+    #[arg(long, env = "BOTLER_SECRETS_DIR", default_value_os_t = host::config_dir().join("secrets"), global = true)]
+    secrets_dir: PathBuf,
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create the data directory and the monorepo from the built-in template.
+    /// Create the data directory and the monorepo from the built-in template (`serve` does this
+    /// on its first start).
     Init,
     /// Run the hub.
     Serve {
         /// TCP address for the web app and API. Containers use the hub's Unix socket instead, so
-        /// localhost is enough; reach it from other devices through a proxy (Tailscale serve).
-        #[arg(long, env = "BOTLER_LISTEN", default_value = "127.0.0.1:7420")]
-        listen: SocketAddr,
+        /// localhost is enough; reach it from other devices through a proxy (Tailscale serve)
+        /// [default: `listen` in the config file, else 127.0.0.1:7420].
+        #[arg(long, env = "BOTLER_LISTEN")]
+        listen: Option<SocketAddr>,
         /// URL agents use to reach the hub (default: their forwarder, http://127.0.0.1:7420).
         #[arg(long, env = "BOTLER_CONTAINER_URL")]
         container_url: Option<String>,
@@ -126,19 +136,45 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let args = Args::parse();
+    let host = host::HostConfig::load(&args.config)?;
+    let data = args.data.or_else(|| host.data_dir()).unwrap_or_else(default_data_dir);
     // Absolute, so nothing depends on the working directory of the git or podman it runs.
-    let paths = Paths::new(std::path::absolute(&args.data).context("resolving the data directory")?);
+    let paths = Paths::new(std::path::absolute(&data).context("resolving the data directory")?);
     match args.command {
-        Command::Init => init(&paths).await,
+        Command::Init => init(&paths, &host).await,
         Command::Serve { listen, container_url, runtime } => {
+            let listen = listen.or(host.listen).unwrap_or(SocketAddr::from(([127, 0, 0, 1], 7420)));
+            if !paths.repo().exists() {
+                let commit = host::init(&paths, host.mirror.as_deref()).await?;
+                tracing::info!(data = %paths.root.display(), %commit, "created the data directory and the monorepo");
+            }
             let mut config = HubConfig::new(listen);
             if let Some(u) = container_url {
                 config.container_url = u;
             }
-            let rt = Runtime::detect(runtime.as_deref()).await.context("no container runtime")?;
+            let rt = Runtime::detect(runtime.as_deref().or(host.runtime.as_deref()))
+                .await
+                .context("no container runtime")?;
             tracing::info!(runtime = ?rt.info(), "container runtime");
             config.runtime = Some(rt.info().binary.clone());
             let hub = Hub::open(paths, config, Arc::new(rt)).await.context("opening the hub")?;
+            for name in host::import_secrets(&hub, &args.secrets_dir).await? {
+                tracing::info!(secret = name, dir = %args.secrets_dir.display(), "secret set from its file");
+            }
+            if hub.store.devices().await?.is_empty() {
+                // Nothing signed in yet: a link that signs this browser in.
+                let (code, _) = botler_hub::login::create_code(&hub).await?;
+                let at = if listen.ip().is_unspecified() {
+                    SocketAddr::from(([127, 0, 0, 1], listen.port()))
+                } else {
+                    listen
+                };
+                tracing::info!(
+                    "no device is signed in yet: open http://{at}/#code={code} (valid {} minutes; \
+                     `botler login-code` prints a new code)",
+                    botler_hub::login::CODE_MINUTES
+                );
+            }
             serve::serve(hub, shutdown_signal()).await?;
             Ok(())
         }
@@ -218,26 +254,11 @@ async fn offline_hub(paths: Paths) -> anyhow::Result<Arc<Hub>> {
     Ok(Hub::open(paths, config, Arc::new(botler_runtime::fake::Fake::new())).await?)
 }
 
-async fn init(paths: &Paths) -> anyhow::Result<()> {
-    if paths.repo().exists() {
-        bail!("{} already holds a botler monorepo", paths.root.display());
-    }
-    paths.ensure()?;
-    let tmp = paths.root.join("template-init");
-    if tmp.exists() {
-        std::fs::remove_dir_all(&tmp)?;
-    }
-    template::write_to(&tmp)?;
-    let commit = botler_repo::Repo::new(paths.repo(), paths.worktrees()).init_from(&tmp).await?;
-    std::fs::remove_dir_all(&tmp)?;
-    let hub = offline_hub(paths.clone()).await?;
-    let token = hub.tokens.issue(&Principal::User, chrono::Duration::days(90), chrono::Utc::now());
+async fn init(paths: &Paths, host: &host::HostConfig) -> anyhow::Result<()> {
+    let commit = host::init(paths, host.mirror.as_deref()).await?;
+    offline_hub(paths.clone()).await?; // creates the database
     println!("botler initialised in {} (monorepo at {commit})", paths.root.display());
-    println!();
-    println!("Next:");
-    println!("  1. Enter your OpenRouter key:   botler secret set OPENROUTER_API_KEY");
-    println!("  2. Start the hub:               botler serve");
-    println!("  3. Your user token (90 days):   {token}");
+    println!("Start the hub with `botler serve`; it prints a link that signs your browser in.");
     Ok(())
 }
 
