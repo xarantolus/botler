@@ -91,3 +91,7 @@ BOTLER_PODMAN_TESTS=1 cargo test -p botler-runtime       # also against a real P
 | `python/botler-sdk/` | the Python SDK jobs and tools use |
 | `template/` | the monorepo a new install starts from |
 | `images/agent-base/` | the container image every agent builds on |
+
+## License
+
+MIT, see [`LICENSE`](LICENSE).
