@@ -112,6 +112,20 @@ async fn stopping_aborts_cancels_cascades_and_tells_chat_and_parent() {
     assert!(e.fake.prompts(&agents::container_name(&e.hub, &grandchild)).last().unwrap().contains("start over"));
 }
 
+#[tokio::test]
+async fn a_dormant_chat_archiving_itself_does_not_wake_its_parent() {
+    let e = setup().await;
+    let parent = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let child = router::spawn(&e.hub, "dev", Some(&parent), Some("build it"), None, None).await.unwrap();
+    pump(&e).await;
+    assert_eq!(kinds_to(&e, &parent, "agent.idle").await.len(), 1, "its task's turn is news");
+
+    botler_hub::storage::request_archive(&e.hub, &child, Some("dormant".into()), Source::Hub).await.unwrap();
+    pump(&e).await;
+    assert!(e.fake.prompts(&agents::container_name(&e.hub, &child)).last().unwrap().contains("archive.requested"));
+    assert_eq!(kinds_to(&e, &parent, "agent.idle").await.len(), 1, "its handover turn is not");
+}
+
 fn agent_caller(name: &str) -> Caller {
     Caller {
         principal: Principal::Agent { instance: name.into(), wake: "w".into() },

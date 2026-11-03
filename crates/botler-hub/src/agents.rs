@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use botler_core::catalog;
 use botler_core::defs::{AgentDef, Budget, Environment, MountMode, Workspace};
+use botler_core::event::kinds;
 use botler_core::loops::TurnLog;
 use botler_core::payloads::{
     AgentIdlePayload, BuiltinPayload, DeliveryEnvelope, EnvironmentUpdatedPayload, MessagePayload, SendMode,
@@ -334,7 +335,7 @@ async fn compact_if_idle(hub: &Hub, agent: &LiveAgent) -> Result<bool> {
 /// sent as a steer goes to pi right away instead, which adds it once the running tool calls are
 /// done, before its next model call (a running tool is never stopped).
 fn is_queued_message(ev: &Event) -> Result<bool> {
-    if ev.source != Source::User || ev.kind != botler_core::event::kinds::MESSAGE {
+    if ev.source != Source::User || ev.kind != kinds::MESSAGE {
         return Ok(false);
     }
     let m: MessagePayload =
@@ -422,7 +423,7 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
             }
             // A message, from the user or another chat, is what the chat list's time shows (and
             // the reply to it); hub events and timers are not.
-            if ev.source == Source::User || ev.kind == botler_core::event::kinds::MESSAGE {
+            if ev.source == Source::User || ev.kind == kinds::MESSAGE {
                 agent.answering.store(true, Ordering::SeqCst);
                 hub.store.touch_message(&d.instance).await?;
             }
@@ -1037,7 +1038,8 @@ async fn last_reply(agent: &LiveAgent) -> String {
 }
 
 /// Tell the agent that spawned this one that it ended its turn, with its final answer, unless
-/// the last thing it did was messaging the parent (which already has the news). Routed like a
+/// the last thing it did was messaging the parent (which already has the news) or the turn
+/// answered the hub's own archive or handover request (housekeeping, not news). Routed like a
 /// message from the child: it counts for the pair breaker, and an acknowledgement ("Done,
 /// thanks.") arrives as a note that does not wake the parent. Chained to the delivery that
 /// started the turn so the hop limit still bounds runaway chains.
@@ -1059,6 +1061,10 @@ async fn notify_parent(hub: &Hub, agent: &LiveAgent) -> Result<()> {
     let mut by_user = false;
     if let Some(d) = turn_start(hub, agent).await? {
         let started = hub.store.event(&d.event_id).await?;
+        if [kinds::ARCHIVE_REQUESTED, kinds::HANDOVER_REQUESTED].contains(&started.kind.as_str()) {
+            tracing::debug!(instance = %agent.instance, kind = %started.kind, "housekeeping turn; no notice");
+            return Ok(());
+        }
         by_user = started.source == Source::User;
         ev = ev.in_reply_to(&started);
     }
