@@ -17,9 +17,12 @@ branch and calling `propose_change` (gate → reviewer → user if needed → me
 | `images/` | Container images (`FROM botler/agent-base`, or `FROM botler/image-<x>` to build on `images/<x>/`: the hub builds bases first and rebuilds what builds on a changed one; extend an existing image rather than repeating its setup); the build context is `images/<x>/` plus the uv workspace (`pyproject.toml`, `uv.lock`, `packages/`, `tools/`, `connectors/`), which they install into `/opt/botler/tools-venv` for Python tools |
 | `policies/` | The reviewer's policy and what needs the user's approval |
 | `gate/` | The deterministic checks every change must pass |
+| `extras/` | Integrations that are off until you ask botler to set them up (Discord) |
 
 Integrations that ship here: `jobs/claude-session/` runs live Claude Code sessions on your own Claude
 subscription that take your messages while they work and message you back (skill `claude-code`; it
 needs a token from `claude setup-token`, and a GitHub token if it should push and open PRs). `jobs/browser/` is the
 agents' browser: Playwright MCP on a real desktop Chromium with ads and trackers blocked, one isolated
-context per chat (skill `browser`).
+context per chat (skill `browser`), watched by a supervisor that restarts it when the browser dies.
+`tools/web/` gives agents `web.search`, `web.fetch` and `web.images` (keyless image search), checked
+daily by `jobs/web-health/`. `extras/discord/` is a Discord bot as a channel; ask botler to set it up.

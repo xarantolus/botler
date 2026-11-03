@@ -5,8 +5,8 @@ version = "0.0.0"
 requires-python = ">=3.11"
 
 [tool.uv.workspace]
-# Every job, tool package and connector is a workspace member.
-members = ["packages/*", "tools/*", "connectors/*", "jobs/*"]
+# Every job, tool package and connector is a workspace member, and the extras (tested, not run).
+members = ["packages/*", "tools/*", "connectors/*", "jobs/*", "extras/*"]
 # Jobs with no Python of their own.
 exclude = ["jobs/browser"]
 

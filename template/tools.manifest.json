@@ -62,6 +62,60 @@
   },
   {
     "approval": false,
+    "description": "Search for images and get assets back, not pages. Returns {backend, note, results: [{title,\nurl, thumbnail, width, height, source, license, creator}]}. `url` is the full image, `thumbnail`\na smaller version, `source` the page it came from; `license` and `creator` are present when the\nbackend knows them (DuckDuckGo does not). `backend`: \"duckduckgo\" (widest coverage, but it\nrate-limits and bot-checks often), \"openverse\" (Creative Commons' index), \"wikimedia\" (Wikimedia\nCommons), or \"auto\" (default): DuckDuckGo, then Openverse, then Wikimedia, skipping a backend\nthat fails; `note` says which were skipped and why. All are keyless. Maintained in the monorepo\n(tools/web/); if it breaks, fix it.",
+    "effects": [
+      "network"
+    ],
+    "function": "images",
+    "module": "web.images",
+    "name": "web.images",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "duckduckgo",
+            "openverse",
+            "wikimedia"
+          ],
+          "title": "Backend",
+          "type": "string"
+        },
+        "max_results": {
+          "default": 10,
+          "maximum": 30,
+          "minimum": 1,
+          "title": "Max Results",
+          "type": "integer"
+        },
+        "query": {
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "render": {
+      "columns": [
+        "title",
+        "width",
+        "height",
+        "license",
+        "creator",
+        "source"
+      ],
+      "items": "results",
+      "kind": "table"
+    }
+  },
+  {
+    "approval": false,
     "description": "Search the web. Returns {backend, cost_usd, note, results: [{title, url, snippet}]}; use web.fetch\nto read a result. `backend`: \"openrouter\" (OpenRouter's web search, about $0.001 per search),\n\"duckduckgo\" (free scraping, often blocked by its bot check), or \"auto\" (default): DuckDuckGo, and\nOpenRouter if that fails; `note` says why a backend was skipped. `region` is a DuckDuckGo region\ncode such as \"us-en\" or \"de-de\"; OpenRouter ignores it. Maintained in the monorepo (tools/web/);\nif it breaks, fix it.",
     "effects": [
       "network",

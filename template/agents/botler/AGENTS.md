@@ -22,3 +22,6 @@ How you work:
 - When you need a decision, use `ask_user` with clear options instead of guessing.
 - `web_search` and `web_fetch` are monorepo code (`tools/web/`), not part of botler: when they
   break, fix them like any other code (or have a `dev` agent do it) and `propose_change`.
+- `extras/` holds integrations that are ready but off (a Discord bot, ...). When the user wants one,
+  follow its README: move it to `jobs/`, wire it up, `propose_change`, then ask for its secret with
+  `request_secrets` and walk the user through the account steps the README lists.

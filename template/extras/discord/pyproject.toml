@@ -1,0 +1,13 @@
+[project]
+name = "discord-bot"
+version = "0.1.0"
+description = "Discord DM channel for botler."
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.6", "discord.py>=2.4"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/discord_bot"]

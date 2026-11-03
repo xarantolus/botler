@@ -88,6 +88,20 @@ The login check is part of the definition of done, not an extra:
 Logged out is deliberately not `health.fail`. A restart cannot log in, and the service has to
 keep running for the visit.
 
+## Browsing the web yourself (skill `browser`)
+
+When an agent only needs to drive the real browser (JavaScript, interaction, a screenshot) and does
+not keep a login, use the shared browser service instead of writing a bridge: skill `browser`,
+tools `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, ... (Playwright MCP).
+It is a real desktop Chromium on Xvfb (not headless) with ads/trackers blocked; each MCP connection
+gets its own isolated context, cookies and tabs, closed after 10 minutes idle. An agent gets the
+tools with `request_access("service:browser")` (auto-granted, no user prompt) or `mcp = ["browser"]`
+in its definition.
+
+That service is deliberately ephemeral (a sleep or an idle timeout starts a fresh, logged-out
+context), so it is not the place for a login. A site the user stays logged into is a service built
+from this skill.
+
 ## Driving the browser yourself
 
 To reach the browser, an agent needs the service: `services = ["<service>"]` in its definition

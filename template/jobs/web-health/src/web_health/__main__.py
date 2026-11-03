@@ -6,9 +6,12 @@ import sys
 from collections.abc import Callable
 
 from web.fetch import fetch
+from web.images import BackendChoice as ImageBackendChoice
+from web.images import images
 from web.search import BackendChoice, search
 
 QUERY = "python programming language"
+IMAGE_QUERY = "butterfly"
 
 
 def check_search(backend: BackendChoice) -> Callable[[], str]:
@@ -19,6 +22,17 @@ def check_search(backend: BackendChoice) -> Callable[[], str]:
         cost = f", ${r.cost_usd:.4f}" if r.cost_usd is not None else ""
         note = f" (note: {r.note})" if r.note else ""
         return f"web.search {backend} ok via {r.backend}: {len(r.results)} results{cost}{note}"
+
+    return check
+
+
+def check_images(backend: ImageBackendChoice) -> Callable[[], str]:
+    def check() -> str:
+        r = images(IMAGE_QUERY, max_results=5, backend=backend)
+        if len(r.results) < 1:
+            raise AssertionError(f"expected at least 1 result, got {len(r.results)}")
+        note = f" (note: {r.note})" if r.note else ""
+        return f"web.images {backend} ok via {r.backend}: {len(r.results)} results{note}"
 
     return check
 
@@ -54,7 +68,8 @@ def main(checks: list[Check]) -> int:
         print(
             "web tools health check FAILED:\n"
             + "\n".join(failures)
-            + "\nThe tools are monorepo code in tools/web/src/web/ (search.py, openrouter.py, fetch.py). "
+            + "\nThe tools are monorepo code in tools/web/src/web/ (search.py, openrouter.py, images.py, "
+            "fetch.py). "
             "Reproduce with `uv run python -m web_health`, fix them on a branch with an updated fixture "
             "and tests, and propose_change.",
             file=sys.stderr,
@@ -70,6 +85,10 @@ if __name__ == "__main__":
                 ("web.search openrouter", check_search("openrouter"), False),
                 ("web.search duckduckgo", check_search("duckduckgo"), False),
                 ("web.search auto", check_search("auto"), True),
+                ("web.images duckduckgo", check_images("duckduckgo"), False),
+                ("web.images openverse", check_images("openverse"), False),
+                ("web.images wikimedia", check_images("wikimedia"), False),
+                ("web.images auto", check_images("auto"), True),
                 ("web.fetch", check_fetch, True),
             ]
         )

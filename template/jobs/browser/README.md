@@ -9,5 +9,9 @@ blocked through the pinned hosts list). Skill `browser` says how chats use it.
   and starts fresh on the next one; a chat that sleeps reconnects with a new, empty context.
 - **Shared:** one Chromium process, its cache-free defaults and the blocklist. Logged-in sessions
   that must persist are a different pattern: skill `browser-login`.
+- **Watched:** `supervise.py` runs Playwright MCP, smoke-tests the MCP endpoint at startup (and
+  proves two sessions are isolated), then checks CDP and reports `botler.health.ok()` every minute;
+  a dead child or browser calls `health.fail` and exits so the hub restarts it (`[health]` in
+  `job.toml`).
 - **Updating:** Playwright MCP's version is in the Dockerfile; Chromium follows Debian's security
   updates in `images/browser`; the blocklist commit is pinned there too.

@@ -32,6 +32,12 @@ async fn current(e: &common::Env) -> Run {
     runs(e).await.into_iter().next().expect("a run")
 }
 
+/// The service under test's open incidents (the template's own services may open theirs when a
+/// test moves the clock past their heartbeats).
+async fn app_incidents(e: &common::Env) -> Vec<botler_store::Incident> {
+    e.hub.store.open_incidents().await.unwrap().into_iter().filter(|i| i.runnable == "app").collect()
+}
+
 fn exit(e: &common::Env, code: i64) {
     e.fake.exit(&services::container_name(&e.hub, "app"), code);
 }
@@ -63,7 +69,7 @@ async fn exits_restart_with_backoff_and_a_crash_loop_waits_for_resolution() {
     assert_eq!(current(&e).await.status, RunStatus::Failed, "backing off (2s after one failure)");
     services::reconcile_at(&e.hub, Utc::now() + Duration::seconds(3)).await.unwrap();
     assert_eq!(current(&e).await.status, RunStatus::Running, "restarted after the backoff");
-    let incidents = e.hub.store.open_incidents().await.unwrap();
+    let incidents = app_incidents(&e).await;
     assert_eq!((incidents.len(), incidents[0].kind.as_str()), (1, "exit"));
 
     for i in 1..=2 {
@@ -71,19 +77,19 @@ async fn exits_restart_with_backoff_and_a_crash_loop_waits_for_resolution() {
         services::reconcile_at(&e.hub, Utc::now() + Duration::hours(i)).await.unwrap();
     }
     assert_eq!(runs(&e).await.len(), 3, "the third failure is a crash loop: no fourth start");
-    let incidents = e.hub.store.open_incidents().await.unwrap();
+    let incidents = app_incidents(&e).await;
     assert_eq!(incidents.len(), 1, "one incident for the whole storm");
     assert_eq!((incidents[0].kind.as_str(), incidents[0].count), ("crashloop", 4));
     for _ in 0..3 {
         services::reconcile_at(&e.hub, Utc::now() + Duration::hours(5)).await.unwrap();
     }
     assert_eq!(runs(&e).await.len(), 3, "failed stays failed");
-    assert_eq!(e.hub.store.open_incidents().await.unwrap()[0].count, 4, "reported once");
+    assert_eq!(app_incidents(&e).await[0].count, 4, "reported once");
 
     e.hub.store.resolve_incident(&incidents[0].id, "fixed the config file").await.unwrap();
     services::reconcile_at(&e.hub, Utc::now()).await.unwrap();
     assert_eq!(current(&e).await.status, RunStatus::Running, "resolving restarts it at once");
-    assert!(e.hub.store.open_incidents().await.unwrap().is_empty());
+    assert!(app_incidents(&e).await.is_empty());
 }
 
 #[tokio::test]

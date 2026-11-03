@@ -1,0 +1,13 @@
+version = 1
+description = "The botler channel for Discord: a bot account holds a gateway websocket (discord.py) and hands the paired user's direct messages to channel_inbound, then posts channel_outbox replies, files and question choices back into the same DM. On every start and reconnect it catches up on DMs sent while it was down. Also serves one MCP tool, send_dm, so botler can message the user unprompted. The bot token is the secret group `discord`."
+lifetime = "service"
+channel = true
+command = ["/app/.venv/bin/python", "-m", "discord_bot"]
+secrets = ["discord"]
+# Agents listing this in `mcp = [...]` reach send_dm at http://discord:8071/mcp.
+port = 8071
+serves_mcp = true
+
+[health]
+heartbeat = "2m"
+grace = "1m"
