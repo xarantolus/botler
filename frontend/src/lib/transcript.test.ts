@@ -115,7 +115,13 @@ describe("buildTranscript", () => {
   it("turns other deliveries into envelope cards", () => {
     const t = buildTranscript(
       input([
-        user("u1", "[from agent:helper | provenance: trusted | runnable.failed | delivery d2 | event e2]\n{\"a\":1}"),
+        user("u1", '{"a":1}', {
+          from: "agent:helper",
+          provenance: "trusted",
+          event_kind: "runnable.failed",
+          delivery: "d2",
+          event: "e2",
+        }),
       ]),
     );
     const m = t.messages[0]!;

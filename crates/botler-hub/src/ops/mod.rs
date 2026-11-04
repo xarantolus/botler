@@ -333,11 +333,15 @@ pub fn turn_ending() -> impl Iterator<Item = &'static str> {
     OPS.iter().filter(|o| o.ends_turn).map(|o| o.name)
 }
 
-/// The turn-ending ops `caller` may call, as `{name, description, parameters}`.
-pub fn turn_ending_tools(caller: &Caller) -> Value {
+/// The turn-ending ops `caller` may call.
+pub fn turn_ending_tools(caller: &Caller) -> Vec<crate::pi_config::TurnTool> {
     visible(caller)
         .filter(|o| o.ends_turn)
-        .map(|o| json!({ "name": o.name, "description": o.description, "parameters": (o.schema)() }))
+        .map(|o| crate::pi_config::TurnTool {
+            name: o.name.into(),
+            description: o.description.into(),
+            parameters: (o.schema)(),
+        })
         .collect()
 }
 

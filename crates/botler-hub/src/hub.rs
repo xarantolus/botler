@@ -151,6 +151,8 @@ impl Hub {
     /// Follow `instance`'s pi events.
     pub fn watch_pi(&self, instance: &str) -> broadcast::Receiver<serde_json::Value> {
         let mut pi = self.pi.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Chats nobody watches any more (that never sent another event to notice it).
+        pi.retain(|_, tx| tx.receiver_count() > 0);
         pi.entry(instance.to_string()).or_insert_with(|| broadcast::channel(512).0).subscribe()
     }
 

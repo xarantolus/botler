@@ -17,6 +17,7 @@ use botler_core::{Event, Source};
 use botler_runtime::{ContainerSpec, Disposition, Mount, PiClient, PiError, PiEvent, PiEventKind, Streaming};
 use botler_store::{Delivery, Dialog, Instance, InstanceState};
 use chrono::{DateTime, Duration, Utc};
+use serde::Serialize;
 use serde_json::json;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -25,7 +26,7 @@ use crate::auth::Principal;
 use crate::environment::{self, Runnable};
 use crate::hub::{Hub, HubError, Live, Result, builtin};
 use crate::phase::{AgentStatus, WakePhase, WakeStep};
-use crate::{images, ops, prompt};
+use crate::{images, ops, pi_config, prompt};
 
 /// The forwarder (`images/agent-base/forward.mjs`, shipped with the hub and mounted).
 pub const FORWARDER: &str = "/botler/forward/forward.mjs";
@@ -481,7 +482,19 @@ pub async fn ensure_awake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<Liv
 
 async fn wake(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     let lock = hub.agents.waking.lock().await.entry(instance.name.clone()).or_default().clone();
-    let _guard = lock.lock().await;
+    let result = {
+        let _guard = lock.lock().await;
+        wake_locked(hub, instance).await
+    };
+    let mut waking = hub.agents.waking.lock().await;
+    // The map's and this one: nobody else waits to wake it, so the lock goes.
+    if Arc::strong_count(&lock) == 2 {
+        waking.remove(&instance.name);
+    }
+    result
+}
+
+async fn wake_locked(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgent>> {
     if let Some(a) = hub.agents.get(&instance.name).await {
         return Ok(a);
     }
@@ -793,36 +806,31 @@ async fn container_spec(
     // Rendered pi config: a tmpfs agent dir with read-only files on top (pi needs to write locks).
     let dir = hub.paths.agent_dir(&instance.name);
     tokio::fs::create_dir_all(&dir).await?;
-    // pi skips an invalid models.json silently (and `null` values make it invalid), so only
-    // fields that are set are written.
-    let mut provider = serde_json::Map::new();
-    if let Some(s) = &route.api_key_secret {
-        provider.insert("apiKey".into(), json!(format!("${s}")));
-    }
-    if let Some(u) = &route.base_url {
-        provider.insert("baseUrl".into(), json!(u));
-    }
     let known = crate::model_catalog::known(hub, &route).await;
     let compact_at = def.spec.compact_at.unwrap_or(applied.defs.instance.defaults.compact_at);
-    let model = crate::model_catalog::pi_model(&route, known.as_ref());
-    provider.insert("modelOverrides".into(), json!({ route.id.clone(): model }));
-    let models = json!({ "providers": { route.provider.clone(): provider } });
-    let mut servers = serde_json::Map::new();
+    let provider = pi_config::Provider {
+        api_key: route.api_key_secret.as_ref().map(|s| format!("${s}")),
+        base_url: route.base_url.clone(),
+        model_overrides: [(route.id.clone(), crate::model_catalog::pi_model(&route, known.as_ref()))].into(),
+    };
+    let models = pi_config::Models { providers: [(route.provider.clone(), provider)].into() };
+    let mut servers = mcp_stdio(env);
     servers.insert(
         "botler".into(),
-        json!({
-            "url": format!("{}/mcp", hub.config.container_url),
-            "headers": { "Authorization": "Bearer ${BOTLER_TOKEN}" },
-            "description": "The botler hub: messaging, timers, spawning agents, asking the user, proposing changes, incidents.",
+        pi_config::McpServer::Http {
+            url: format!("{}/mcp", hub.config.container_url),
+            headers: [("Authorization".into(), "Bearer ${BOTLER_TOKEN}".into())].into(),
+            description:
+                "The botler hub: messaging, timers, spawning agents, asking the user, proposing changes, incidents."
+                    .into(),
             // The extension's turn-ending tools replace these. `attach_files` is a direct tool (not
             // called from a codemode script), so the files it shows are in the transcript at its call.
-            "toolExposure": ops::turn_ending()
-                .map(|n| (n, "hidden"))
-                .chain([(<ops::AttachFiles as ops::Op>::NAME, "direct")])
-                .collect::<BTreeMap<_, _>>(),
-        }),
+            tool_exposure: ops::turn_ending()
+                .map(|n| (n.to_string(), pi_config::ToolExposure::Hidden))
+                .chain([(<ops::AttachFiles as ops::Op>::NAME.to_string(), pi_config::ToolExposure::Direct)])
+                .collect(),
+        },
     );
-    servers.extend(mcp_stdio(env));
     // Python tools this agent is granted (`tools` globs); the extension registers them.
     let tools = applied.defs.tools_for(&def.spec.env);
     // Hub ops that end the turn; the extension registers them with `terminate: true`.
@@ -831,11 +839,11 @@ async fn container_spec(
     let files: Vec<(&str, String)> = vec![
         ("models.json", to_json(&models)?),
         ("settings.json", to_json(&crate::model_catalog::pi_settings(known.as_ref(), compact_at))?),
-        ("tools.json", to_json(&json!(tools))?),
+        ("tools.json", to_json(&tools)?),
         ("turn-tools.json", to_json(&ops::turn_ending_tools(&caller))?),
-        ("mcp.json", to_json(&json!({ "mcpServers": servers }))?),
-        ("mcp-services.json", to_json(&json!(mcp_services(applied, env)))?),
-        ("services.json", to_json(&json!(service_addresses(hub, applied, env).await?))?),
+        ("mcp.json", to_json(&pi_config::Mcp { mcp_servers: servers })?),
+        ("mcp-services.json", to_json(&mcp_services(applied, env))?),
+        ("services.json", to_json(&service_addresses(hub, applied, env).await?)?),
         // Memory indexes are read once per wake, so the prompt stays stable within a session.
         ("botler.md", prompt::render(instance, def, branch) + &crate::memory::index_section(hub, def).await?),
         ("AGENTS.md", def.prompt.clone().unwrap_or_default()),
@@ -899,28 +907,31 @@ async fn service_addresses(hub: &Hub, applied: &crate::hub::Applied, env: &Envir
 /// botler token). The extension registers them (`mcp-services.json`) rather than pi's `mcp.json`:
 /// pi gives up on a configured server it cannot reach as the session starts (the service
 /// restarting just then), while a registered one the extension can register again.
-fn mcp_services(applied: &crate::hub::Applied, env: &Environment) -> serde_json::Map<String, serde_json::Value> {
-    let mut servers = serde_json::Map::new();
+fn mcp_services(applied: &crate::hub::Applied, env: &Environment) -> BTreeMap<String, pi_config::McpService> {
+    let mut servers = BTreeMap::new();
     for svc in &env.mcp {
         // Validation guarantees a service with a port.
         let Some(port) = applied.defs.jobs.get(svc).and_then(|j| j.spec.env.port) else { continue };
         let url = format!("http://{svc}:{port}/mcp"); // the service's alias on the network
-        servers.insert(svc.clone(), json!({ "url": url }));
+        servers.insert(svc.clone(), pi_config::McpService { url });
     }
     servers
 }
 
 /// `mcp.json` entries for the stdio servers pi starts inside the container.
-fn mcp_stdio(env: &Environment) -> serde_json::Map<String, serde_json::Value> {
-    let mut servers = serde_json::Map::new();
+fn mcp_stdio(env: &Environment) -> BTreeMap<String, pi_config::McpServer> {
+    let mut servers = BTreeMap::new();
     for (name, s) in &env.mcp_stdio {
         let Some((command, args)) = s.command.split_first() else { continue };
-        servers.insert(name.clone(), json!({ "command": command, "args": args, "env": s.env }));
+        servers.insert(
+            name.clone(),
+            pi_config::McpServer::Stdio { command: command.clone(), args: args.to_vec(), env: s.env.clone() },
+        );
     }
     servers
 }
 
-fn to_json(v: &serde_json::Value) -> Result<String> {
+fn to_json(v: &impl Serialize) -> Result<String> {
     serde_json::to_string_pretty(v).map_err(|e| HubError::Io(std::io::Error::other(e)))
 }
 

@@ -190,17 +190,39 @@ pub fn generate(dir: &Path) -> Result<(), BindingsError> {
     }
     std::fs::write(dir.join("routes.ts"), routes_ts(&cfg, &ex.names))?;
     std::fs::write(dir.join("ops.ts"), ops_ts(&cfg, &ex.names))?;
+    let mut index = type_index(dir, "")?;
+    index.push_str("export { ROUTES } from \"./routes\";\n");
+    std::fs::write(dir.join("index.ts"), index)?;
+    Ok(())
+}
 
+/// Write the types the pi extension reads (the files the hub writes for it, and deliveries) into
+/// `dir` (which should be empty). Its imports name the `.js` file, as Node's resolution needs.
+pub fn generate_pi(dir: &Path) -> Result<(), BindingsError> {
+    let cfg = Config::new().with_out_dir(dir).with_large_int("number").with_import_extension(Some("js"));
+    let mut ex = Exporter { cfg: &cfg, names: BTreeMap::new(), seen: HashSet::new(), error: None };
+    ex.add::<botler_core::payloads::DeliveryEnvelope>();
+    ex.add::<botler_core::defs::ToolDecl>();
+    ex.add::<crate::pi_config::TurnTool>();
+    ex.add::<crate::pi_config::McpService>();
+    if let Some(e) = ex.error {
+        return Err(e);
+    }
+    let index = type_index(dir, ".js")?;
+    std::fs::write(dir.join("index.ts"), index)?;
+    Ok(())
+}
+
+/// An index re-exporting every type file in `dir`, imported with `ext`.
+fn type_index(dir: &Path, ext: &str) -> Result<String, BindingsError> {
     let mut files = Vec::new();
     ts_files(dir, dir, &mut files)?;
     files.sort();
     let mut index = String::from(HEADER);
     for f in files.iter().filter(|f| f.as_path() != Path::new("index.ts")) {
-        index.push_str(&format!("export type * from \"{}\";\n", import_path(f)));
+        index.push_str(&format!("export type * from \"{}{ext}\";\n", import_path(f)));
     }
-    index.push_str("export { ROUTES } from \"./routes\";\n");
-    std::fs::write(dir.join("index.ts"), index)?;
-    Ok(())
+    Ok(index)
 }
 
 #[cfg(test)]

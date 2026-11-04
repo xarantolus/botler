@@ -82,13 +82,6 @@ const preview = computed(() => {
         size="sm"
         :label="env.provenance"
       />
-      <UBadge
-        v-if="env.malformed"
-        color="error"
-        variant="solid"
-        size="sm"
-        label="malformed"
-      />
       <span class="text-dimmed">
         <template v-if="env.localTime"
           ><span :title="at ?? undefined">{{ env.localTime }}</span></template

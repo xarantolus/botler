@@ -31,6 +31,8 @@ import { readFileSync } from "node:fs";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import type { DeliveryEnvelope as Envelope, McpService, ToolDecl, TurnTool } from "./generated/index.js";
+
 const TOOLS_FILE = "/botler/agent-dir/tools.json";
 const TURN_TOOLS_FILE = "/botler/agent-dir/turn-tools.json";
 const MCP_SERVICES_FILE = "/botler/agent-dir/mcp-services.json";
@@ -39,23 +41,9 @@ const TOOLS_PYTHON = "/opt/botler/tools-venv/bin/python";
 const TOOL_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT = 50_000;
 
-interface ToolDecl {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  effects: string[];
-}
-
 /** Model APIs accept `[A-Za-z0-9_-]{1,64}`; manifest names are dotted (`weather.forecast`). */
 export function piToolName(name: string): string {
   return name.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
-}
-
-/** A hub op the extension exposes as a turn-ending tool. */
-interface OpDecl {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
 }
 
 function loadJson<T>(path: string, empty: T): T {
@@ -144,20 +132,6 @@ const NOTE = "botler.note";
 /** Written after navigating the session tree: the leaf is the last entry, so this pins it. */
 const NAV = "botler.nav";
 
-// Mirrors botler_core::event::payload::DeliveryEnvelope.
-interface Envelope {
-  id: string;
-  event: string;
-  kind: string;
-  from: string;
-  provenance: "trusted" | "external" | "untrusted";
-  correlation: string;
-  body: string;
-  quiet?: boolean;
-  at?: string;
-  gap?: string;
-}
-
 function parse(text: string): Envelope | undefined {
   if (!text.startsWith(PREFIX)) return undefined;
   try {
@@ -177,7 +151,7 @@ export default function botler(pi: ExtensionAPI) {
   let seen = new Set<string>();
   const registered = new Set<string>();
 
-  const services = Object.entries(loadJson<Record<string, { url: string }>>(MCP_SERVICES_FILE, {}));
+  const services = Object.entries(loadJson<Record<string, McpService>>(MCP_SERVICES_FILE, {}));
   const attempts = new Map<string, { at: number; n: number }>();
   const connect = (name: string, url: string) => {
     const n = (attempts.get(name)?.n ?? 0) + 1;
@@ -213,7 +187,7 @@ export default function botler(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    for (const op of loadJson<OpDecl[]>(TURN_TOOLS_FILE, [])) {
+    for (const op of loadJson<TurnTool[]>(TURN_TOOLS_FILE, [])) {
       if (registered.has(op.name)) continue;
       registered.add(op.name);
       pi.registerTool({

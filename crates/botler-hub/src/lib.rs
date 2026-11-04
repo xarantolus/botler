@@ -36,6 +36,7 @@ pub mod mounts;
 pub mod notify;
 pub mod ops;
 pub mod phase;
+pub mod pi_config;
 
 pub mod prompt;
 pub mod restore;

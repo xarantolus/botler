@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 
 use botler_core::defs::MemTree;
 use tokio::io::AsyncWriteExt;
@@ -50,11 +51,22 @@ pub enum Error {
     Malformed(String),
     #[error("tar failed: {0}")]
     Tar(String),
+    #[error("{0} took longer than {mins} minutes and was stopped", mins = TIMEOUT.as_secs() / 60)]
+    Timeout(String),
     #[error("cat-file writer task failed: {0}")]
     Worker(#[from] tokio::task::JoinError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// The longest a git (or tar) process may run. A hung one, like a push to a mirror that stopped
+/// answering, is killed rather than holding up what waits on it.
+const TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// Wait for a process of `what`; every command here kills its process when dropped.
+async fn limit<T>(what: &str, f: impl Future<Output = std::io::Result<T>>) -> Result<T> {
+    Ok(tokio::time::timeout(TIMEOUT, f).await.map_err(|_| Error::Timeout(what.to_string()))??)
+}
 
 /// The result of [`Repo::merge_into_main`].
 #[derive(Debug, PartialEq, Eq)]
@@ -106,6 +118,7 @@ impl Repo {
         c.env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_TERMINAL_PROMPT", "0");
         c.env_remove("GIT_DIR").env_remove("GIT_WORK_TREE");
         c.envs(IDENTITY);
+        c.kill_on_drop(true);
         c
     }
 
@@ -116,7 +129,7 @@ impl Repo {
     }
 
     async fn run(&self, mut c: Command, args: &[&str]) -> Result<String> {
-        let out = c.args(args).stdin(Stdio::null()).output().await?;
+        let out = limit(&format!("git {}", args.join(" ")), c.args(args).stdin(Stdio::null()).output()).await?;
         if !out.status.success() {
             return Err(Error::Git {
                 args: args.join(" "),
@@ -259,12 +272,14 @@ impl Repo {
 
     /// Resolve a revision to a commit id; `None` if it does not exist.
     pub async fn rev(&self, rev: &str) -> Result<Option<String>> {
-        let out = self
-            .cmd()
-            .args(["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
-            .stdin(Stdio::null())
-            .output()
-            .await?;
+        let out = limit(
+            "git rev-parse",
+            self.cmd()
+                .args(["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
+                .stdin(Stdio::null())
+                .output(),
+        )
+        .await?;
         match out.status.code() {
             Some(0) => Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string())),
             // --quiet --verify exits 1 without output when the revision does not exist.
@@ -281,7 +296,9 @@ impl Repo {
     }
 
     pub async fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
-        let out = self.cmd().args(["merge-base", "--is-ancestor", ancestor, descendant]).output().await?;
+        let out =
+            limit("git merge-base", self.cmd().args(["merge-base", "--is-ancestor", ancestor, descendant]).output())
+                .await?;
         match out.status.code() {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
@@ -386,7 +403,7 @@ impl Repo {
             stdin.write_all(input.as_bytes()).await?;
             stdin.shutdown().await
         });
-        let out = child.wait_with_output().await?;
+        let out = limit("git cat-file", child.wait_with_output()).await?;
         writer.await??;
         if !out.status.success() {
             return Err(Error::Git {
@@ -434,7 +451,7 @@ impl Repo {
             stdin.write_all(diff.as_bytes()).await?;
             stdin.write_all(b"\n").await
         };
-        let (written, out) = tokio::join!(write, child.wait_with_output());
+        let (written, out) = limit("git patch-id", async { Ok(tokio::join!(write, child.wait_with_output())) }).await?;
         written?;
         let out = out?;
         if !out.status.success() {
@@ -560,7 +577,9 @@ impl Repo {
 
     /// Read one file at a commit (`None` if absent).
     pub async fn read_file(&self, commit: &str, path: &str) -> Result<Option<String>> {
-        let out = self.cmd().args(["show", &format!("{commit}:{path}")]).stdin(Stdio::null()).output().await?;
+        let out =
+            limit("git show", self.cmd().args(["show", &format!("{commit}:{path}")]).stdin(Stdio::null()).output())
+                .await?;
         if out.status.success() {
             return Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()));
         }
@@ -616,7 +635,9 @@ impl Repo {
         let mut args = vec!["archive", "--format=tar", "-o", &t, commit, "--"];
         args.extend_from_slice(paths);
         self.git(&args).await?;
-        let out = Command::new("tar").arg("-xf").arg(&tar).arg("-C").arg(dest).output().await?;
+        let out =
+            limit("tar", Command::new("tar").arg("-xf").arg(&tar).arg("-C").arg(dest).kill_on_drop(true).output())
+                .await?;
         remove_file_if_exists(&tar).await?;
         if !out.status.success() {
             return Err(Error::Tar(String::from_utf8_lossy(&out.stderr).trim().to_string()));

@@ -1,5 +1,6 @@
 //! The web app's TypeScript types are generated from the Rust API types and committed in
-//! `frontend/src/generated/`. This test fails when they are stale; regenerate with
+//! `frontend/src/generated/`, and the pi extension's in `pi-extension/src/generated/`. These
+//! tests fail when they are stale; regenerate with
 //! `BOTLER_UPDATE_BINDINGS=1 cargo test -p botler --test bindings`.
 
 use std::collections::BTreeMap;
@@ -22,13 +23,13 @@ fn read_tree(root: &Path) -> BTreeMap<PathBuf, String> {
     out
 }
 
-#[test]
-fn typescript_bindings_are_current() {
-    let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../frontend/src/generated");
+/// Compare (or with `BOTLER_UPDATE_BINDINGS=1`, replace) `committed` with what `generate` writes.
+fn check(committed: &str, generate: fn(&Path) -> Result<(), botler_hub::bindings::BindingsError>) {
+    let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(committed);
     let fresh = tempfile::tempdir().unwrap();
-    botler_hub::bindings::generate(fresh.path()).unwrap();
+    generate(fresh.path()).unwrap();
     let want = read_tree(fresh.path());
-    assert!(want.contains_key(Path::new("routes.ts")) && want.contains_key(Path::new("BotlerEvent.ts")));
+    assert!(want.contains_key(Path::new("index.ts")));
 
     if std::env::var("BOTLER_UPDATE_BINDINGS").is_ok_and(|v| v == "1") {
         if committed.exists() {
@@ -53,8 +54,18 @@ fn typescript_bindings_are_current() {
         .collect();
     assert!(
         stale.is_empty(),
-        "frontend/src/generated is stale ({}). Regenerate with \
-         `BOTLER_UPDATE_BINDINGS=1 cargo test -p botler --test bindings`, then rebuild the frontend.",
+        "{} is stale ({}). Regenerate with `BOTLER_UPDATE_BINDINGS=1 cargo test -p botler --test bindings`.",
+        committed.display(),
         stale.join(", ")
     );
+}
+
+#[test]
+fn typescript_bindings_are_current() {
+    check("frontend/src/generated", botler_hub::bindings::generate);
+}
+
+#[test]
+fn pi_extension_bindings_are_current() {
+    check("pi-extension/src/generated", botler_hub::bindings::generate_pi);
 }

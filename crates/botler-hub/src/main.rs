@@ -158,6 +158,13 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Init => init(&paths, &host).await,
         Command::Serve { listen, container_url, runtime } => {
+            // A panic leaves a loop stopped or state half-changed: exit, and the service manager
+            // starts a fresh hub, which recovers everything from the store.
+            let report = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                report(info);
+                std::process::exit(101);
+            }));
             let listen = listen.or(host.listen).unwrap_or(SocketAddr::from(([127, 0, 0, 1], 7420)));
             if !paths.repo().exists() {
                 let commit = host::init(&paths, host.mirror.as_deref()).await?;

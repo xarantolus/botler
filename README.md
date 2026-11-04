@@ -147,7 +147,8 @@ BOTLER_PODMAN_TESTS=1 cargo test -p botler-runtime       # also against a real P
 | `template/` | the monorepo a new install starts from |
 | `images/agent-base/` | the container image every agent builds on |
 
-The TypeScript types for the hub's API are generated from the Rust types: after changing them, run
+The TypeScript types for the hub's API, and those of the files the pi extension reads, are
+generated from the Rust types: after changing them, run
 `BOTLER_UPDATE_BINDINGS=1 cargo test -p botler --test bindings`.
 
 ### Limitations

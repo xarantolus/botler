@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::hub::Hub;
+use crate::pi_config;
 
 const URL: &str = "https://openrouter.ai/api/v1/models";
 const MAX_AGE: Duration = Duration::from_secs(24 * 3600);
@@ -95,35 +96,23 @@ impl Catalog {
 
 /// The `models.json` entry pi gets for `choice`: the configured cap and input, refined by the
 /// catalog (the model's own output maximum, context window and prices).
-pub fn pi_model(choice: &ModelChoice, known: Option<&CatalogModel>) -> serde_json::Value {
+pub fn pi_model(choice: &ModelChoice, known: Option<&CatalogModel>) -> pi_config::Model {
     let cap = u64::from(choice.max_tokens);
-    let mut model = serde_json::json!({ "maxTokens": known.and_then(|k| k.max_output).map_or(cap, |m| m.min(cap)) });
     let input = choice.input.clone().or_else(|| {
         known.map(|k| if k.image { vec![ModelInput::Text, ModelInput::Image] } else { vec![ModelInput::Text] })
     });
-    if let Some(input) = input {
-        model["input"] = serde_json::json!(input);
+    let cost = known.map(|k| pi_config::Cost {
+        input: k.price_in,
+        output: k.price_out,
+        cache_read: k.price_cache_read,
+        cache_write: k.price_cache_write,
+    });
+    pi_config::Model {
+        max_tokens: known.and_then(|k| k.max_output).map_or(cap, |m| m.min(cap)),
+        input,
+        context_window: known.and_then(|k| k.context_length),
+        cost: cost.filter(|c| *c != pi_config::Cost::default()),
     }
-    if let Some(k) = known {
-        if let Some(c) = k.context_length {
-            model["contextWindow"] = c.into();
-        }
-        let mut cost = serde_json::Map::new();
-        for (key, v) in [
-            ("input", k.price_in),
-            ("output", k.price_out),
-            ("cacheRead", k.price_cache_read),
-            ("cacheWrite", k.price_cache_write),
-        ] {
-            if let Some(v) = v {
-                cost.insert(key.into(), v.into());
-            }
-        }
-        if !cost.is_empty() {
-            model["cost"] = cost.into();
-        }
-    }
-    model
 }
 
 /// The `settings.json` pi gets: it compacts once the context passes its window minus
@@ -132,15 +121,12 @@ pub fn pi_model(choice: &ModelChoice, known: Option<&CatalogModel>) -> serde_jso
 /// already larger context included, into it, so a cut window starves the summary and the chat
 /// never compacts. The user's messages sent mid-run (steers) all reach the model at the next
 /// pause together, not one per model call.
-pub fn pi_settings(known: Option<&CatalogModel>, compact_at: u64) -> serde_json::Value {
-    let mut s = serde_json::json!({ "steeringMode": "all" });
-    if let Some(c) = known.and_then(|k| k.context_length)
-        && compact_at > 0
-        && c > compact_at
-    {
-        s["compaction"] = serde_json::json!({ "reserveTokens": c - compact_at });
-    }
-    s
+pub fn pi_settings(known: Option<&CatalogModel>, compact_at: u64) -> pi_config::Settings {
+    let compaction = known
+        .and_then(|k| k.context_length)
+        .filter(|&c| compact_at > 0 && c > compact_at)
+        .map(|c| pi_config::Compaction { reserve_tokens: c - compact_at });
+    pi_config::Settings { steering_mode: pi_config::SteeringMode::All, compaction }
 }
 
 /// The catalog entry for `choice`, if it is an OpenRouter model the catalog knows.
@@ -351,21 +337,20 @@ mod tests {
     fn pi_model_caps_output_and_takes_the_catalogs_input() {
         let c = parse(BODY.as_bytes(), Utc::now()).unwrap();
         let mut choice = botler_core::defs::Models::default().resolve("qwen/qwen3.8-flash");
-        let m = pi_model(&choice, c.get("qwen/qwen3.8-flash"));
+        let m = serde_json::to_value(pi_model(&choice, c.get("qwen/qwen3.8-flash"))).unwrap();
         assert_eq!(m, serde_json::json!({ "maxTokens": 8192, "input": ["text"] }));
         choice.id = "~anthropic/claude-sonnet-latest".into();
-        let m = pi_model(&choice, c.get(&choice.id));
+        let m = serde_json::to_value(pi_model(&choice, c.get(&choice.id))).unwrap();
         assert_eq!(m["maxTokens"], 16384);
         assert_eq!(m["input"], serde_json::json!(["text", "image"]));
         assert_eq!(m["contextWindow"], 1000000);
         assert_eq!(m["cost"], serde_json::json!({ "input": 2.0, "output": 10.0, "cacheRead": 0.1 }));
         // Offline: only the configured cap.
-        assert_eq!(pi_model(&choice, None), serde_json::json!({ "maxTokens": 16384 }));
+        assert_eq!(serde_json::to_value(pi_model(&choice, None)).unwrap(), serde_json::json!({ "maxTokens": 16384 }));
         // Compacting at 120k of a 1M window: pi reserves the rest.
-        let s = pi_settings(c.get(&choice.id), 120_000);
+        let s = serde_json::to_value(pi_settings(c.get(&choice.id), 120_000)).unwrap();
         assert_eq!(s, serde_json::json!({ "steeringMode": "all", "compaction": { "reserveTokens": 880_000 } }));
-        let all = serde_json::json!({ "steeringMode": "all" });
-        assert_eq!(pi_settings(c.get(&choice.id), 0), all);
-        assert_eq!(pi_settings(None, 120_000), all);
+        assert_eq!(pi_settings(c.get(&choice.id), 0).compaction, None);
+        assert_eq!(pi_settings(None, 120_000).compaction, None);
     }
 }
