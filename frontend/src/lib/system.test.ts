@@ -5,7 +5,7 @@ import { fireLabel, lastFailed, localLabel, nextFire, plain, schedules, serviceS
 const now = Date.parse("2026-10-30T21:00:00Z"); // a Friday
 
 function trig(id: string, upcoming: string[]): TriggerPreview {
-  return { id, status: "unchanged", when: "", then: "", upcoming, shadow: false, before: null };
+  return { id, status: "unchanged", when: "", then: "", upcoming, shadow: false, before: null, event: null, prompt: null };
 }
 
 describe("fire times", () => {

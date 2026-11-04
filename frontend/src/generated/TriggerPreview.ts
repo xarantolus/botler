@@ -12,6 +12,14 @@ when: string,
  */
 then: string, 
 /**
+ * The event type pattern an event trigger listens for.
+ */
+event: string | null, 
+/**
+ * The prompt it sends, in full.
+ */
+prompt: string | null, 
+/**
  * Next fire times for schedules (UTC).
  */
 upcoming: Array<string>, shadow: boolean, 

@@ -12,9 +12,10 @@ import JobSlideover from "../components/system/JobSlideover.vue";
 import RunnableAction from "../components/system/RunnableAction.vue";
 import RunsTable from "../components/system/RunsTable.vue";
 import StoragePanel from "../components/system/StoragePanel.vue";
+import TriggerChips from "../components/system/TriggerChips.vue";
 import type { JobView, SystemView } from "../generated";
 import { portUrl, runDuration, runStatusColor } from "../lib/runs";
-import { fireLabel, lastFailed, nextFire, plain, schedules, serviceStateColor } from "../lib/system";
+import { fireLabel, lastFailed, plain, schedules, serviceStateColor } from "../lib/system";
 import { notifyError } from "../notify";
 import { useNow } from "../now";
 import { refreshStatus, state } from "../store";
@@ -191,10 +192,8 @@ const tz = computed(() => view.value?.timezone ?? "UTC");
                 <UBadge v-else-if="lastFailed(j)" color="error" variant="subtle" size="sm" label="last run failed" />
               </div>
               <p v-if="j.description" class="line-clamp-2 text-sm text-muted">{{ j.description }}</p>
-              <p class="mt-1 text-xs text-muted">
-                <template v-if="nextFire(j.triggers)">next {{ fireLabel(nextFire(j.triggers)!, tz, now) }}</template>
-                <template v-else>{{ j.triggers.map((t) => plain(t.when)).join("; ") || "no trigger" }}</template>
-              </p>
+              <TriggerChips v-if="j.triggers.length" :triggers="j.triggers" :timezone="tz" :now="now" class="mt-1" />
+              <p v-else class="mt-1 text-xs text-muted">no trigger</p>
             </div>
             <div class="flex items-center gap-1.5">
               <span v-if="!j.recent_runs.length" class="text-xs text-dimmed">never ran</span>
@@ -233,11 +232,7 @@ const tz = computed(() => view.value?.timezone ?? "UTC");
               <UBadge v-for="t in a.tools" :key="`t${t}`" color="neutral" variant="outline" size="sm" icon="i-lucide-wrench" :label="t" />
               <UBadge v-for="s in a.secrets" :key="`s${s}`" color="neutral" variant="outline" size="sm" icon="i-lucide-key-round" :label="s" />
             </div>
-            <ul v-if="a.triggers.length" class="space-y-0.5 text-xs text-muted">
-              <li v-for="t in a.triggers" :key="t.id">
-                {{ plain(t.when) }}: {{ plain(t.then) }}<template v-if="t.upcoming[0]"> · next {{ fireLabel(t.upcoming[0], tz, now) }}</template>
-              </li>
-            </ul>
+            <TriggerChips v-if="a.triggers.length" :triggers="a.triggers" :timezone="tz" :now="now" />
           </li>
         </ul>
       </section>

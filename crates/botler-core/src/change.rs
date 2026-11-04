@@ -197,6 +197,12 @@ pub struct TriggerPreview {
     pub when: String,
     /// Plain-language "what".
     pub then: String,
+    /// The event type pattern an event trigger listens for.
+    #[serde(default)]
+    pub event: Option<String>,
+    /// The prompt it sends, in full.
+    #[serde(default)]
+    pub prompt: Option<String>,
     /// Next fire times for schedules (UTC).
     pub upcoming: Vec<DateTime<Utc>>,
     pub shadow: bool,
@@ -670,6 +676,11 @@ pub fn describe_trigger(t: &ResolvedTrigger, status: Status, now: DateTime<Utc>)
         status,
         when,
         then,
+        event: match &t.kind {
+            TriggerKind::On { pattern } => Some(pattern.clone()),
+            _ => None,
+        },
+        prompt: t.spec.prompt.clone(),
         upcoming,
         shadow: t.spec.mode == crate::defs::Mode::Shadow,
         before: None,
