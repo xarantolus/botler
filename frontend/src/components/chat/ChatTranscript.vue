@@ -50,12 +50,30 @@ function measure(el: unknown) {
   if (el instanceof Element) virtualizer.value.measureElement(el);
 }
 
-/** Scroll message `id` into the page (it may not be rendered yet); false if it is not loaded. */
-function scrollToMessage(id: string): boolean {
-  const i = props.messages.findIndex((m) => m.id === id || m.metadata?.delivery === id);
-  if (i < 0) return false;
-  virtualizer.value.scrollToIndex(i, { align: "center" });
-  return true;
+/** A jump in progress: the message it brings into view. */
+let jumping: string | null = null;
+/** Scroll message `id` to the middle of the view and keep it there until the messages around it
+ * are measured and it stops moving (estimated heights above it turn into real ones, earlier pages
+ * load); false if it is not loaded. */
+async function scrollToMessage(id: string): Promise<boolean> {
+  const index = () => props.messages.findIndex((m) => m.id === id || m.metadata?.delivery === id);
+  if (index() < 0) return false;
+  jumping = id;
+  try {
+    let last: number | null = null;
+    for (let frame = 0, still = 0; frame < 120 && still < 3 && jumping === id; frame++) {
+      const i = index();
+      if (i < 0) return false;
+      virtualizer.value.scrollToIndex(i, { align: "center" });
+      await new Promise(requestAnimationFrame);
+      const top = list.value?.querySelector(`[data-index="${i}"]`)?.getBoundingClientRect().top ?? null;
+      still = top !== null && top === last ? still + 1 : 0;
+      last = top;
+    }
+    return jumping === id;
+  } finally {
+    if (jumping === id) jumping = null;
+  }
 }
 defineExpose({ scrollToMessage });
 
@@ -74,7 +92,8 @@ async function loadEarlier() {
 watch(
   () => props.messages[0]?.metadata?.key ?? props.messages[0]?.id,
   (_, before) => {
-    if (props.following) return;
+    // A jump keeps its own message in place.
+    if (props.following || jumping) return;
     const i = props.messages.findIndex((m) => (m.metadata?.key ?? m.id) === before);
     if (i > 0) void nextTick(() => virtualizer.value.scrollToIndex(i, { align: "start" }));
   },

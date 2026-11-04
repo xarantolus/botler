@@ -116,7 +116,7 @@ const queuedNote = computed(() => (badge.value?.type === "error" ? "the agent ca
 // when messages above get their real height; the browser's scroll anchoring is off, or both would
 // move it). The kit's own scrolling is off (ChatTranscript).
 const body = useTemplateRef<HTMLElement>("body");
-const transcriptView = useTemplateRef<{ scrollToMessage: (id: string) => boolean }>("transcriptView");
+const transcriptView = useTemplateRef<{ scrollToMessage: (id: string) => Promise<boolean> }>("transcriptView");
 /** The panel body, which scrolls the transcript. */
 const scroller = () => body.value?.closest<HTMLElement>("[data-slot=body]") ?? null;
 /** Within this of the end counts as at the end. */
@@ -176,12 +176,12 @@ const linked = computed(() => typeof route.query.delivery === "string" || typeof
 watch(name, () => (atBottom.value = !linked.value), { immediate: true });
 
 /** Bring a message (or request) into view and flash it. */
-async function reveal(selector: string): Promise<boolean> {
+async function reveal(selector: string, behavior: ScrollBehavior = "smooth"): Promise<boolean> {
   await nextTick();
   const el = body.value?.querySelector<HTMLElement>(selector);
   if (!el) return false;
   atBottom.value = false;
-  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  el.scrollIntoView({ block: "center", behavior });
   const target = el.querySelector<HTMLElement>("[data-slot=container]") ?? el;
   target.classList.remove("flash");
   void target.offsetWidth;
@@ -216,11 +216,11 @@ watch(
       if (session.value?.earlier) void showEarlier(session.value.instance.name, true);
       return;
     }
-    // Only messages near the viewport are rendered: scroll it there first.
+    // Only messages near the viewport are rendered: scroll it there first, until it stays put.
     atBottom.value = false;
-    transcriptView.value?.scrollToMessage(message);
-    for (let i = 0; i < 20 && !body.value?.querySelector(selector); i++) await new Promise(requestAnimationFrame);
-    if (await reveal(selector)) void router.replace({ query: {} });
+    if (!(await transcriptView.value?.scrollToMessage(message))) return;
+    // Settled in place: no smooth scroll, which measuring rows on its way would throw off.
+    if (await reveal(selector, "instant")) void router.replace({ query: {} });
   },
   { immediate: true },
 );
