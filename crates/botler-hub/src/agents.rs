@@ -332,8 +332,9 @@ async fn compact_if_idle(hub: &Hub, agent: &LiveAgent) -> Result<bool> {
 }
 
 /// A message the user queued: held (pending, cancellable) until the agent's whole run ends. One
-/// sent as a steer goes to pi right away instead, which adds it once the running tool calls are
-/// done, before its next model call (a running tool is never stopped).
+/// sent as a steer goes to pi right away instead, which adds it, with any other steers waiting,
+/// once the running tool calls are done, before its next model call (a running tool is never
+/// stopped).
 fn is_queued_message(ev: &Event) -> Result<bool> {
     if ev.source != Source::User || ev.kind != kinds::MESSAGE {
         return Ok(false);
@@ -407,7 +408,15 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
         hub.store.begin_turn(&d.instance).await?;
     }
     let _delivering = agent.delivering.lock().await;
+    // A message, from the user or another chat, is what the chat list's time shows (and the reply
+    // to it); hub events and timers are not. Marked before pi gets it: a quick turn can settle
+    // before `prompt` returns, and its reply would then count for the next turn instead.
+    let message = ev.source == Source::User || ev.kind == kinds::MESSAGE;
+    let was_answering = message && agent.answering.swap(true, Ordering::SeqCst);
     let result = agent.pi.prompt(&text, &[], streaming).await;
+    if message && !was_answering && result.is_err() {
+        agent.answering.store(false, Ordering::SeqCst);
+    }
     if starts && matches!(result, Ok(Disposition::Handled) | Err(PiError::Rejected { .. })) {
         hub.store.end_turn(&d.instance, false).await?; // no turn after all
     }
@@ -421,10 +430,7 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
             if ev.source == Source::User {
                 agent.since().talked();
             }
-            // A message, from the user or another chat, is what the chat list's time shows (and
-            // the reply to it); hub events and timers are not.
-            if ev.source == Source::User || ev.kind == kinds::MESSAGE {
-                agent.answering.store(true, Ordering::SeqCst);
+            if message {
                 hub.store.touch_message(&d.instance).await?;
             }
             if streaming == Some(Streaming::Steer) && ev.source == Source::User {

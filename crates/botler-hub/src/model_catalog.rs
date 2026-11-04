@@ -130,14 +130,17 @@ pub fn pi_model(choice: &ModelChoice, known: Option<&CatalogModel>) -> serde_jso
 /// `reserveTokens`, so that is set to compact at `compact_at` (0, or an unknown window: pi's
 /// default). The window itself stays the model's: pi fits every request, the summary of an
 /// already larger context included, into it, so a cut window starves the summary and the chat
-/// never compacts.
+/// never compacts. The user's messages sent mid-run (steers) all reach the model at the next
+/// pause together, not one per model call.
 pub fn pi_settings(known: Option<&CatalogModel>, compact_at: u64) -> serde_json::Value {
-    match known.and_then(|k| k.context_length) {
-        Some(c) if compact_at > 0 && c > compact_at => {
-            serde_json::json!({ "compaction": { "reserveTokens": c - compact_at } })
-        }
-        _ => serde_json::json!({}),
+    let mut s = serde_json::json!({ "steeringMode": "all" });
+    if let Some(c) = known.and_then(|k| k.context_length)
+        && compact_at > 0
+        && c > compact_at
+    {
+        s["compaction"] = serde_json::json!({ "reserveTokens": c - compact_at });
     }
+    s
 }
 
 /// The catalog entry for `choice`, if it is an OpenRouter model the catalog knows.
@@ -360,8 +363,9 @@ mod tests {
         assert_eq!(pi_model(&choice, None), serde_json::json!({ "maxTokens": 16384 }));
         // Compacting at 120k of a 1M window: pi reserves the rest.
         let s = pi_settings(c.get(&choice.id), 120_000);
-        assert_eq!(s, serde_json::json!({ "compaction": { "reserveTokens": 880_000 } }));
-        assert_eq!(pi_settings(c.get(&choice.id), 0), serde_json::json!({}));
-        assert_eq!(pi_settings(None, 120_000), serde_json::json!({}));
+        assert_eq!(s, serde_json::json!({ "steeringMode": "all", "compaction": { "reserveTokens": 880_000 } }));
+        let all = serde_json::json!({ "steeringMode": "all" });
+        assert_eq!(pi_settings(c.get(&choice.id), 0), all);
+        assert_eq!(pi_settings(None, 120_000), all);
     }
 }

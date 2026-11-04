@@ -326,5 +326,5 @@ async fn image_input_reaches_models_json() {
     let settings: Value =
         serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir("looker").join("settings.json")).unwrap())
             .unwrap();
-    assert_eq!(settings, json!({ "compaction": { "reserveTokens": 850_000 } }));
+    assert_eq!(settings, json!({ "steeringMode": "all", "compaction": { "reserveTokens": 850_000 } }));
 }
