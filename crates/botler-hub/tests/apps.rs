@@ -25,14 +25,17 @@ async fn an_app_opens_with_a_ticket_and_reaches_its_service() {
     assert_eq!(ports, [("127.0.0.1", apps::host_port(&e.hub.id, "home"), 8080)], "only the hub's proxy reaches it");
 
     // The service, as the hub reaches it: its port published on 127.0.0.1.
-    let svc = axum::Router::new().route(
-        "/start",
-        get(|headers: axum::http::HeaderMap| async move {
-            let leaked = headers.contains_key(header::COOKIE) || headers.contains_key(header::AUTHORIZATION);
-            let prefix = headers.get("x-forwarded-prefix").map(|v| v.to_str().unwrap().to_owned()).unwrap_or_default();
-            ([(header::SET_COOKIE, "sid=1; Path=/")], format!("hello {prefix} leaked={leaked}"))
-        }),
-    );
+    let svc = axum::Router::new()
+        .route(
+            "/start",
+            get(|headers: axum::http::HeaderMap| async move {
+                let leaked = headers.contains_key(header::COOKIE) || headers.contains_key(header::AUTHORIZATION);
+                let prefix =
+                    headers.get("x-forwarded-prefix").map(|v| v.to_str().unwrap().to_owned()).unwrap_or_default();
+                ([(header::SET_COOKIE, "sid=1; Path=/")], format!("hello {prefix} leaked={leaked}"))
+            }),
+        )
+        .route("/page", get(|| async { "<p>a page</p>".repeat(100) }));
     let port = apps::host_port(&e.hub.id, "home");
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.unwrap();
     tokio::spawn(async move { axum::serve(listener, svc).await.unwrap() });
@@ -64,6 +67,15 @@ async fn an_app_opens_with_a_ticket_and_reaches_its_service() {
     assert_eq!(resp.headers()[header::SET_COOKIE], "sid=1; Path=/apps/home/", "the app's cookie stays under it");
     let body = axum::body::to_bytes(resp.into_body(), 1 << 16).await.unwrap();
     assert_eq!(std::str::from_utf8(&body).unwrap(), "hello /apps/home leaked=false");
+
+    // Compressed for a browser that takes it.
+    let req = Request::get("/apps/home/page")
+        .header(header::COOKIE, &value)
+        .header(header::ACCEPT_ENCODING, "gzip")
+        .body(Body::empty())
+        .unwrap();
+    let resp = send(req).await.unwrap();
+    assert_eq!(resp.headers()[header::CONTENT_ENCODING], "gzip");
 
     // Another app's cookie does not open this one.
     let elsewhere =

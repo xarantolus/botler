@@ -99,6 +99,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/apps/{name}/", any(root))
         .route("/apps/{name}/{*rest}", any(proxy))
         .fallback(|| async { (StatusCode::NOT_FOUND, "no such app") })
+        // Like the hub's own routes; a response the app compressed itself passes as it is.
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(hub)
 }
 
