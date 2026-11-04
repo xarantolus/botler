@@ -274,8 +274,9 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
           <UButton size="xs" variant="link" label="Back to the current session" class="p-0" @click="showSession(session.instance.session_file)" />
         </template>
       </div>
-      <!-- Shown only when a banner is: the banners root is always there, comments make :empty miss. -->
-      <div v-if="inst" class="hidden border-b border-default px-4 py-3 has-[>div>*]:block sm:px-6">
+      <!-- Shown only when a banner is: the banners root is always there, comments make :empty miss.
+           At most a third of the screen, so the chat below always has room to scroll. -->
+      <div v-if="inst" class="hidden max-h-[33dvh] overflow-y-auto border-b border-default px-4 py-3 has-[>div>*]:block sm:px-6">
         <ChatBanners :instance="inst" :status="status" :badge="badge" class="mx-auto max-w-3xl" @show-request="showRequest" />
       </div>
     </template>

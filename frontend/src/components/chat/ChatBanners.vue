@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // What the user should know about a chat before reading it: how it was archived, breakers
 // pausing it or holding its messages, waking progress or failure, and that it waits for them.
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { AgentStatus, Instance } from "../../generated";
 import { heldFor, pausing } from "../../lib/breakers";
 import type { Badge } from "../../lib/phase";
@@ -18,6 +18,8 @@ const breakers = computed(() => state.status?.breakers ?? []);
 const held = computed(() => heldFor(props.instance.name, breakers.value));
 const paused = computed(() => pausing(props.instance.name, breakers.value));
 const report = computed(() => props.instance.archive_report);
+/** The handover report is folded to its start: unfolded it can be longer than the screen. */
+const reportOpen = ref(false);
 const sleepingForYou = computed(() => props.badge?.label === "waiting for you");
 /** The applied definitions do not load: the hub runs without some of them. */
 const problems = computed(() => state.status?.definition_problems ?? []);
@@ -49,7 +51,8 @@ const skipped = computed(() => state.status?.skipped_definitions ?? []);
     >
       <template #description>
         <div class="space-y-2">
-          <template v-if="report.report">
+          <MarkdownText v-if="report.report && !reportOpen" :source="report.report.summary" class="line-clamp-2" />
+          <template v-else-if="report.report">
             <MarkdownText :source="report.report.summary" />
             <div v-if="report.report.outstanding.length">
               <div class="font-medium text-highlighted">Outstanding</div>
@@ -71,7 +74,12 @@ const skipped = computed(() => state.status?.skipped_definitions ?? []);
               {{ report.handed_to }}
             </ULink>
           </p>
-          <p class="text-xs text-dimmed"><TimeAgo :at="report.at" /> · sending it a message restores it</p>
+          <p class="text-xs text-dimmed">
+            <template v-if="report.report">
+              <ULink class="underline" @click="reportOpen = !reportOpen">{{ reportOpen ? "Fold the handover report" : "Show the handover report" }}</ULink> ·
+            </template>
+            <TimeAgo :at="report.at" /> · sending it a message restores it
+          </p>
         </div>
       </template>
     </UAlert>
