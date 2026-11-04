@@ -22,10 +22,6 @@ routes: Array<string>, agents: Array<AgentSettings>,
  */
 defaults: JsonValue, defaults_schema: JsonValue, 
 /**
- * `[push]` (null when off) and its JSON Schema.
- */
-push: JsonValue, push_schema: JsonValue, 
-/**
  * `[mirror] url` (null when off).
  */
 mirror: string | null, 

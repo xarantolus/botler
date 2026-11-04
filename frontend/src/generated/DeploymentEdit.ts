@@ -3,10 +3,6 @@ import type { JsonValue } from "./serde_json/JsonValue";
 
 export type DeploymentEdit = { defaults: JsonValue, 
 /**
- * null turns push off.
- */
-push: JsonValue, 
-/**
  * null turns the mirror off.
  */
 mirror: string | null, };

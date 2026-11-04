@@ -70,19 +70,12 @@ async fn edits_are_committed_as_the_user_and_keep_the_files_layout() {
     defaults["idle_timeout"] = json!("soon");
     let mut agent = chat["edit"].clone();
     agent["model"] = json!("qwen/qwen-flash");
-    let bad =
-        json!({ "commit": loaded, "agents": { "chat": agent }, "deployment": { "defaults": defaults, "push": null } });
+    let bad = json!({ "commit": loaded, "agents": { "chat": agent }, "deployment": { "defaults": defaults } });
     let r = api(&e, "PUT", Some(bad)).await;
     assert_eq!(r["saved"], false);
     let fields: Vec<&str> = r["errors"].as_array().unwrap().iter().map(|e| e["field"].as_str().unwrap()).collect();
     assert_eq!(fields, ["agents.chat.model", "defaults.idle_timeout"], "{r}");
     assert!(r["errors"][0]["message"].as_str().unwrap().contains("closest: qwen/qwen3.8-flash"), "{r}");
-    // A problem only the whole tree shows belongs to the file's section.
-    let push = json!({ "ntfy_url": "https://ntfy.sh", "topic_secret": "NOPE" });
-    let r =
-        api(&e, "PUT", Some(json!({ "commit": loaded, "deployment": { "defaults": s["defaults"], "push": push } })))
-            .await;
-    assert_eq!((&r["saved"], &r["errors"][0]["field"]), (&json!(false), &json!("botler.toml")), "{r}");
 
     let mut models = s["models"].clone();
     models["models"].as_array_mut().unwrap().remove(1);
@@ -96,7 +89,7 @@ async fn edits_are_committed_as_the_user_and_keep_the_files_layout() {
         "commit": loaded,
         "models": models,
         "agents": { "chat": agent },
-        "deployment": { "defaults": defaults, "push": null },
+        "deployment": { "defaults": defaults },
     });
     let r = api(&e, "PUT", Some(edit)).await;
     assert_eq!(r["saved"], true, "{r}");

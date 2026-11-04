@@ -35,8 +35,6 @@ pub struct Instance {
     pub events: EventsPolicy,
     #[serde(default)]
     pub mirror: Option<Mirror>,
-    #[serde(default)]
-    pub push: Option<Push>,
 }
 
 /// How emitted events are checked against declarations.
@@ -339,14 +337,6 @@ pub struct Mirror {
     /// Where main is pushed after every merge (e.g. `ssh://git@host:222/me/monorepo.git`), with
     /// the hub's own git and SSH credentials.
     pub url: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Push {
-    /// ntfy server URL, e.g. `https://ntfy.sh` or a self-hosted instance.
-    pub ntfy_url: String,
-    pub topic_secret: String,
 }
 
 /// Unit-agnostic budget. Any limit that is set is enforced; unset limits are unbounded.

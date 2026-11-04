@@ -34,7 +34,6 @@ botler is a personal, self-hosted system of autonomous agents. These are its cor
 
 ```
  Web app ──HTTP/WS──┐
- ntfy push  ◄───────┤
                     ▼
  ┌──────────────── botler-hub (Rust, systemd) ─────────────────┐
  │ API (axum) · MCP server (rmcp, streamable HTTP, per-instance │
@@ -282,4 +281,4 @@ pyproject.toml, uv.lock    uv workspace
 
 ## Key tech choices
 
-tokio, axum, sqlx (SQLite, WAL), bollard against the rootless Podman socket (`podman system service`, user systemd unit; Docker also works), git CLI wrapper (more predictable than libgit2 for worktrees and rebase), croner, rmcp (official Rust MCP SDK), serde/toml/schemars, tracing, chacha20poly1305 for secret values at rest, rust-embed, thiserror/anyhow. Web: **Vue 3 + Nuxt UI** (as a plain Vue + Vite library, no Nuxt: one design system with chat elements for messages, reasoning, tool calls and the prompt, plus dashboard layout, tables, forms and overlays; icons bundled at build time so the app works offline; pi's `pi-web-ui` is stale), TypeScript types generated from the Rust API types with **ts-rs** (it follows serde's attributes, so tagged enums become discriminated unions). The old dependency-free page (`web/index.html`) stays at `/legacy`. Push: ntfy (self-hostable), with system-written text only.
+tokio, axum, sqlx (SQLite, WAL), bollard against the rootless Podman socket (`podman system service`, user systemd unit; Docker also works), git CLI wrapper (more predictable than libgit2 for worktrees and rebase), croner, rmcp (official Rust MCP SDK), serde/toml/schemars, tracing, chacha20poly1305 for secret values at rest, rust-embed, thiserror/anyhow. Web: **Vue 3 + Nuxt UI** (as a plain Vue + Vite library, no Nuxt: one design system with chat elements for messages, reasoning, tool calls and the prompt, plus dashboard layout, tables, forms and overlays; icons bundled at build time so the app works offline; pi's `pi-web-ui` is stale), TypeScript types generated from the Rust API types with **ts-rs** (it follows serde's attributes, so tagged enums become discriminated unions). The old dependency-free page (`web/index.html`) stays at `/legacy`.

@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use botler_core::defs::{Defaults, Definitions, Diagnostic, ModelEntry, Push, is_model_id};
+use botler_core::defs::{Defaults, Definitions, Diagnostic, ModelEntry, is_model_id};
 use botler_core::duration::HumanDuration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,9 +29,6 @@ pub struct Settings {
     /// `[defaults]` and its JSON Schema, which the form is generated from.
     pub defaults: Value,
     pub defaults_schema: Value,
-    /// `[push]` (null when off) and its JSON Schema.
-    pub push: Value,
-    pub push_schema: Value,
     /// `[mirror] url` (null when off).
     pub mirror: Option<String>,
     /// Tools agents can be granted (`tools` takes globs of these names).
@@ -111,8 +108,6 @@ pub struct SettingsEdit {
 #[derive(Debug, Deserialize, TS)]
 pub struct DeploymentEdit {
     pub defaults: Value,
-    /// null turns push off.
-    pub push: Value,
     /// null turns the mirror off.
     #[serde(default)]
     pub mirror: Option<String>,
@@ -192,8 +187,6 @@ pub async fn get(hub: &Hub) -> Result<Settings> {
             .collect(),
         defaults: to_json(&defs.instance.defaults)?,
         defaults_schema: schema(schemars::schema_for!(Defaults))?,
-        push: to_json(&defs.instance.push)?,
-        push_schema: schema(schemars::schema_for!(Push))?,
         mirror: defs.instance.mirror.as_ref().map(|m| m.url.clone()),
         tools: defs.tools.keys().cloned().collect(),
         services: defs.services().filter(|j| j.spec.env.port.is_some()).map(|j| j.name.clone()).collect(),
@@ -281,10 +274,8 @@ pub async fn save(hub: &Hub, edit: &SettingsEdit) -> Result<SettingsSaved> {
     let deployment = match &edit.deployment {
         Some(d) => {
             let defaults = parse_section::<Defaults>("defaults", &d.defaults, &mut errors);
-            let push =
-                if d.push.is_null() { Some(Value::Null) } else { parse_section::<Push>("push", &d.push, &mut errors) };
             let mirror = d.mirror.as_deref().map(str::trim).filter(|u| !u.is_empty()).map(String::from);
-            defaults.zip(push).map(|(d, p)| (d, p, mirror))
+            defaults.map(|d| (d, mirror))
         }
         None => None,
     };
@@ -319,7 +310,7 @@ pub async fn save(hub: &Hub, edit: &SettingsEdit) -> Result<SettingsSaved> {
             if let Some(m) = &edit.models {
                 edit_models(&mut doc, &models_edit(&base.defs), m, &mut changed)?;
             }
-            if let Some((defaults, push, mirror)) = &deployment {
+            if let Some((defaults, mirror)) = &deployment {
                 let inst = &base.defs.instance;
                 apply_json(
                     table(&mut doc, "defaults")?,
@@ -328,14 +319,6 @@ pub async fn save(hub: &Hub, edit: &SettingsEdit) -> Result<SettingsSaved> {
                     "defaults.",
                     &mut changed,
                 );
-                let old_push = to_json(&inst.push)?;
-                if push.is_null() {
-                    if doc.remove("push").is_some() {
-                        changed.push("push".into());
-                    }
-                } else {
-                    apply_json(table(&mut doc, "push")?, &old_push, push, "push.", &mut changed);
-                }
                 if inst.mirror.as_ref().map(|m| &m.url) != mirror.as_ref() {
                     match mirror {
                         Some(url) => set(table(&mut doc, "mirror")?, "url", &Value::String(url.clone())),

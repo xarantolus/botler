@@ -1,5 +1,4 @@
-//! Uploads attached to messages, image input on models, and ntfy push for blocking
-//! requests.
+//! Uploads attached to messages, and image input on models.
 
 mod common;
 
@@ -328,44 +327,4 @@ async fn image_input_reaches_models_json() {
         serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir("looker").join("settings.json")).unwrap())
             .unwrap();
     assert_eq!(settings, json!({ "compaction": { "reserveTokens": 850_000 } }));
-}
-
-/// A blocking request pushes fixed text to `<ntfy_url>/<topic>`; the question stays home.
-#[tokio::test]
-async fn blocking_requests_are_pushed_with_hub_written_text() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let e = common::env().await;
-    let ntfy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = ntfy.local_addr().unwrap().port();
-    let toml = e.hub.repo.read_file(&e.hub.repo.main().await.unwrap(), "botler.toml").await.unwrap().unwrap();
-    let toml = format!("{toml}\n[push]\nntfy_url = \"http://127.0.0.1:{port}\"\ntopic_secret = \"NTFY_TOPIC\"\n");
-    let secrets = e.hub.repo.read_file(&e.hub.repo.main().await.unwrap(), "secrets.toml").await.unwrap().unwrap();
-    let secrets =
-        format!("{secrets}\n[[group]]\nname = \"push\"\nclass = \"hub\"\n[[group.secret]]\nname = \"NTFY_TOPIC\"\n");
-    e.commit(&[("botler.toml", toml.as_str()), ("secrets.toml", secrets.as_str())]).await;
-    e.hub.store.set_secret(&e.hub.secret_key, "NTFY_TOPIC", "botler-test-topic").await.unwrap();
-
-    let chat = botler_hub::router::new_instance(&e.hub, "chat", None, None).await.unwrap();
-    let me = Caller {
-        principal: Principal::Agent { instance: chat.clone(), wake: "w".into() },
-        capabilities: vec![],
-        runnable: None,
-    };
-    ops::call(&e.hub, &me, "ask_user", json!({"question": "Secret plans: may I?", "priority": "blocking"}))
-        .await
-        .unwrap();
-    let (mut conn, _) = tokio::time::timeout(std::time::Duration::from_secs(10), ntfy.accept()).await.unwrap().unwrap();
-    let mut buf = vec![0u8; 4096];
-    let mut req = String::new();
-    while !req.contains("\r\n\r\n") || !req.ends_with('.') {
-        let n = tokio::time::timeout(std::time::Duration::from_secs(5), conn.read(&mut buf)).await.unwrap().unwrap();
-        if n == 0 {
-            break;
-        }
-        req.push_str(&String::from_utf8_lossy(&buf[..n]));
-    }
-    conn.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}").await.unwrap();
-    assert!(req.starts_with("POST /botler-test-topic HTTP/1.1"), "{req}");
-    assert!(req.contains("Title: botler") && req.ends_with("A question is waiting for your answer."), "{req}");
-    assert!(!req.contains("Secret plans"), "agent-written text never leaves: {req}");
 }

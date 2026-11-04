@@ -8,7 +8,7 @@ A request needs a hub change only if it needs at least one of these:
 
 1. **A new trust boundary or escalation:** something the agent must not be able to grant itself. Examples: opening a port to the network, a new secret class, a new kind of mount.
 2. **New hub-held state:** a fact that has to survive agents, held by the single writer.
-3. **A new channel to the user:** for example push notifications, or a new kind of request.
+3. **A new channel to the user:** for example a new chat platform, or a new kind of request.
 
 Everything else is composed from the primitives below by agents, through transactions. Examples:
 - daily digest

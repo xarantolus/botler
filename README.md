@@ -9,8 +9,7 @@ It is one Rust binary on a Linux machine you own. Agents are [pi](https://pi.dev
 rootless Podman containers, and models come through [OpenRouter](https://openrouter.ai).
 
 ### Features
-- Chat with Botler from the web app on your desktop or phone (installable as a PWA, with push
-  notifications), or over Discord (ready to turn on) and other chat platforms it builds a bridge to
+- Chat with Botler from the web app on your desktop or phone (installable as a PWA), or over Discord (ready to turn on) and other chat platforms it builds a bridge to
 - Larger work goes to a `dev` agent in its own chat, which you can open and message while it
   works; it can also start a Claude Code session on your subscription
 - Everything the agents build is plain code in a git monorepo: jobs, services (Dockerfiles),
@@ -61,16 +60,7 @@ You need a Linux machine that stays on (a home server or a small VPS), and an
    cargo install --locked --git https://github.com/xarantolus/botler botler
    ```
 
-3. **Give it your OpenRouter API key.** Create a key at
-   [openrouter.ai/keys](https://openrouter.ai/keys), then paste it here, press Enter and Ctrl-D
-   (you can also skip this; the web app asks for it):
-
-   ```sh
-   mkdir -p ~/.config/botler/secrets
-   install -m 600 /dev/stdin ~/.config/botler/secrets/OPENROUTER_API_KEY
-   ```
-
-4. **Start it as a service.** This checks the host first and prints the fix for anything missing
+3. **Start it as a service.** This checks the host first and prints the fix for anything missing
    (subordinate ids, lingering, ...), then runs botler as a systemd user service that starts at
    boot:
 
@@ -78,7 +68,7 @@ You need a Linux machine that stays on (a home server or a small VPS), and an
    botler service install
    ```
 
-5. **Sign in.** The first start creates your monorepo in `~/.local/share/botler` and builds the
+4. **Sign in.** The first start creates your monorepo in `~/.local/share/botler` and builds the
    agent image, which takes a few minutes. Then it logs a sign-in link:
 
    ```sh
@@ -86,11 +76,15 @@ You need a Linux machine that stays on (a home server or a small VPS), and an
    # no device is signed in yet: open http://127.0.0.1:7420/#code=K7QM2XPA
    ```
 
-   Open it on the same machine and say hello to Botler. `botler login-code` prints a new code if
-   it ran out (they last 10 minutes).
+   Open it on the same machine. `botler login-code` prints a new code if it ran out (they last
+   10 minutes).
+
+5. **Add your OpenRouter API key.** Create a key at
+   [openrouter.ai/keys](https://openrouter.ai/keys), open **Secrets** in the web app and paste it
+   into `OPENROUTER_API_KEY`. The hub stores it encrypted. Then say hello to Botler.
 
 6. **Use it from your phone (optional).** The hub only listens on `127.0.0.1`. To reach it from
-   your other devices over HTTPS (which the PWA and notifications need), put
+   your other devices over HTTPS (which installing the PWA needs), put
    [Tailscale](https://tailscale.com) in front of it, after enabling MagicDNS and HTTPS
    certificates in the tailnet admin console:
 

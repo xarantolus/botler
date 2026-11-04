@@ -9,7 +9,7 @@ creates everything it needs.
 - **Linux with rootless Podman 4.x or newer** (`sudo apt install podman`, `sudo dnf install
   podman`, ...). Docker also works (`--runtime docker`), but Podman is the target.
 - **subuid/subgid ranges** for your user; most distributions add them when the user is created.
-- `git` and `tar`; `zstd` is optional (smaller backups), `curl` for push notifications.
+- `git` and `tar`; `zstd` is optional (smaller backups).
 - To build it: **Rust 1.90+** ([rustup](https://rustup.rs)) and **Node.js 22+** with npm (the
   build compiles the web app into the binary).
 - An [OpenRouter](https://openrouter.ai) API key: agents use models through it, and you set a
@@ -26,13 +26,6 @@ cargo install --locked --git https://github.com/xarantolus/botler botler
 
 That puts `botler` in `~/.cargo/bin`. Add `--root <dir>` to put it elsewhere, e.g.
 `--root ~/apps/botler` gives `~/apps/botler/bin/botler`.
-
-Give it your OpenRouter key (optional here; the web app asks for it otherwise):
-
-```sh
-mkdir -p ~/.config/botler/secrets
-install -m 600 /dev/stdin ~/.config/botler/secrets/OPENROUTER_API_KEY   # paste, Enter, Ctrl-D
-```
 
 ## Run it
 
@@ -56,7 +49,9 @@ The first start creates `~/.local/share/botler` with your monorepo, builds the a
 no device is signed in yet: open http://127.0.0.1:7420/#code=K7QM2XPA
 ```
 
-Open it on the same machine and say hello to Botler. The code is valid for 10 minutes;
+Open it on the same machine, then open **Secrets** and paste your OpenRouter API key into
+`OPENROUTER_API_KEY` (create one at [openrouter.ai/keys](https://openrouter.ai/keys)), and say
+hello to Botler. The code is valid for 10 minutes;
 `botler login-code` prints a new one. Sign in other devices with a code from **Settings →
 Devices**.
 

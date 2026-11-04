@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Instance settings from the monorepo: models (the default and the ones we typically use), each
-// agent's model, tools, MCP services and idle timeout, and deployment defaults and push. Saving
+// agent's model, tools, MCP services and idle timeout, and deployment defaults and the mirror. Saving
 // commits only what changed on main, as the user; problems come back per field.
 import type { TabsItem } from "@nuxt/ui";
 import { computed, nextTick, onMounted, ref, shallowRef } from "vue";
@@ -59,7 +59,7 @@ const edit = computed(() => (loaded.value && draft.value ? changes(loaded.value,
 const models = computed(() => catalog.value?.models ?? []);
 const typical = computed(() => draft.value?.models.models ?? []);
 const users = computed(() => usedBy(loaded.value?.agents ?? []));
-const general = computed(() => generalErrors(errors.value, ["models", "agents", "defaults", "push", "mirror", "runnables"]));
+const general = computed(() => generalErrors(errors.value, ["models", "agents", "defaults", "mirror", "runnables"]));
 const defaults = computed(() => draft.value?.defaults ?? {});
 
 async function save() {
@@ -84,10 +84,6 @@ async function save() {
 
 function addModel() {
   draft.value?.models.models.push({ id: "", note: "" });
-}
-
-function setPush(on: boolean) {
-  if (draft.value) draft.value.push = on ? { ntfy_url: "", topic_secret: "" } : null;
 }
 </script>
 
@@ -309,27 +305,6 @@ function setPush(on: boolean) {
             path="defaults"
             :errors="errors"
           />
-        </UCard>
-        <UCard>
-          <template #header>
-            <div class="flex items-center gap-2">
-              <div class="min-w-0 flex-1">
-                <p class="font-semibold text-highlighted">Push notifications</p>
-                <p class="text-sm text-muted">Blocking requests pushed to your phone with ntfy; the topic is a secret.</p>
-              </div>
-              <USwitch :model-value="draft.push !== null" @update:model-value="setPush" />
-            </div>
-          </template>
-          <UFormField v-if="draft.push !== null" :error="errorsAt(errors, 'push').join('; ') || undefined">
-            <SchemaFields
-              v-model="draft.push"
-              :root="loaded.push_schema as Schema"
-              :node="loaded.push_schema as Schema"
-              path="push"
-              :errors="[]"
-            />
-          </UFormField>
-          <p v-else class="text-sm text-muted">Off.</p>
         </UCard>
         <UCard>
           <template #header>
