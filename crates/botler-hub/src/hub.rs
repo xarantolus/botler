@@ -116,6 +116,8 @@ pub struct Hub {
     /// many, and only a viewer of that chat wants them.
     pi: std::sync::Mutex<std::collections::HashMap<String, broadcast::Sender<serde_json::Value>>>,
     pub agents: crate::agents::Agents,
+    /// Each service run's failed `[health] command` checks since its last passing one.
+    pub failed_checks: std::sync::Mutex<std::collections::HashMap<String, crate::services::FailedChecks>>,
     /// Serialises image builds so the same tag is never built twice concurrently.
     pub build_lock: Mutex<()>,
     /// Serialises packing, unpacking and clearing per-instance homes against waking them.
@@ -189,6 +191,7 @@ impl Hub {
             live,
             pi: Default::default(),
             agents: crate::agents::Agents::default(),
+            failed_checks: Default::default(),
             build_lock: Mutex::new(()),
             home_lock: Mutex::new(()),
             storage_cache: Mutex::new(None),

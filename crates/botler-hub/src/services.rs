@@ -1,8 +1,9 @@
 //! Services: long-running job containers the hub keeps running.
 //!
-//! Crash-only: [`reconcile`] holds no state. It compares the applied definitions with the runs
-//! table and the runtime, and the same pass runs at boot, after every apply, on resume, after a
-//! service exits and on a periodic tick. Backoff and crash loops are computed from the runs table;
+//! Crash-only: [`reconcile`] holds no state but a count of failed health checks in a row, which a
+//! restart may forget. It compares the applied definitions with the runs table and the runtime,
+//! and the same pass runs at boot, after every apply, on resume, after a service exits and on a
+//! periodic tick. Backoff and crash loops are computed from the runs table;
 //! an open `crashloop` incident is the failed state, and resolving it lets the next pass restart
 //! the service.
 
@@ -34,7 +35,13 @@ pub async fn reconcile(hub: &Arc<Hub>) -> Result<()> {
 pub async fn reconcile_at(hub: &Arc<Hub>, now: DateTime<Utc>) -> Result<()> {
     let applied = hub.applied().await;
     let paused = hub.paused().await?;
-    for run in hub.store.active_runs().await?.into_iter().filter(|r| r.kind == RunKind::Service) {
+    let runs: Vec<Run> = hub.store.active_runs().await?.into_iter().filter(|r| r.kind == RunKind::Service).collect();
+    // Failed checks of runs that ended are forgotten.
+    hub.failed_checks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|id, _| runs.iter().any(|r| r.id == *id));
+    for run in runs {
         let def = applied.defs.services().find(|s| s.name == run.runnable);
         if run.status == RunStatus::Queued {
             // Launches happen inside this pass, so a queued service run was cut off by a restart.
@@ -94,32 +101,66 @@ async fn alive(hub: &Hub, run: &Run) -> Result<bool> {
 async fn check_heartbeat(hub: &Hub, def: &JobDef, run: &Run, now: DateTime<Utc>) -> Result<()> {
     let (Some(h), Some(started)) = (&def.spec.health, run.started_at) else { return Ok(()) };
     let last = (started + h.grace.as_chrono()).max(run.heartbeat_at.unwrap_or(started));
-    let mut reason = format!("no health heartbeat since {last} (expected every {})", h.heartbeat);
-    // `command`: the hub checks, a few times per heartbeat interval.
-    let seen = run.heartbeat_at.unwrap_or(started);
-    if !h.command.is_empty() && now >= seen + h.heartbeat.as_chrono() / 3 {
+    let overdue = now > last + h.heartbeat.as_chrono();
+    if h.command.is_empty() {
+        if overdue {
+            unhealthy(hub, run, &format!("no health heartbeat since {last} (expected every {})", h.heartbeat)).await?;
+        }
+        return Ok(());
+    }
+    // `command`: the hub checks, a few times per heartbeat interval, and after a failure again
+    // every RETRY_GAP: one slow exec on a busy host is not an outage.
+    let failed = || hub.failed_checks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let previous = failed().get(&run.id).cloned();
+    let due = match &previous {
+        Some(f) => now >= f.at + RETRY_GAP,
+        None => now >= run.heartbeat_at.unwrap_or(started) + h.heartbeat.as_chrono() / 3,
+    };
+    let failures = if due {
         let name = container_name(hub, &run.runnable);
-        let checked = tokio::time::timeout(PROBE_TIMEOUT, hub.containers.exec(&name, &h.command)).await;
-        match checked {
+        let reason = match tokio::time::timeout(PROBE_TIMEOUT, hub.containers.exec(&name, &h.command)).await {
             Ok(Ok(_)) => {
+                failed().remove(&run.id);
                 hub.store.heartbeat(&run.id, now).await?;
                 return Ok(());
             }
-            Ok(Err(e)) => reason = format!("its health check `{}` failed: {e}", h.command.join(" ")),
-            Err(_) => reason = format!("its health check `{}` took over {PROBE_TIMEOUT:?}", h.command.join(" ")),
-        }
+            Ok(Err(e)) => format!("its health check `{}` failed: {e}", h.command.join(" ")),
+            Err(_) => format!("its health check `{}` took over {PROBE_TIMEOUT:?}", h.command.join(" ")),
+        };
         if now > started + h.grace.as_chrono() {
             tracing::warn!(service = %run.runnable, %reason, "service health check failed");
         }
-    }
-    if now > last + h.heartbeat.as_chrono() {
+        let f = FailedChecks { count: previous.map_or(0, |p| p.count) + 1, at: now, reason };
+        failed().insert(run.id.clone(), f.clone());
+        Some(f)
+    } else {
+        previous
+    };
+    // Unhealthy once the heartbeat is overdue and the last few checks in a row failed.
+    if let Some(f) = failures.filter(|f| overdue && f.count >= CHECKS_BEFORE_UNHEALTHY) {
+        failed().remove(&run.id);
+        let reason = format!("{} ({} checks in a row failed; no heartbeat since {last})", f.reason, f.count);
         unhealthy(hub, run, &reason).await?;
     }
     Ok(())
 }
 
+/// A service run's failed `[health] command` checks in a row.
+#[derive(Clone, Debug)]
+pub struct FailedChecks {
+    count: u32,
+    /// The last one.
+    at: DateTime<Utc>,
+    reason: String,
+}
+
 /// A `[health] command` that takes longer than this fails.
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// A failed `[health] command` is retried this long after it.
+const RETRY_GAP: chrono::TimeDelta = chrono::TimeDelta::seconds(30);
+/// Failed `[health] command` checks in a row (and an overdue heartbeat) that make a service
+/// unhealthy.
+const CHECKS_BEFORE_UNHEALTHY: u32 = 3;
 
 /// Start `def` unless it runs, is backing off or is crash-looping.
 async fn ensure_running(hub: &Hub, def: &JobDef, commit: &str, now: DateTime<Utc>) -> Result<()> {
@@ -211,7 +252,13 @@ pub async fn unhealthy(hub: &Hub, run: &Run, reason: &str) -> Result<()> {
 
 /// Stop every running service (the kill switch).
 pub async fn stop_all(hub: &Hub) -> Result<()> {
-    for run in hub.store.active_runs().await?.into_iter().filter(|r| r.kind == RunKind::Service) {
+    let runs: Vec<Run> = hub.store.active_runs().await?.into_iter().filter(|r| r.kind == RunKind::Service).collect();
+    // Failed checks of runs that ended are forgotten.
+    hub.failed_checks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|id, _| runs.iter().any(|r| r.id == *id));
+    for run in runs {
         stop(hub, &run, "botler is paused").await?;
     }
     Ok(())

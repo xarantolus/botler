@@ -51,7 +51,8 @@ An off-the-shelf server (a database, Mattermost, Gitea) needs no Dockerfile: `fr
 as it is, with its own command unless `command` is set, and `environment = { KEY = "value" }` for
 its plain settings (secrets stay in `secrets` groups). Such an image cannot call
 `botler.health.ok()`, so `[health] command = ["pg_isready"]` lets the hub run that check inside the
-container instead: each success is a heartbeat. Its volume is handed to the image's own user at
+container instead: each success is a heartbeat, and a failure is retried (three in a row, with
+the heartbeat overdue, make it unhealthy). Its volume is handed to the image's own user at
 start, so images that do not run as root can write it. Skill `compose-apps` translates a
 docker-compose file.
 

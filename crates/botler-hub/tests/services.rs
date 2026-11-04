@@ -444,11 +444,25 @@ async fn an_upstream_image_runs_as_it_is_and_the_hub_checks_its_health() {
     assert!(e.fake.execs().iter().any(|(c, cmd)| *c == name && cmd == &["pg_isready"]));
     let beat = e.hub.store.run(&run.id).await.unwrap().heartbeat_at.expect("a heartbeat");
 
-    // A failing one: unhealthy once the heartbeat is overdue, with the check's output.
+    // A failing one is retried; one slow or failed check on a busy host is no outage.
     e.fake.set_exec_failure(Some("no response"));
     services::reconcile_at(&e.hub, beat + Duration::seconds(30)).await.unwrap();
-    assert_eq!(current(&e).await.status, RunStatus::Running, "not overdue yet");
+    services::reconcile_at(&e.hub, beat + Duration::seconds(45)).await.unwrap();
+    let checks = || e.fake.execs().iter().filter(|(c, _)| *c == name).count();
+    assert_eq!(checks(), 2, "the passing check and one failure: the retry waits 30s");
     services::reconcile_at(&e.hub, beat + Duration::seconds(70)).await.unwrap();
+    assert_eq!(current(&e).await.status, RunStatus::Running, "overdue, but only two checks failed");
+    // A passing retry ends the streak.
+    e.fake.set_exec_failure(None);
+    services::reconcile_at(&e.hub, beat + Duration::seconds(100)).await.unwrap();
+    let beat = e.hub.store.run(&run.id).await.unwrap().heartbeat_at.unwrap();
+    assert_eq!(checks(), 4);
+    // Unhealthy once three checks in a row failed and the heartbeat is overdue, with the check's output.
+    e.fake.set_exec_failure(Some("no response"));
+    for s in [20, 50, 80] {
+        assert_eq!(current(&e).await.status, RunStatus::Running);
+        services::reconcile_at(&e.hub, beat + Duration::seconds(s)).await.unwrap();
+    }
     let ended = e.hub.store.run(&run.id).await.unwrap();
     assert_eq!(ended.status, RunStatus::Failed);
     let reason = ended.reason.unwrap();
