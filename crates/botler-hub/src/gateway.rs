@@ -102,6 +102,10 @@ pub async fn chat(hub: &Hub, caller: &Caller, mut body: Value) -> Result<(u16, V
     if choice.provider == botler_core::defs::OPENROUTER {
         // OpenRouter reports the cost in the response.
         obj.insert("usage".into(), json!({ "include": true }));
+        // Unless the job picks providers itself: the cheapest, as for agents.
+        if !obj.contains_key("provider") {
+            obj.insert("provider".into(), json!(crate::pi_config::OpenRouterRouting::CHEAPEST));
+        }
     }
     let api_key = match &choice.api_key_secret {
         Some(s) => Some(hub.store.secret(&hub.secret_key, s).await.map_err(HubError::from)?.ok_or_else(|| {
@@ -111,7 +115,7 @@ pub async fn chat(hub: &Hub, caller: &Caller, mut body: Value) -> Result<(u16, V
     };
     let base = choice.base_url.clone().unwrap_or_else(|| OPENROUTER_URL.into());
     let (status, reply) =
-        post(hub, &format!("{}/chat/completions", base.trim_end_matches('/')), api_key.as_deref(), &body).await?;
+        call(hub, &format!("{}/chat/completions", base.trim_end_matches('/')), api_key.as_deref(), Some(&body)).await?;
 
     let usage = reply.get("usage");
     let tokens = usage.and_then(|u| u.get("total_tokens")).and_then(Value::as_i64).unwrap_or(0);
@@ -123,20 +127,63 @@ pub async fn chat(hub: &Hub, caller: &Caller, mut body: Value) -> Result<(u16, V
     Ok((status, reply))
 }
 
-/// POST `body` to `url` with curl (the hub's HTTPS client). The key goes in on stdin, never on
-/// the command line.
-async fn post(hub: &Hub, url: &str, key: Option<&str>, body: &Value) -> Result<(u16, Value), GatewayError> {
+/// What OpenRouter counts for the hub's model key: what it charged, where botler's own figures
+/// for agents are estimates at each model's listed price. `None` when models do not go through
+/// OpenRouter, or the key is not set.
+pub async fn openrouter_key(hub: &Hub) -> Result<Option<ProviderKey>, GatewayError> {
+    let applied = hub.applied().await;
+    // OpenRouter models use the `[models]` key and URL (routes to other providers their own).
+    let models = &applied.defs.instance.models;
+    if models.base_url.is_some() {
+        return Ok(None);
+    }
+    let Some(secret) = &models.api_key_secret else { return Ok(None) };
+    let Some(key) = hub.store.secret(&hub.secret_key, secret).await.map_err(HubError::from)? else { return Ok(None) };
+    let (status, reply) = call(hub, &format!("{OPENROUTER_URL}/key"), Some(&key), None).await?;
+    if status != 200 {
+        let msg = reply.pointer("/error/message").and_then(Value::as_str).unwrap_or("no message");
+        return Err(GatewayError::Upstream(format!("OpenRouter answered {status}: {msg}")));
+    }
+    let data = reply.get("data").cloned().unwrap_or(Value::Null);
+    serde_json::from_value(data).map(Some).map_err(|e| GatewayError::Upstream(format!("unexpected key info: {e}")))
+}
+
+/// OpenRouter's figures for one key (`GET /api/v1/key`), in USD.
+#[derive(Debug, serde::Deserialize, serde::Serialize, ts_rs::TS)]
+pub struct ProviderKey {
+    pub label: String,
+    /// Since the key was made.
+    pub usage: f64,
+    pub usage_daily: f64,
+    pub usage_weekly: f64,
+    pub usage_monthly: f64,
+    pub limit: Option<f64>,
+    pub limit_remaining: Option<f64>,
+    /// How often the limit starts over (`daily`, `weekly`, `monthly`), if it does.
+    pub limit_reset: Option<String>,
+}
+
+/// Send `body` to `url` with curl (the hub's HTTPS client), or GET it without one. The key goes
+/// in on stdin, never on the command line.
+async fn call(hub: &Hub, url: &str, key: Option<&str>, body: Option<&Value>) -> Result<(u16, Value), GatewayError> {
     if url.contains(['"', '\\', '\n', '\r']) || key.is_some_and(|k| k.contains(['"', '\\', '\n', '\r'])) {
         return Err(GatewayError::BadRequest("the model URL or key contains characters curl cannot take".into()));
     }
-    let dir = hub.paths.root.join("tmp");
-    tokio::fs::create_dir_all(&dir).await.map_err(HubError::from)?;
-    let file = dir.join(format!("chat-{}.json", uuid::Uuid::now_v7().simple()));
-    tokio::fs::write(&file, body.to_string()).await.map_err(HubError::from)?;
-    let mut config = format!(
-        "url = \"{url}\"\nheader = \"Content-Type: application/json\"\ndata-binary = \"@{}\"\n",
-        file.display()
-    );
+    let mut config = format!("url = \"{url}\"\n");
+    let file = match body {
+        Some(body) => {
+            let dir = hub.paths.root.join("tmp");
+            tokio::fs::create_dir_all(&dir).await.map_err(HubError::from)?;
+            let file = dir.join(format!("chat-{}.json", uuid::Uuid::now_v7().simple()));
+            tokio::fs::write(&file, body.to_string()).await.map_err(HubError::from)?;
+            config.push_str(&format!(
+                "header = \"Content-Type: application/json\"\ndata-binary = \"@{}\"\n",
+                file.display()
+            ));
+            Some(file)
+        }
+        None => None,
+    };
     if let Some(k) = key {
         config.push_str(&format!("header = \"Authorization: Bearer {k}\"\n"));
     }
@@ -164,7 +211,9 @@ async fn post(hub: &Hub, url: &str, key: Option<&str>, body: &Value) -> Result<(
         Ok((status, reply))
     }
     .await;
-    if let Err(e) = tokio::fs::remove_file(&file).await {
+    if let Some(file) = file
+        && let Err(e) = tokio::fs::remove_file(&file).await
+    {
         tracing::warn!(file = %file.display(), error = %e, "could not remove a model request file");
     }
     result

@@ -92,6 +92,7 @@ async fn jobs_call_listed_models_metered_and_within_budget() {
         assert_eq!(auth.as_deref(), Some("Bearer sk-hub"), "the hub's key, never the job's");
         assert_eq!(body["model"], "deepseek/deepseek-v4.1-flash");
         assert_eq!(body["usage"], json!({"include": true}));
+        assert_eq!(body["provider"], json!({"sort": "price"}), "the cheapest provider first");
     }
     let used =
         e.hub.store.usage_since(Some("job:digest"), chrono::Utc::now() - chrono::Duration::hours(1)).await.unwrap();

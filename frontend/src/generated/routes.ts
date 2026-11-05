@@ -24,6 +24,8 @@ import type { ClearChatCaches } from "./ClearChatCaches";
 import type { CollectGarbage } from "./CollectGarbage";
 import type { CompactChat } from "./CompactChat";
 import type { Connections } from "./Connections";
+import type { Costs } from "./Costs";
+import type { CostsQuery } from "./CostsQuery";
 import type { DeleteChat } from "./DeleteChat";
 import type { DeleteDocument } from "./DeleteDocument";
 import type { DeviceRevoked } from "./DeviceRevoked";
@@ -71,6 +73,7 @@ import type { ProposalDetail } from "./ProposalDetail";
 import type { ProposalDiff } from "./ProposalDiff";
 import type { ProposalVerdict } from "./ProposalVerdict";
 import type { ProposalView } from "./ProposalView";
+import type { ProviderKey } from "./ProviderKey";
 import type { RaiseBudget } from "./RaiseBudget";
 import type { ReadDocument } from "./ReadDocument";
 import type { RenameChat } from "./RenameChat";
@@ -116,6 +119,8 @@ import type { WriteDocument } from "./WriteDocument";
 export interface Routes {
   status: { method: "GET"; path: "/api/v1/status"; params: Record<string, never>; query: never; body: never; response: HubStatus };
   usage: { method: "GET"; path: "/api/v1/usage"; params: Record<string, never>; query: never; body: never; response: Usage };
+  costs: { method: "GET"; path: "/api/v1/costs"; params: Record<string, never>; query: CostsQuery; body: never; response: Costs };
+  openrouter_key: { method: "GET"; path: "/api/v1/openrouter/key"; params: Record<string, never>; query: never; body: never; response: ProviderKey | null };
   send_message: { method: "POST"; path: "/api/v1/messages"; params: Record<string, never>; query: never; body: UserMessage; response: EventPosted };
   upload: { method: "PUT"; path: "/api/v1/uploads"; params: Record<string, never>; query: UploadQuery; body: never; response: Uploaded };
   cancel_message: { method: "DELETE"; path: "/api/v1/messages/{id}"; params: { id: string }; query: never; body: never; response: Cancelled };
@@ -191,6 +196,8 @@ export interface Routes {
 export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path: Routes[K]["path"] } } = {
   status: { method: "GET", path: "/api/v1/status" },
   usage: { method: "GET", path: "/api/v1/usage" },
+  costs: { method: "GET", path: "/api/v1/costs" },
+  openrouter_key: { method: "GET", path: "/api/v1/openrouter/key" },
   send_message: { method: "POST", path: "/api/v1/messages" },
   upload: { method: "PUT", path: "/api/v1/uploads" },
   cancel_message: { method: "DELETE", path: "/api/v1/messages/{id}" },

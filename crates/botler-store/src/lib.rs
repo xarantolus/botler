@@ -47,7 +47,7 @@ pub use schedules::ScheduleState;
 pub use secrets::SecretKey;
 pub use timers::{NewTimer, Timer, TimerStatus};
 pub use trials::{MAX_EFFECTS as MAX_TRIAL_EFFECTS, Trial};
-pub use usage::UsageTotals;
+pub use usage::{UsageRow, UsageTotals};
 pub use waits::{ReplyExpectation, TurnRetry};
 
 #[derive(Debug, thiserror::Error)]

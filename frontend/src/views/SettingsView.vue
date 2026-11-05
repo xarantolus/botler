@@ -10,6 +10,7 @@ import ViewPanel from "../components/common/ViewPanel.vue";
 import ChannelsPanel from "../components/settings/ChannelsPanel.vue";
 import DevicesPanel from "../components/settings/DevicesPanel.vue";
 import ModelPicker from "../components/settings/ModelPicker.vue";
+import OpenRouterKey from "../components/settings/OpenRouterKey.vue";
 import SchemaFields from "../components/settings/SchemaFields.vue";
 import TimeAgo from "../components/common/TimeAgo.vue";
 import type { CatalogView, FieldError, Settings } from "../generated";
@@ -135,6 +136,7 @@ function addModel() {
           icon="i-lucide-info"
           :description="`botler.toml still has the deprecated routes ${loaded.routes.join(', ')}; they keep working by name, but agents and the default should name model ids.`"
         />
+        <OpenRouterKey />
         <UCard>
           <template #header>
             <p class="font-semibold text-highlighted">Default model</p>

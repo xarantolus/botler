@@ -50,6 +50,7 @@ export const sections = computed((): Section[] => [
   },
   ...(state.apps?.length ? [{ name: "apps", label: "Apps", icon: "i-lucide-app-window" }] : []),
   { name: "secrets", label: "Secrets", icon: "i-lucide-key-round" },
+  { name: "costs", label: "Costs", icon: "i-lucide-receipt" },
   { name: "documents", label: "Documents", icon: "i-lucide-file-text" },
   { name: "memory", label: "Memory", icon: "i-lucide-brain" },
   { name: "settings", label: "Settings", icon: "i-lucide-settings" },

@@ -474,6 +474,8 @@ routes! {
     }
     status: GET "/api/v1/status" => HubStatus;
     usage: GET "/api/v1/usage" => Usage;
+    costs: GET "/api/v1/costs", query: crate::costs::CostsQuery => crate::costs::Costs;
+    openrouter_key: GET "/api/v1/openrouter/key" => Option<crate::gateway::ProviderKey>;
     send_message: POST "/api/v1/messages", body: UserMessage => EventPosted;
     upload: PUT "/api/v1/uploads", query: UploadQuery => crate::uploads::Uploaded;
     cancel_message: DELETE "/api/v1/messages/{id}" => Cancelled;

@@ -53,6 +53,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/ops/{name}", post(op))
         .route("/api/v1/status", get(status))
         .route("/api/v1/usage", get(usage))
+        .route("/api/v1/costs", get(costs))
+        .route("/api/v1/openrouter/key", get(openrouter_key))
         .route("/api/v1/messages", post(user_message))
         .route("/api/v1/uploads", put(upload))
         .route("/api/v1/uploads/{id}/{name}", get(get_upload))
@@ -293,6 +295,31 @@ pub async fn status_view(hub: &Hub) -> Result<HubStatus, ApiError> {
         jobs: applied.defs.jobs.keys().cloned().collect(),
         agents: applied.defs.agents.keys().cloned().collect(),
         secret_groups: applied.defs.secret_groups.keys().cloned().collect(),
+    })
+}
+
+/// Model spend per day, chat and model over a span of days (`GET /costs`).
+async fn costs(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+    Query(q): Query<crate::costs::CostsQuery>,
+) -> ApiResult<Json<crate::costs::Costs>> {
+    user_only(&p)?;
+    if let Some(problem) = q.problem() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, problem));
+    }
+    Ok(Json(crate::costs::costs(&hub, &q).await?))
+}
+
+/// What OpenRouter counts for the model key (`null` without one).
+async fn openrouter_key(
+    State(hub): State<AppState>,
+    Extension(p): Extension<Principal>,
+) -> ApiResult<Json<Option<crate::gateway::ProviderKey>>> {
+    user_only(&p)?;
+    crate::gateway::openrouter_key(&hub).await.map(Json).map_err(|e| match e {
+        crate::gateway::GatewayError::Hub(e) => e.into(),
+        e => ApiError(StatusCode::BAD_GATEWAY, e.to_string()),
     })
 }
 

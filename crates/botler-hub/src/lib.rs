@@ -12,6 +12,7 @@ pub mod channels;
 pub mod checkpoint;
 pub mod config;
 pub mod control;
+pub mod costs;
 pub mod embedded;
 pub mod environment;
 pub mod failures;

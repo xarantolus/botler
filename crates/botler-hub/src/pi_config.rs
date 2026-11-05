@@ -46,7 +46,28 @@ pub struct Provider {
     pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compat: Option<Compat>,
     pub model_overrides: BTreeMap<String, Model>,
+}
+
+/// What pi adds to every request to the provider.
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Compat {
+    pub open_router_routing: OpenRouterRouting,
+}
+
+/// How OpenRouter picks which of a model's providers serves a call (its `provider` field).
+#[derive(Debug, PartialEq, Serialize)]
+pub struct OpenRouterRouting {
+    pub sort: &'static str,
+}
+
+impl OpenRouterRouting {
+    /// The cheapest provider that is up, then the next: at times fewer tokens a second, for a
+    /// fraction of the price (one model's providers differ up to 75-fold).
+    pub const CHEAPEST: Self = Self { sort: "price" };
 }
 
 #[derive(Debug, PartialEq, Serialize)]

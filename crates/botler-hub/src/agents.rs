@@ -811,6 +811,8 @@ async fn container_spec(
     let provider = pi_config::Provider {
         api_key: route.api_key_secret.as_ref().map(|s| format!("${s}")),
         base_url: route.base_url.clone(),
+        compat: (route.provider == botler_core::defs::OPENROUTER)
+            .then_some(pi_config::Compat { open_router_routing: pi_config::OpenRouterRouting::CHEAPEST }),
         model_overrides: [(route.id.clone(), crate::model_catalog::pi_model(&route, known.as_ref()))].into(),
     };
     let models = pi_config::Models { providers: [(route.provider.clone(), provider)].into() };

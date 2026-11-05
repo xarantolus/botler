@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
-use crate::{Result, Store, ts};
+use crate::{Result, Store, parse_ts, ts};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct UsageTotals {
@@ -12,7 +12,38 @@ pub struct UsageTotals {
     pub calls: i64,
 }
 
+/// One model call.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UsageRow {
+    pub instance: String,
+    pub at: DateTime<Utc>,
+    pub model: String,
+    pub tokens: i64,
+    pub cost_usd: f64,
+}
+
 impl Store {
+    /// Every model call from `from` until before `to`, oldest first.
+    pub async fn usage_between(&self, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<UsageRow>> {
+        let rows =
+            sqlx::query("SELECT instance, at, model, tokens, cost_usd FROM usage WHERE at >= ? AND at < ? ORDER BY at")
+                .bind(ts(from))
+                .bind(ts(to))
+                .fetch_all(&self.pool)
+                .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(UsageRow {
+                    instance: r.get("instance"),
+                    at: parse_ts("usage", r.get("at"))?,
+                    model: r.get("model"),
+                    tokens: r.get("tokens"),
+                    cost_usd: r.get("cost_usd"),
+                })
+            })
+            .collect()
+    }
+
     pub async fn record_usage(
         &self,
         instance: &str,
