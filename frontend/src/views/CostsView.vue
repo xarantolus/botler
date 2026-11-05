@@ -56,13 +56,14 @@ const max = computed(() => Math.max(0, ...(costs.value?.days ?? []).map((d) => d
 const days = computed(() => costs.value?.days ?? []);
 
 const chatColumns: TableColumn<ChatCost>[] = [
-  { accessorKey: "instance", header: "Chat or job" },
+  // Long titles wrap, so the figures stay in view on a phone.
+  { accessorKey: "instance", header: "Chat or job", meta: { class: { td: "whitespace-normal break-words min-w-36" } } },
   { id: "cost", header: "Cost" },
   { id: "calls", header: "Calls" },
   { id: "tokens", header: "Tokens" },
 ];
 const modelColumns: TableColumn<ModelCost>[] = [
-  { accessorKey: "model", header: "Model" },
+  { accessorKey: "model", header: "Model", meta: { class: { td: "whitespace-normal break-all min-w-36" } } },
   { id: "cost", header: "Cost" },
   { id: "calls", header: "Calls" },
   { id: "tokens", header: "Tokens" },
