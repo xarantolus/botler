@@ -4,4 +4,8 @@ export type MemoryWritten = { path: string,
 /**
  * The sha256 of the new content: pass it as `expected_sha256` to change the file again.
  */
-sha256: string, };
+sha256: string, 
+/**
+ * Set when the file is now over `defaults.memory_file_limit`: condense it.
+ */
+too_long?: string, };

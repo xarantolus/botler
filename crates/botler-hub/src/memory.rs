@@ -97,6 +97,10 @@ pub struct MemoryWritten {
     pub path: String,
     /// The sha256 of the new content: pass it as `expected_sha256` to change the file again.
     pub sha256: String,
+    /// Set when the file is now over `defaults.memory_file_limit`: condense it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub too_long: Option<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -304,7 +308,7 @@ impl Memory {
             self.put(path, content).await?;
             self.commit(author, &format!("write {path}")).await?;
         }
-        Ok(MemoryWritten { path: path.into(), sha256: sha256(content) })
+        Ok(MemoryWritten { path: path.into(), sha256: sha256(content), too_long: None })
     }
 
     /// Add `text` as new line(s) at the end of `path`, creating it if needed.
@@ -325,7 +329,7 @@ impl Memory {
         too_large(path, &content)?;
         self.put(path, &content).await?;
         self.commit(author, &format!("append to {path}")).await?;
-        Ok(MemoryWritten { path: path.into(), sha256: sha256(&content) })
+        Ok(MemoryWritten { path: path.into(), sha256: sha256(&content), too_long: None })
     }
 
     pub async fn delete(&self, author: &str, path: &str, expected: &str) -> Result<(), MemoryError> {
@@ -441,6 +445,27 @@ pub async fn mounts(hub: &Hub, def: &AgentDef) -> Result<Vec<Mount>, MemoryError
     Ok(mounts)
 }
 
+/// What an agent is told when `bytes` of a memory file pass `limit` (0: no limit).
+fn too_long(limit: u64, path: &str, bytes: u64) -> Option<String> {
+    (limit > 0 && bytes > limit).then(|| {
+        format!(
+            "{path} is {} KB, over the {} KB limit for a memory file: condense it with memory_write when you can. \
+             Merge duplicates, drop what is outdated or can be looked up again, keep what changes how you work.",
+            bytes / 1024,
+            limit / 1024
+        )
+    })
+}
+
+/// `written`, with the advice to condense it when it is now too long.
+async fn checked(hub: &Hub, mut written: MemoryWritten) -> Result<MemoryWritten, MemoryError> {
+    let limit = hub.applied().await.defs.instance.defaults.memory_file_limit;
+    if let Some(f) = hub.memory.read(&written.path).await? {
+        written.too_long = too_long(limit, &written.path, f.content.len() as u64);
+    }
+    Ok(written)
+}
+
 /// The agent's `INDEX.md` files for its system prompt. Read once per wake, so the prompt stays
 /// the same (and cacheable) for the whole session; changes show from the next wake.
 pub async fn index_section(hub: &Hub, def: &AgentDef) -> Result<String, MemoryError> {
@@ -454,6 +479,24 @@ pub async fn index_section(hub: &Hub, def: &AgentDef) -> Result<String, MemoryEr
             text.push_str("\n[... truncated: keep INDEX.md short]");
         }
         s.push_str(&format!("### /memory/{name}/INDEX.md\n{}\n\n", text.trim_end()));
+    }
+    let limit = hub.applied().await.defs.instance.defaults.memory_file_limit;
+    let mut long = Vec::new();
+    for (name, ns) in namespaces(def) {
+        for e in hub.memory.list(Some(&ns)).await? {
+            if limit > 0 && e.bytes > limit {
+                let file = e.path.strip_prefix(&ns).unwrap_or(&e.path);
+                long.push(format!("- /memory/{name}{file} ({} KB)", e.bytes / 1024));
+            }
+        }
+    }
+    if !long.is_empty() {
+        s.push_str(&format!(
+            "### Too long (over {} KB)\nCondense these with memory_write when you have a quiet moment: merge \
+             duplicates, drop what is outdated or can be looked up again.\n{}\n\n",
+            limit / 1024,
+            long.join("\n")
+        ));
     }
     if s.is_empty() {
         return Ok(s);
@@ -534,7 +577,7 @@ impl Op for MemoryWrite {
         permit(&scope.write, "write", &self.path)?;
         let written = hub.memory.write(&who, &self.path, &self.content, self.expected_sha256.as_deref()).await?;
         remembered(hub, caller).await;
-        Ok(written)
+        Ok(checked(hub, written).await?)
     }
 }
 
@@ -550,7 +593,7 @@ impl Op for MemoryAppend {
         permit(&scope.write, "write", &self.path)?;
         let written = hub.memory.append(&who, &self.path, &self.text).await?;
         remembered(hub, caller).await;
-        Ok(written)
+        Ok(checked(hub, written).await?)
     }
 }
 

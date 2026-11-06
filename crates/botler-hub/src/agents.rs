@@ -666,6 +666,25 @@ async fn drifted(hub: &Hub, agent: &LiveAgent) -> Result<bool> {
     Ok(true)
 }
 
+/// Rewrite a running chat's pi `settings.json` after the user changed its context size. pi read
+/// it at start; the extension reads it again before each compaction, so the new size applies at
+/// once (the restart between turns that follows makes pi itself use it).
+pub async fn write_pi_settings(hub: &Hub, name: &str) -> Result<()> {
+    if hub.agents.get(name).await.is_none() {
+        return Ok(());
+    }
+    let instance = hub.store.instance(name).await?;
+    let applied = hub.applied().await;
+    let Some(def) = applied.defs.agents.get(&instance.definition) else { return Ok(()) };
+    let Some(route) = applied.defs.model_for(&def.spec) else { return Ok(()) };
+    let known = crate::model_catalog::known(hub, &route).await;
+    let compact_at = crate::agent_env::compact_at(&instance, def, &applied);
+    let body = to_json(&crate::model_catalog::pi_settings(known.as_ref(), compact_at))?;
+    // Written in place: the container has this file bind-mounted.
+    tokio::fs::write(hub.paths.agent_dir(name).join("settings.json"), body).await?;
+    Ok(())
+}
+
 /// After a merge (or a grant): build the images running agents now need, then restart those whose
 /// environment changed, each once its turn is over and no further merge came within
 /// [`RESTART_DEBOUNCE_SECS`]. They resume the same session with the same home; always-on agents

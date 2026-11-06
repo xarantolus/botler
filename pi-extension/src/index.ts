@@ -53,6 +53,11 @@ function thinkingCeiling(): Level | undefined {
   return LEVELS.find((l) => l === level);
 }
 
+// pi reads its compaction threshold once, at start. The hub rewrites settings.json when the user
+// changes a chat's context size; a threshold compaction below the current one is cancelled, so
+// a running chat follows the new size without a restart.
+const SETTINGS_FILE = "/botler/agent-dir/settings.json";
+
 const TOOLS_FILE = "/botler/agent-dir/tools.json";
 const TURN_TOOLS_FILE = "/botler/agent-dir/turn-tools.json";
 const MCP_SERVICES_FILE = "/botler/agent-dir/mcp-services.json";
@@ -301,6 +306,10 @@ export default function botler(pi: ExtensionAPI) {
 
   pi.on("session_before_compact", async (event, ctx) => {
     if (!ctx.model) return;
+    const reserve = loadJson<{ compaction?: { reserveTokens?: number } }>(SETTINGS_FILE, {}).compaction?.reserveTokens;
+    if (event.reason === "threshold" && reserve !== undefined && event.preparation.tokensBefore < ctx.model.contextWindow - reserve) {
+      return { cancel: true };
+    }
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
     if (!auth.ok) throw new Error(`no credentials for ${ctx.model.id}`);
     const focus = event.customInstructions ? `${event.customInstructions}\n\n${SUMMARY_BUDGET}` : SUMMARY_BUDGET;

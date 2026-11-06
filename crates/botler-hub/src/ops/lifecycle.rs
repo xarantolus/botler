@@ -252,6 +252,7 @@ impl Op for SetChatContext {
         }
         let inst = chat_named(hub, &self.chat).await?;
         hub.store.set_compact_at(&inst.name, self.compact_at).await?;
+        crate::agents::write_pi_settings(hub, &inst.name).await?;
         hub.dispatch_notify.notify_one();
         let note = match self.compact_at {
             Some(t) => format!("Compacts at {}k tokens.", t / 1000),

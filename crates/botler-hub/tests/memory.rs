@@ -250,3 +250,17 @@ async fn agents_get_their_namespaces_read_only_and_their_indexes_in_the_prompt()
     let c = &e.fake.containers()[&agents::container_name(&e.hub, &dev)];
     assert!(!c.spec.mounts.iter().any(|m| matches!(m, Mount::Bind { dst, .. } if dst == "/memory/project")));
 }
+
+#[tokio::test]
+async fn a_file_over_the_limit_is_flagged_on_write_and_in_the_index() {
+    let e = env().await;
+    let dev = agent(&e, "dev").await;
+    let small = ops::call(&e.hub, &dev, "memory_append", json!({"path": "agents/dev/log.md", "text": "- ok"})).await;
+    assert!(small.unwrap().get("too_long").is_none());
+    let big = "- a line that keeps the log growing\n".repeat(600);
+    let r = ops::call(&e.hub, &dev, "memory_append", json!({"path": "agents/dev/log.md", "text": big})).await.unwrap();
+    assert!(r["too_long"].as_str().unwrap().contains("over the 16 KB limit"), "{r}");
+    let applied = e.hub.applied().await;
+    let index = botler_hub::memory::index_section(&e.hub, &applied.defs.agents["dev"]).await.unwrap();
+    assert!(index.contains("/memory/self/log.md (21 KB)"), "{index}");
+}

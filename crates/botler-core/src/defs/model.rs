@@ -270,6 +270,10 @@ pub struct Defaults {
     /// written memory, it gets one short turn to save what is worth keeping.
     #[serde(default = "Defaults::memory_checkpoint")]
     pub memory_checkpoint: bool,
+    /// A memory file larger than this (bytes) is too long to read on every wake: the agent is
+    /// told to condense it when it writes it, and its index lists it until it does. 0 turns it off.
+    #[serde(default = "Defaults::memory_file_limit")]
+    pub memory_file_limit: u64,
 }
 
 /// `"never"` or a duration.
@@ -322,6 +326,9 @@ impl Defaults {
     fn memory_checkpoint() -> bool {
         true
     }
+    fn memory_file_limit() -> u64 {
+        16 * 1024
+    }
 }
 
 impl Default for Defaults {
@@ -338,6 +345,7 @@ impl Default for Defaults {
             compact_when_idle: Self::compact_when_idle(),
             rollover_compactions: Self::rollover_compactions(),
             memory_checkpoint: Self::memory_checkpoint(),
+            memory_file_limit: Self::memory_file_limit(),
         }
     }
 }
