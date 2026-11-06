@@ -22,7 +22,7 @@ export interface References {
 export const noReferences: References = { exact: new Map(), prose: new Map(), key: "" };
 
 export interface Known {
-  instances: { name: string }[];
+  instances: { name: string; slug?: string | null }[];
   proposals: { id: string }[];
   dialogs: { id: string }[];
   jobs: string[];
@@ -43,9 +43,12 @@ export function references(k: Known): References {
   for (const d of k.dialogs) prose.set(d.id, "/requests");
   for (const p of k.proposals) prose.set(p.id, `/proposals/${encodeURIComponent(p.id)}`);
   for (const i of k.instances) {
-    const path = `/chat/${encodeURIComponent(i.name)}`;
-    exact.set(i.name, path);
-    if (distinctive.test(i.name)) prose.set(i.name, path);
+    const path = `/chat/${encodeURIComponent(i.slug ?? i.name)}`;
+    // A chat is mentioned by its name or its slug (`mattermost-free-features`).
+    for (const n of [i.name, i.slug ?? i.name]) {
+      exact.set(n, path);
+      if (distinctive.test(n)) prose.set(n, path);
+    }
   }
   for (const [name, path] of prose) exact.set(name, path);
   return { exact, prose, key: [...exact].map(([n, p]) => `${n} ${p}`).join("\n") + `\n${prose.size}` };

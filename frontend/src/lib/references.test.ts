@@ -5,7 +5,12 @@ import { references, refTarget } from "./references";
 
 const proposal = "01a191d2-394a-7400-80ab-ef4257cde8ce";
 const refs = references({
-  instances: [{ name: "botler" }, { name: "dev-3f2a" }, { name: "chat-177b10e0960f" }],
+  instances: [
+    { name: "botler" },
+    { name: "dev-3f2a" },
+    { name: "chat-177b10e0960f" },
+    { name: "dev-9c1d", slug: "mattermost-free-features" },
+  ],
   proposals: [{ id: proposal }],
   dialogs: [{ id: "01a191d3-0000-7000-8000-000000000001" }],
   jobs: ["web-health", "backup"],
@@ -31,6 +36,13 @@ describe("references in Markdown", () => {
       ["dev", "/settings?tab=agents&agent=dev", true],
     ]);
     expect(html).toContain('<a data-ref="" href="/chat/dev-3f2a"><code>dev-3f2a</code></a>');
+  });
+
+  it("links a chat's slug as well as its name", () => {
+    expect(links(md("See mattermost-free-features and `dev-9c1d`."))).toEqual([
+      ["mattermost-free-features", "/chat/mattermost-free-features", true],
+      ["dev-9c1d", "/chat/mattermost-free-features", true],
+    ]);
   });
 
   it("links distinctive chat names and full ids in prose", () => {
@@ -87,7 +99,12 @@ describe("references in Markdown", () => {
 
   it("changes its key only when the names change", () => {
     const again = references({
-      instances: [{ name: "botler" }, { name: "dev-3f2a" }, { name: "chat-177b10e0960f" }],
+      instances: [
+        { name: "botler" },
+        { name: "dev-3f2a" },
+        { name: "chat-177b10e0960f" },
+        { name: "dev-9c1d", slug: "mattermost-free-features" },
+      ],
       proposals: [{ id: proposal }],
       dialogs: [{ id: "01a191d3-0000-7000-8000-000000000001" }],
       jobs: ["web-health", "backup"],
