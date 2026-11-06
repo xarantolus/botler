@@ -300,6 +300,8 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
 
 /// Below this, compacting saves next to nothing (pi keeps the recent ~20k tokens anyway).
 const IDLE_COMPACT_FLOOR: u64 = 40_000;
+/// The quiet spell (its last delivery's time) each chat's idle compaction was last tried for.
+const IDLE_COMPACTED: &str = "hub:idle-compacted";
 
 /// Compact a chat that wakes for a turn after `defaults.compact_after_idle` without messages:
 /// that turn would resend its whole old context, no longer cached, on every call. Returns whether
@@ -320,6 +322,13 @@ async fn compact_if_idle(hub: &Hub, agent: &LiveAgent) -> Result<bool> {
     if tokens < IDLE_COMPACT_FLOOR {
         return Ok(false);
     }
+    // One attempt per quiet spell: a compaction that fails (or outlasts the command's timeout and
+    // then fails) is not started again on every dispatch, each a paid call over the whole context.
+    let spell = last.to_rfc3339();
+    if hub.store.kv_get(IDLE_COMPACTED, &agent.instance).await?.as_deref() == Some(spell.as_str()) {
+        return Ok(false);
+    }
+    hub.store.kv_set(IDLE_COMPACTED, &agent.instance, &spell).await?;
     tracing::info!(instance = %agent.instance, tokens, %after, "idle chat: compacting before its next turn");
     match agent.pi.compact().await {
         Ok(()) => Ok(false),
