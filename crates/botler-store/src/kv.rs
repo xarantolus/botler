@@ -35,6 +35,15 @@ impl Store {
         Ok(())
     }
 
+    /// Every key of `owner` with its value, by key.
+    pub async fn kv_list(&self, owner: &str) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query("SELECT key, value FROM kv WHERE owner = ? ORDER BY key")
+            .bind(owner)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| (r.get("key"), r.get("value"))).collect())
+    }
+
     pub async fn kv_delete(&self, owner: &str, key: &str) -> Result<()> {
         sqlx::query("DELETE FROM kv WHERE owner = ? AND key = ?").bind(owner).bind(key).execute(&self.pool).await?;
         Ok(())

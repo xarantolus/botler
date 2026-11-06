@@ -116,6 +116,9 @@ async fn trip(
 /// pair's count starts again from now. Returns whether a breaker was tripped and how many
 /// deliveries were released.
 pub async fn clear_breaker(hub: &Hub, subject: &str) -> Result<(bool, u64)> {
+    if let Some(provider) = subject.strip_prefix("provider:") {
+        return Ok((crate::holds::release(hub, provider, "cleared by the user").await?, 0));
+    }
     let cleared = hub.store.clear_breaker(subject).await?;
     let mut released = 0;
     if pair_members(subject).is_some() {

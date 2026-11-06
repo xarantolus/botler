@@ -250,6 +250,10 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
         tracing::debug!(instance = %name, reason = %b.reason, "instance paused by breaker; deliveries wait");
         return Ok(());
     }
+    if let Some(b) = crate::holds::held(hub, name).await? {
+        tracing::debug!(instance = %name, provider = %b.subject, "its provider is held; deliveries wait");
+        return Ok(());
+    }
     if hub.agents.get(name).await.is_some_and(|a| a.stopping()) {
         return Ok(()); // delivered to its next container once this one has exited
     }
@@ -1457,7 +1461,9 @@ pub async fn keep_always_on(hub: &Arc<Hub>) -> Result<()> {
                     .await?
             }
         };
-        if hub.store.breaker(&format!("instance:{}", instance.name)).await?.is_some() {
+        if hub.store.breaker(&format!("instance:{}", instance.name)).await?.is_some()
+            || crate::holds::held(hub, &instance.name).await?.is_some()
+        {
             continue;
         }
         if let Err(e) = ensure_awake(hub, &instance).await {

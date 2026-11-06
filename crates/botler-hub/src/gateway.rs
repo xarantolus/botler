@@ -6,7 +6,7 @@
 //! key it holds, and meters every call under `job:<name>` (the Usage view shows it). Streaming is
 //! not offered: jobs want the whole answer.
 
-use botler_core::defs::{Budget, Definitions};
+use botler_core::defs::{Budget, Definitions, ModelChoice};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
@@ -18,6 +18,8 @@ use crate::ops::Caller;
 pub const PATH: &str = "/v1/chat/completions";
 const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
 const TIMEOUT_SECONDS: u32 = 300;
+/// A probe or a key lookup is short: it must not hold up whoever waits on it.
+const QUICK_SECONDS: u32 = 30;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GatewayError {
@@ -29,6 +31,8 @@ pub enum GatewayError {
     Budget(String),
     #[error("the model provider could not be reached: {0}")]
     Upstream(String),
+    #[error("model calls wait until {provider} accepts them again: {reason}")]
+    Held { provider: String, reason: String },
     #[error(transparent)]
     Hub(#[from] HubError),
 }
@@ -107,15 +111,12 @@ pub async fn chat(hub: &Hub, caller: &Caller, mut body: Value) -> Result<(u16, V
             obj.insert("provider".into(), json!(crate::pi_config::OpenRouterRouting::CHEAPEST));
         }
     }
-    let api_key = match &choice.api_key_secret {
-        Some(s) => Some(hub.store.secret(&hub.secret_key, s).await.map_err(HubError::from)?.ok_or_else(|| {
-            GatewayError::Forbidden(format!("the model key {s} has no value; set it on the Secrets page"))
-        })?),
-        None => None,
-    };
-    let base = choice.base_url.clone().unwrap_or_else(|| OPENROUTER_URL.into());
+    if let Some(b) = hub.store.breaker(&crate::holds::subject(&choice.provider)).await.map_err(HubError::from)? {
+        return Err(GatewayError::Held { provider: choice.provider.clone(), reason: b.reason });
+    }
+    let api_key = api_key(hub, &choice).await?;
     let (status, reply) =
-        call(hub, &format!("{}/chat/completions", base.trim_end_matches('/')), api_key.as_deref(), Some(&body)).await?;
+        call(hub, &completions_url(&choice), api_key.as_deref(), Some(&body), TIMEOUT_SECONDS).await?;
 
     let usage = reply.get("usage");
     let tokens = usage.and_then(|u| u.get("total_tokens")).and_then(Value::as_i64).unwrap_or(0);
@@ -125,6 +126,35 @@ pub async fn chat(hub: &Hub, caller: &Caller, mut body: Value) -> Result<(u16, V
     }
     tracing::info!(%job, model = %choice.id, status, tokens, cost, "model call");
     Ok((status, reply))
+}
+
+/// The hub's key for `choice`, if it uses one.
+async fn api_key(hub: &Hub, choice: &ModelChoice) -> Result<Option<String>, GatewayError> {
+    let Some(s) = &choice.api_key_secret else { return Ok(None) };
+    let value = hub.store.secret(&hub.secret_key, s).await.map_err(HubError::from)?;
+    value
+        .map(Some)
+        .ok_or_else(|| GatewayError::Forbidden(format!("the model key {s} has no value; set it on the Secrets page")))
+}
+
+fn completions_url(choice: &ModelChoice) -> String {
+    let base = choice.base_url.as_deref().unwrap_or(OPENROUTER_URL);
+    format!("{}/chat/completions", base.trim_end_matches('/'))
+}
+
+/// Whether `choice`'s provider takes a one-token call with the hub's key again: what lifts a
+/// provider hold. `Err` says why not.
+pub async fn probe(hub: &Hub, choice: &ModelChoice) -> Result<(), String> {
+    let api_key = api_key(hub, choice).await.map_err(|e| e.to_string())?;
+    let body = json!({ "model": choice.id, "max_tokens": 1, "messages": [{ "role": "user", "content": "ping" }] });
+    let (status, reply) = call(hub, &completions_url(choice), api_key.as_deref(), Some(&body), QUICK_SECONDS)
+        .await
+        .map_err(|e| e.to_string())?;
+    if status == 200 {
+        return Ok(());
+    }
+    let msg = reply.pointer("/error/message").and_then(Value::as_str).unwrap_or("no message");
+    Err(format!("{status}: {msg}"))
 }
 
 /// What OpenRouter counts for the hub's model key: what it charged, where botler's own figures
@@ -139,7 +169,7 @@ pub async fn openrouter_key(hub: &Hub) -> Result<Option<ProviderKey>, GatewayErr
     }
     let Some(secret) = &models.api_key_secret else { return Ok(None) };
     let Some(key) = hub.store.secret(&hub.secret_key, secret).await.map_err(HubError::from)? else { return Ok(None) };
-    let (status, reply) = call(hub, &format!("{OPENROUTER_URL}/key"), Some(&key), None).await?;
+    let (status, reply) = call(hub, &format!("{OPENROUTER_URL}/key"), Some(&key), None, QUICK_SECONDS).await?;
     if status != 200 {
         let msg = reply.pointer("/error/message").and_then(Value::as_str).unwrap_or("no message");
         return Err(GatewayError::Upstream(format!("OpenRouter answered {status}: {msg}")));
@@ -165,7 +195,13 @@ pub struct ProviderKey {
 
 /// Send `body` to `url` with curl (the hub's HTTPS client), or GET it without one. The key goes
 /// in on stdin, never on the command line.
-async fn call(hub: &Hub, url: &str, key: Option<&str>, body: Option<&Value>) -> Result<(u16, Value), GatewayError> {
+async fn call(
+    hub: &Hub,
+    url: &str,
+    key: Option<&str>,
+    body: Option<&Value>,
+    timeout: u32,
+) -> Result<(u16, Value), GatewayError> {
     if url.contains(['"', '\\', '\n', '\r']) || key.is_some_and(|k| k.contains(['"', '\\', '\n', '\r'])) {
         return Err(GatewayError::BadRequest("the model URL or key contains characters curl cannot take".into()));
     }
@@ -189,7 +225,7 @@ async fn call(hub: &Hub, url: &str, key: Option<&str>, body: Option<&Value>) -> 
     }
     let result = async {
         let mut child = tokio::process::Command::new("curl")
-            .args(["--silent", "--show-error", "--max-time", &TIMEOUT_SECONDS.to_string()])
+            .args(["--silent", "--show-error", "--max-time", &timeout.to_string()])
             .args(["--write-out", "\n%{http_code}", "--config", "-"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

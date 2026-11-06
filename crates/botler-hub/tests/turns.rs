@@ -3,12 +3,14 @@
 mod common;
 
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
 use botler_core::event::kinds;
 use botler_core::{Event, Provenance, Source};
 use botler_hub::phase::WakePhase;
-use botler_hub::{agents, router, transactions, turns};
+use botler_hub::{agents, holds, router, transactions, turns};
 use botler_store::{EventQuery, Proposal, ProposalStatus};
 use chrono::Utc;
 use common::env;
@@ -33,6 +35,31 @@ async fn until<T, F: Future<Output = Option<T>>>(what: &str, mut check: impl FnM
 async fn events(e: &common::Env, kind: &str) -> Vec<Event> {
     e.route().await;
     e.hub.store.events(&EventQuery { kind: Some(kind.into()), limit: 20, ..Default::default() }).await.unwrap()
+}
+
+/// A stand-in for the provider's API that answers the hub's check calls with `status`, which the
+/// test changes; `[models] base_url` points to it.
+async fn stand_in(e: &common::Env, status: u16) -> Arc<AtomicU16> {
+    let code = Arc::new(AtomicU16::new(status));
+    let c = code.clone();
+    let provider = axum::Router::new().route(
+        "/v1/chat/completions",
+        axum::routing::post(move || {
+            let c = c.clone();
+            async move {
+                let status = axum::http::StatusCode::from_u16(c.load(Ordering::SeqCst)).unwrap();
+                (status, axum::Json(json!({ "choices": [], "error": { "message": "stand-in" } })))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    let main = e.hub.repo.main().await.unwrap();
+    let toml = e.hub.repo.read_file(&main, "botler.toml").await.unwrap().unwrap();
+    let toml = toml.replacen("[models]\n", &format!("[models]\nbase_url = \"http://127.0.0.1:{port}/v1\"\n"), 1);
+    e.commit(&[("botler.toml", toml.as_str())]).await;
+    code
 }
 
 /// Spawn a `dev` chat under `botler` whose next turns fail with `errors`, and start it.
@@ -80,11 +107,7 @@ async fn transient_error_is_retried_with_backoff_and_succeeds() {
     assert_eq!(idle[0].to.as_deref(), Some("botler"));
     let p = prompts(&e, &child);
     assert_eq!(p.len(), 2, "the task, then one retry");
-    assert!(
-        p[1].contains("transient provider error (Connection error. (calling fake/model via openrouter))"),
-        "{}",
-        p[1]
-    );
+    assert!(p[1].contains("failed (Connection error. (calling fake/model via openrouter))"), "{}", p[1]);
     assert!(e.hub.store.turn_retry(&child).await.unwrap().is_none(), "retries forgotten once it succeeds");
     assert!(events(&e, kinds::AGENT_TURN_FAILED).await.is_empty());
     assert!(e.hub.store.open_incidents().await.unwrap().is_empty());
@@ -93,6 +116,7 @@ async fn transient_error_is_retried_with_backoff_and_succeeds() {
 #[tokio::test]
 async fn exhausted_retries_open_an_incident_and_tell_the_parent() {
     let e = env().await;
+    stand_in(&e, 200).await; // the provider takes a plain call: this chat's problem
     let child = failing_child(&e, &["529 overloaded"; 5]).await;
     let mut gaps = Vec::new();
     for _ in 0..4 {
@@ -150,18 +174,96 @@ async fn context_overflow_compacts_and_retries_once() {
     assert_eq!(prompts(&e, &child).len(), 2, "retried once");
 }
 
-#[tokio::test]
-async fn billing_error_pauses_and_asks_the_user() {
-    let e = env().await;
-    let child = failing_child(&e, &["402 Insufficient credits"]).await;
-    let d = until("a dialog for the user", || async {
-        e.hub.store.open_dialogs().await.unwrap().into_iter().find(|d| d.instance == child)
+const BUDGET: &str = r#"403: {"message":"Workspace monthly budget of $20.00 exceeded.","code":403,"metadata":{"limit_source":"openrouter_workspace_budget"}}"#;
+
+/// The hub's open requests about the hold on OpenRouter.
+async fn hold_requests(e: &common::Env) -> Vec<botler_store::Dialog> {
+    let open = e.hub.store.open_dialogs().await.unwrap();
+    open.into_iter().filter(|d| holds::hold_of(d) == Some("openrouter")).collect()
+}
+
+/// Until `chat`'s failed turn waits for the provider, and the hold's request is out.
+async fn waiting(e: &common::Env, chat: &str) {
+    until("the chat waits", || async {
+        let r = e.hub.store.turn_retry(chat).await.unwrap();
+        let waits = r.is_some_and(|r| r.next_at.is_none());
+        (waits && !hold_requests(e).await.is_empty()).then_some(())
     })
     .await;
-    assert!(d.question.contains("out of credits"), "{}", d.question);
-    assert_eq!(d.priority, botler_store::Priority::Blocking);
-    assert!(e.hub.store.breaker(&format!("instance:{child}")).await.unwrap().is_some(), "paused");
-    assert_eq!(events(&e, kinds::AGENT_TURN_FAILED).await[0].payload["class"], "billing");
+}
+
+#[tokio::test]
+async fn a_spent_budget_holds_every_chat_once_and_they_continue_when_it_answers() {
+    let e = env().await;
+    let code = stand_in(&e, 403).await;
+    let a = failing_child(&e, &[BUDGET]).await;
+    waiting(&e, &a).await;
+    let breaker = e.hub.store.breaker("provider:openrouter").await.unwrap().unwrap();
+    assert!(breaker.reason.contains("out of credits"), "{}", breaker.reason);
+    let open = hold_requests(&e).await;
+    assert_eq!(open.len(), 1, "one request, not one per chat");
+    assert_eq!(open[0].priority, botler_store::Priority::Blocking);
+    assert!(retry_requests(&e, &a).await.is_empty(), "and none about the chat");
+    let incidents = e.hub.store.open_incidents().await.unwrap();
+    assert_eq!(incidents.iter().map(|i| i.runnable.as_str()).collect::<Vec<_>>(), ["provider:openrouter"]);
+    assert!(events(&e, kinds::AGENT_TURN_FAILED).await.is_empty(), "nothing failed: it waits");
+
+    // A chat started meanwhile waits too, without a failure of its own.
+    let c = router::new_instance(&e.hub, "dev", Some("botler"), None).await.unwrap();
+    let task = Event::new(kinds::MESSAGE, Source::Agent("botler".into()), Provenance::Trusted, Utc::now())
+        .to(c.clone())
+        .payload(json!({"text": "meanwhile"}));
+    e.hub.emit(task).await.unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    assert!(prompts(&e, &c).is_empty());
+    assert_eq!(e.hub.store.pending_deliveries(&c).await.unwrap().len(), 1);
+
+    // A check that still fails changes nothing; one that passes lifts the hold.
+    holds::sweep(&e.hub, Utc::now() + chrono::Duration::hours(1)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(e.hub.store.breaker("provider:openrouter").await.unwrap().is_some());
+    code.store(200, Ordering::SeqCst);
+    holds::sweep(&e.hub, Utc::now() + chrono::Duration::hours(2)).await.unwrap();
+    until("the hold lifted and the chat's retry due", || async {
+        e.hub.store.turn_retry(&a).await.unwrap().and_then(|r| r.next_at)
+    })
+    .await;
+    turns::sweep(&e.hub, Utc::now()).await.unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    let p = until("the chat continues", || async { Some(prompts(&e, &a)).filter(|p| p.len() == 2) }).await;
+    assert!(p[1].contains("Continue where you left off"), "{}", p[1]);
+    until("the waiting chat runs", || async { (prompts(&e, &c).len() == 1).then_some(()) }).await;
+    assert!(hold_requests(&e).await.is_empty(), "the request is closed");
+    assert!(e.hub.store.open_incidents().await.unwrap().is_empty(), "and the incident resolved");
+}
+
+#[tokio::test]
+async fn answering_retry_lifts_the_hold_without_waking_botler() {
+    let e = env().await;
+    stand_in(&e, 403).await;
+    let a = failing_child(&e, &["401 Unauthorized"]).await;
+    waiting(&e, &a).await;
+    let d = until("the request", || async { hold_requests(&e).await.pop() }).await;
+    botler_hub::ops::answer_question(&e.hub, &d.id, "retry".into(), None).await.unwrap();
+    assert!(e.hub.store.breaker("provider:openrouter").await.unwrap().is_none());
+    assert!(e.hub.store.turn_retry(&a).await.unwrap().unwrap().next_at.is_some(), "its retry is due");
+    assert!(events(&e, kinds::DIALOG_ANSWERED).await.is_empty(), "the hub's own request: no one is told");
+}
+
+#[tokio::test]
+async fn a_provider_down_past_the_last_retry_becomes_a_hold() {
+    let e = env().await;
+    stand_in(&e, 503).await;
+    let child = failing_child(&e, &["529 overloaded"; 5]).await;
+    for _ in 0..4 {
+        run_retry(&e, &child).await;
+    }
+    let b = until("the hold", || async { e.hub.store.breaker("provider:openrouter").await.unwrap() }).await;
+    waiting(&e, &child).await;
+    assert!(b.reason.contains("a check call failed too"), "{}", b.reason);
+    assert!(events(&e, kinds::AGENT_TURN_FAILED).await.is_empty());
 }
 
 /// The open retry requests about `child`.
@@ -290,11 +392,11 @@ fn approval_detail(dialogs: &[botler_store::Dialog], id: &str) -> String {
 async fn failing_reviewer_hands_the_proposal_to_the_user() {
     let e = env().await;
     let (p, reviewer) = in_review(&e).await;
-    e.fake.fail_turns(&reviewer, &["401 Unauthorized"]);
+    e.fake.fail_turns(&reviewer, &["404 No endpoints found for model x/y"]);
     agents::dispatch_pending(&e.hub).await.unwrap();
     let p = awaiting_user(&e, &p.id).await;
     let notes = p.review_notes.unwrap();
-    assert!(notes.starts_with("reviewer unavailable: provider rejected the API key"), "{notes}");
+    assert!(notes.starts_with("reviewer unavailable: permanent model error"), "{notes}");
     let dialogs = e.hub.store.open_dialogs().await.unwrap();
     assert!(approval_detail(&dialogs, &p.id).contains("reviewer unavailable"));
     // A late verdict cannot merge it behind the user's back.

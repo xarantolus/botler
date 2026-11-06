@@ -57,6 +57,12 @@ pub fn classify(error: &str) -> ErrorClass {
     if has(&["in_flight_budget", "in-flight requests settle"]) {
         return ErrorClass::Transient;
     }
+    // A spend limit (OpenRouter's key or workspace budget), whatever status it comes with.
+    if has(&["budget", "limit_source", "credit limit", "spending limit"])
+        && has(&["exceeded", "insufficient", "reached"])
+    {
+        return ErrorClass::Billing;
+    }
     match status(&lower) {
         Some(401 | 403) => return ErrorClass::Auth,
         Some(402) => return ErrorClass::Billing,
@@ -138,6 +144,10 @@ mod tests {
             ("403 Forbidden: key disabled", Auth),
             ("402 Insufficient credits. Add more using https://openrouter.ai/settings/credits", Billing),
             ("Insufficient credits", Billing),
+            (
+                r#"403: {"message":"Workspace monthly budget of $20.00 exceeded. Contact your org admin.","code":403,"metadata":{"limit_source":"openrouter_workspace_budget"}}"#,
+                Billing,
+            ),
         ];
         for (msg, want) in cases {
             assert_eq!(classify(msg), want, "{msg}");

@@ -178,6 +178,11 @@ pub async fn answer_question(
     values: Option<serde_json::Value>,
 ) -> Result<botler_store::Dialog, HubError> {
     let d = hub.store.answer_dialog(id, &answer).await?;
+    if let Some(provider) = crate::holds::hold_of(&d) {
+        // The hub's own request: the user says the provider works again.
+        crate::holds::release(hub, provider, "the user answered retry").await?;
+        return Ok(d);
+    }
     let payload = botler_core::payloads::BuiltinPayload::DialogAnswered(botler_core::payloads::DialogAnsweredPayload {
         dialog_id: d.id.clone(),
         question: d.question.clone(),

@@ -21,6 +21,7 @@ use botler_store::{Dialog, DialogKind, DialogStatus, NewDialog, Priority, ReplyE
 use chrono::{DateTime, Utc};
 
 use crate::agents::{self, LiveAgent};
+use crate::holds;
 use crate::hub::{Hub, Result, builtin};
 use crate::phase::{AgentStatus, WakePhase};
 
@@ -45,11 +46,20 @@ pub async fn failed(hub: &Arc<Hub>, agent: &LiveAgent, error: &str, called: Opti
     let retry = hub.store.record_turn_failure(&agent.instance, started.as_deref(), &error).await?;
     tracing::warn!(instance = %agent.instance, ?class, attempts = retry.attempts, %error, "turn failed");
     let now = Utc::now();
+    let reason = format!("{}: {}", class.describe(), retry.error);
     match class {
         ErrorClass::Transient => {
             if let Some(delay) = retry_delay(retry.attempts) {
                 let at = now + chrono::Duration::from_std(delay).unwrap_or(chrono::Duration::MAX);
                 return schedule(hub, &agent.instance, at, &retry.error).await;
+            }
+            // Out of retries: the provider's problem when it refuses a plain call too, and then
+            // every chat on it waits for it instead of giving up one by one.
+            if let Some(choice) = holds::model_of(hub, &agent.instance).await?
+                && let Err(e) = crate::gateway::probe(hub, &choice).await
+            {
+                return holds::hold(hub, &agent.instance, &choice, &format!("{reason} (a check call failed too: {e})"))
+                    .await;
             }
         }
         // Compacting frees context; the same failure after that is final.
@@ -60,7 +70,12 @@ pub async fn failed(hub: &Arc<Hub>, agent: &LiveAgent, error: &str, called: Opti
                 return give_up(hub, &agent.instance, class, &error, &retry).await;
             }
         },
-        ErrorClass::Auth | ErrorClass::Billing => pause(hub, &agent.instance, class, &retry.error).await?,
+        // The key or the account, not this chat: it waits with every other chat on the provider.
+        ErrorClass::Auth | ErrorClass::Billing => {
+            if let Some(choice) = holds::model_of(hub, &agent.instance).await? {
+                return holds::hold(hub, &agent.instance, &choice, &reason).await;
+            }
+        }
         ErrorClass::ContextLength | ErrorClass::Permanent => {}
     }
     give_up(hub, &agent.instance, class, &retry.error, &retry).await
@@ -96,16 +111,6 @@ async fn schedule(hub: &Hub, instance: &str, at: DateTime<Utc>, error: &str) -> 
     hub.store.schedule_turn_retry(instance, at).await?;
     agents::show_phase(hub, instance, WakePhase::Retrying { at, error: error.into() }).await;
     hub.schedule_notify.notify_one();
-    Ok(())
-}
-
-/// Auth and billing errors will not fix themselves: pause the agent until the user clears it. No
-/// triage is dispatched (it would use the same key).
-async fn pause(hub: &Hub, instance: &str, class: ErrorClass, error: &str) -> Result<()> {
-    let reason = format!("{}: {error}", class.describe());
-    if hub.store.trip_breaker(&format!("instance:{instance}"), "provider", &reason).await? {
-        tracing::error!(instance, %reason, "agent paused: provider rejected requests");
-    }
     Ok(())
 }
 
@@ -215,10 +220,13 @@ async fn tell_user(
 /// Send retries that are due and report overdue answers. Returns when the next one is due.
 pub async fn sweep(hub: &Arc<Hub>, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
     for r in hub.store.take_due_retries(now).await? {
-        let text = format!(
-            "The previous attempt failed with a transient provider error ({}). Continue where you left off.",
-            r.error
-        );
+        if holds::waits(hub, &r.instance).await? {
+            continue; // its provider was held again meanwhile
+        }
+        let mut text = format!("The previous attempt failed ({}); trying again. Continue where you left off.", r.error);
+        if hub.store.instance(&r.instance).await?.archive_requested_at.is_some() {
+            text.push_str(" You were asked to hand over before being archived: finish that with `handover_ready`.");
+        }
         let mut ev = builtin(
             BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None, via: None }),
             Source::Hub,

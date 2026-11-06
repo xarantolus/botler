@@ -68,6 +68,7 @@ pub async fn tick(hub: &Arc<Hub>, now: DateTime<Utc>) -> Result<Option<DateTime<
         }
     }
     let next = earliest(next, crate::turns::sweep(hub, now).await?);
+    let next = earliest(next, crate::holds::sweep(hub, now).await?);
     Ok(earliest(next, hub.store.next_timer_at().await?))
 }
 

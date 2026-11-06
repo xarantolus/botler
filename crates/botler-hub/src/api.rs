@@ -1209,6 +1209,7 @@ async fn chat_completions(
         Err(e @ G::BadRequest(_)) => fail(StatusCode::BAD_REQUEST, e.to_string()),
         Err(e @ G::Budget(_)) => fail(StatusCode::TOO_MANY_REQUESTS, e.to_string()),
         Err(e @ G::Upstream(_)) => fail(StatusCode::BAD_GATEWAY, e.to_string()),
+        Err(e @ G::Held { .. }) => fail(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
         Err(G::Hub(e)) => ApiError::from(&e).into_response(),
     }
 }
