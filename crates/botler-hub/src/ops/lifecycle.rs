@@ -232,6 +232,36 @@ impl Op for PinChat {
 }
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct SetChatContext {
+    /// The chat (name or slug).
+    pub chat: String,
+    /// Compact once its context passes this many tokens; null: its agent's default.
+    pub compact_at: Option<u64>,
+}
+
+impl Op for SetChatContext {
+    const NAME: &'static str = "set_chat_context";
+    const DESCRIPTION: &'static str = "Set how large a chat's context grows before it is compacted (tokens), or \
+        reset it to its agent's default. A running agent is restarted after its turn to apply it.";
+    const WHO: Who = Who::User;
+    type Output = ChatDone;
+
+    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<ChatDone, OpError> {
+        if self.compact_at.is_some_and(|t| t < 20_000) {
+            return Err(OpError::BadRequest("a context under 20k tokens leaves no room to work".into()));
+        }
+        let inst = chat_named(hub, &self.chat).await?;
+        hub.store.set_compact_at(&inst.name, self.compact_at).await?;
+        hub.dispatch_notify.notify_one();
+        let note = match self.compact_at {
+            Some(t) => format!("Compacts at {}k tokens.", t / 1000),
+            None => "Compacts at its agent's default.".into(),
+        };
+        Ok(ChatDone { chat: inst.name, note })
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
 pub struct RenameChat {
     /// The chat (name or slug).
     pub chat: String,

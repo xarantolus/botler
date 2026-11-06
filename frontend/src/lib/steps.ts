@@ -1,28 +1,24 @@
-// How an agent turn folds once it answers: its thinking, tool calls and the remarks between them
-// (everything before its last text) become one line, "Used 3 tools, edited 2 files". Cards
-// (requests, files, errors) are never folded away.
+// How an agent turn folds: each run of thinking and tool calls the agent has moved on from (a
+// remark of its follows) becomes one line, "Used 3 tools, edited 2 files". What it says between
+// them stays in the flow, and so do cards (requests, files, errors). The run it is still in
+// stays open, so its tools show as they run.
 
 import type { TranscriptPart } from "./transcript";
 
-const FOLDS = new Set(["reasoning", "dynamic-tool", "text"]);
+const STEPS = new Set(["reasoning", "dynamic-tool"]);
 const EDITS = /^(write|edit|write_file|edit_file|patch|apply_patch)$/;
 
 export interface Fold {
-  /** Foldable parts before this index are folded. */
-  until: number;
+  /** The run's parts: `start` up to, not including, `end`. */
+  start: number;
+  end: number;
   summary: string;
 }
 
 const plural = (n: number, one: string, many = `${one}s`) =>
   `${n} ${n === 1 ? one : many}`;
 
-/** The fold of a turn's parts, if it has steps before its last text. */
-export function foldOf(parts: TranscriptPart[]): Fold | null {
-  const until = parts.findLastIndex((p) => p.type === "text");
-  const steps = parts
-    .slice(0, Math.max(0, until))
-    .filter((p) => FOLDS.has(p.type));
-  if (!steps.some((p) => p.type !== "text")) return null;
+function summary(steps: TranscriptPart[]): string {
   const files = new Set<string>();
   let tools = 0;
   for (const p of steps) {
@@ -36,15 +32,36 @@ export function foldOf(parts: TranscriptPart[]): Fold | null {
     tools && `used ${plural(tools, "tool")}`,
     files.size && `edited ${plural(files.size, "file")}`,
   ].filter(Boolean);
-  const summary = said.length ? said.join(", ") : "thought it over";
-  return { until, summary: summary[0]!.toUpperCase() + summary.slice(1) };
+  const s = said.length ? said.join(", ") : "thought it over";
+  return s[0]!.toUpperCase() + s.slice(1);
 }
 
-/** Whether part `i` is hidden while `fold` is closed. */
-export function folded(
+/** The folds of a turn's parts: its runs of tool calls (with their thinking) that text follows.
+ * A run of thinking alone is not folded: it is one line already. */
+export function foldsOf(parts: TranscriptPart[]): Fold[] {
+  const folds: Fold[] = [];
+  let start = -1;
+  parts.forEach((p, i) => {
+    if (STEPS.has(p.type)) {
+      if (start < 0) start = i;
+      return;
+    }
+    const run = start < 0 ? [] : parts.slice(start, i);
+    if (p.type === "text" && run.some((r) => r.type === "dynamic-tool")) {
+      folds.push({ start, end: i, summary: summary(run) });
+    }
+    // Only text ends a run: a card between two tools does not split it.
+    if (p.type === "text") start = -1;
+  });
+  return folds;
+}
+
+/** The fold part `i` is in (cards inside a run are not). */
+export function foldAt(
   parts: TranscriptPart[],
-  fold: Fold | null,
+  folds: Fold[],
   i: number,
-): boolean {
-  return !!fold && i < fold.until && FOLDS.has(parts[i]!.type);
+): Fold | undefined {
+  if (!STEPS.has(parts[i]!.type)) return undefined;
+  return folds.find((f) => f.start <= i && i < f.end);
 }

@@ -50,6 +50,8 @@ pub struct LiveAgent {
     /// What changed since its previous container, told with its next delivery.
     changes: std::sync::Mutex<Vec<String>>,
     busy: AtomicBool,
+    /// pi is compacting the session (between its `compaction_start` and `compaction_end`).
+    compacting: AtomicBool,
     /// The user's messages handed to pi as steers in its current run: pi holds them until the
     /// running tool calls are done. Until the session shows them, the web app lists them as on
     /// their way (they can no longer be taken back).
@@ -82,6 +84,10 @@ pub struct LiveAgent {
 impl LiveAgent {
     pub fn busy(&self) -> bool {
         self.busy.load(Ordering::SeqCst)
+    }
+
+    pub fn compacting(&self) -> bool {
+        self.compacting.load(Ordering::SeqCst)
     }
 
     /// Abort the running turn; it ends without counting as a failure.
@@ -300,7 +306,7 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Below this, compacting saves next to nothing (pi keeps the recent ~20k tokens anyway).
+/// Below this, compacting saves little (pi keeps the most recent sixth of `compact_at` anyway).
 const IDLE_COMPACT_FLOOR: u64 = 40_000;
 /// The quiet spell (its last activity) each chat's warm compaction was last tried for.
 const IDLE_COMPACTED: &str = "hub:idle-compacted";
@@ -329,6 +335,10 @@ async fn compact_warm(agent: &Arc<LiveAgent>, hub: &Hub) -> Result<()> {
         match agent.pi.compact().await {
             // Still compacting: pi reports the end in the session.
             Ok(()) | Err(PiError::Timeout { .. }) => {}
+            // All of it is recent: pi keeps that anyway.
+            Err(PiError::Rejected { error, .. }) if error.starts_with("Nothing to compact") => {
+                tracing::info!(instance = %agent.instance, %error, "quiet chat: nothing old enough to compact");
+            }
             Err(e) => tracing::warn!(instance = %agent.instance, error = %e, "could not compact the quiet chat"),
         }
     });
@@ -590,6 +600,7 @@ async fn wake_locked(hub: &Arc<Hub>, instance: &Instance) -> Result<Arc<LiveAgen
         checked: std::sync::Mutex::new(checked),
         changes: std::sync::Mutex::new(changes),
         busy: AtomicBool::new(false),
+        compacting: AtomicBool::new(false),
         steered: std::sync::Mutex::default(),
         last_active: std::sync::Mutex::new(Utc::now()),
         stopping: AtomicBool::new(false),
@@ -631,7 +642,8 @@ async fn remember_env(hub: &Hub, instance: &str, env: &AgentEnv) -> Result<Vec<S
 /// What `agent`'s environment was computed for: the applied commit and its grants.
 async fn check_key(hub: &Hub, applied: &crate::hub::Applied, instance: &str) -> Result<String> {
     let (_, grants) = crate::grants::environment(hub, instance).await?;
-    Ok(format!("{} {}", applied.commit, grants.join(",")))
+    let compact_at = hub.store.instance(instance).await?.compact_at;
+    Ok(format!("{} {} {compact_at:?}", applied.commit, grants.join(",")))
 }
 
 /// Whether `agent`'s container no longer matches what it would get now (after a merge or a
@@ -841,7 +853,7 @@ async fn container_spec(
     let dir = hub.paths.agent_dir(&instance.name);
     tokio::fs::create_dir_all(&dir).await?;
     let known = crate::model_catalog::known(hub, &route).await;
-    let compact_at = def.spec.compact_at.unwrap_or(applied.defs.instance.defaults.compact_at);
+    let compact_at = crate::agent_env::compact_at(instance, def, applied);
     let provider = pi_config::Provider {
         api_key: route.api_key_secret.as_ref().map(|s| format!("${s}")),
         base_url: route.base_url.clone(),
@@ -1062,6 +1074,9 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                 if let Err(e) = hub.store.turn_progressed(&agent.instance).await {
                     tracing::error!(instance = %agent.instance, error = %e, "could not record the turn's progress");
                 }
+            }
+            PiEventKind::Other { r#type } if r#type == "compaction_start" || r#type == "compaction_end" => {
+                agent.compacting.store(r#type == "compaction_start", Ordering::SeqCst);
             }
             _ => {}
         }

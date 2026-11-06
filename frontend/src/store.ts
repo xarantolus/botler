@@ -33,6 +33,8 @@ export interface AppState {
   status: HubStatus | null;
   usage: Usage | null;
   instances: Instance[];
+  /** The chat list has arrived once (until then an empty list means "loading", not "none"). */
+  instancesLoaded: boolean;
   dialogs: Dialogs | null;
   /** The latest proposals, newest first; patched live as they move. */
   proposals: Proposal[] | null;
@@ -63,6 +65,7 @@ export const state = plainReactive<AppState>({
   status: null,
   usage: null,
   instances: [],
+  instancesLoaded: false,
   dialogs: null,
   proposals: null,
   apps: null,
@@ -147,7 +150,10 @@ export function applyState(p: StatePatch) {
   if (p.dialogs) state.dialogs = p.dialogs;
   if (p.apps) state.apps = p.apps;
   if (p.proposals) state.proposals = p.proposals;
-  if (p.all_instances) state.instances = p.instances;
+  if (p.all_instances) {
+    state.instances = p.instances;
+    state.instancesLoaded = true;
+  }
   else if (p.instances.length || p.removed_instances.length) {
     const replaced = new Set([...p.removed_instances, ...p.instances.map((i) => i.name)]);
     state.instances = [...state.instances.filter((i) => !replaced.has(i.name)), ...p.instances];
@@ -172,6 +178,7 @@ export function refreshInstances() {
   if (viaLive) return viaLive();
   return guarded("Loading chats", async () => {
     state.instances = await call("instances", {});
+    state.instancesLoaded = true;
   });
 }
 
@@ -296,6 +303,8 @@ function applySession(after: string | null, s: SessionView): boolean {
     if (!prev || prev.instance.name !== s.instance.name || lastId(prev.items) !== after) return false;
     state.session = { ...s, items: [...prev.items, ...s.items], earlier: prev.earlier };
   } else state.session = s;
+  // Opened while pi compacts: its compaction_start went out before this chat was watched.
+  if (s.compacting && !state.compacting) state.compacting = { since: Date.now(), reason: "threshold" };
   // The session has the streamed message now: show it from there.
   if (persisted(state.session.items, state.streaming)) state.streaming = noLive();
   state.sessionError = null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { folded, foldOf } from "./steps";
+import { foldAt, foldsOf } from "./steps";
 import type { TranscriptPart } from "./transcript";
 
 const text = (t: string): TranscriptPart =>
@@ -22,46 +22,32 @@ const card: TranscriptPart = {
   data: { text: "x" },
 } as TranscriptPart;
 
-describe("foldOf", () => {
-  it("folds the steps before the last text into one line", () => {
+const hidden = (parts: TranscriptPart[]) => {
+  const folds = foldsOf(parts);
+  return parts.map((_, i) => !!foldAt(parts, folds, i));
+};
+
+describe("foldsOf", () => {
+  it("folds each run of tool calls, keeping the remarks between them and cards", () => {
     const parts = [
       think,
       tool("bash"),
       text("checking"),
       tool("edit", { path: "a" }),
       tool("edit", { path: "a" }),
-      tool("write", { path: "b" }),
       card,
+      tool("write", { path: "b" }),
       text("Done."),
     ];
-    const f = foldOf(parts)!;
-    expect(f.summary).toBe("Used 1 tool, edited 2 files");
-    expect(parts.map((_, i) => folded(parts, f, i))).toEqual([
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      false,
-      false,
-    ]);
+    expect(foldsOf(parts).map((f) => f.summary)).toEqual(["Used 1 tool", "Edited 2 files"]);
+    expect(hidden(parts)).toEqual([true, true, false, true, true, false, true, false]);
   });
 
-  it("leaves a turn alone without steps, or still without text", () => {
-    expect(foldOf([text("hi")])).toBeNull();
-    expect(foldOf([text("a"), text("b")])).toBeNull();
-    expect(foldOf([think, tool("bash")])).toBeNull();
-    expect(foldOf([think, text("hi")])!.summary).toBe("Thought it over");
-  });
-
-  it("keeps what runs after the latest remark visible", () => {
+  it("leaves text, thinking alone, and the run still going alone", () => {
+    expect(foldsOf([text("hi")])).toEqual([]);
+    expect(foldsOf([think, text("hi")])).toEqual([]);
+    expect(foldsOf([think, tool("bash")])).toEqual([]);
     const parts = [tool("read"), text("now testing"), tool("bash")];
-    const f = foldOf(parts)!;
-    expect(parts.map((_, i) => folded(parts, f, i))).toEqual([
-      true,
-      false,
-      false,
-    ]);
+    expect(hidden(parts)).toEqual([true, false, false]);
   });
 });

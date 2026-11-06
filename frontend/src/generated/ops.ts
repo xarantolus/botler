@@ -107,6 +107,7 @@ import type { SendMessage } from "./SendMessage";
 import type { ServiceRestarted } from "./ServiceRestarted";
 import type { SessionMessages } from "./SessionMessages";
 import type { SessionTree } from "./SessionTree";
+import type { SetChatContext } from "./SetChatContext";
 import type { SetChatTitle } from "./SetChatTitle";
 import type { SetTimer } from "./SetTimer";
 import type { SpawnAgent } from "./SpawnAgent";
@@ -168,6 +169,7 @@ export interface Ops {
   clear_chat: { input: ClearChat; output: ChatDone };
   raise_budget: { input: RaiseBudget; output: BudgetRaised };
   pin_chat: { input: PinChat; output: ChatDone };
+  set_chat_context: { input: SetChatContext; output: ChatDone };
   rename_chat: { input: RenameChat; output: ChatDone };
   session_tree: { input: GetSessionTree; output: SessionTree };
   goto_entry: { input: GotoEntry; output: EntryDone };

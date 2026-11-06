@@ -1,11 +1,11 @@
 <script setup lang="ts">
 // The parts of one transcript message (lib/transcript.ts), each with the kit's chat element for
-// it: reasoning, text (Markdown), tool calls, and botler's own parts as cards. A turn's steps
-// before its last text fold into one line (lib/steps.ts).
+// it: reasoning, text (Markdown), tool calls, and botler's own parts as cards. Each run of tool
+// calls the agent has moved on from folds into one line (lib/steps.ts); its remarks stay.
 import { computed } from "vue";
 import { fileGroups } from "../../lib/fileGroups";
 import type { TranscriptMessage } from "../../lib/transcript";
-import { foldOf, folded } from "../../lib/steps";
+import { foldAt, foldsOf } from "../../lib/steps";
 import { toolRunning } from "../../lib/transcript";
 import DialogCard from "../common/DialogCard.vue";
 import EnvelopeCard from "../common/EnvelopeCard.vue";
@@ -18,10 +18,14 @@ import ToolCall from "./ToolCall.vue";
 const props = defineProps<{ message: TranscriptMessage; busy: boolean }>();
 /** The message's stable key (an agent turn keeps it from streamed to persisted). */
 const key = computed(() => props.message.metadata?.key ?? props.message.id);
-const fold = computed(() => (props.message.role === "assistant" ? foldOf(props.message.parts) : null));
-const firstFolded = computed(() => props.message.parts.findIndex((_, i) => folded(props.message.parts, fold.value, i)));
+const folds = computed(() => (props.message.role === "assistant" ? foldsOf(props.message.parts) : []));
+const foldOf = (i: number) => foldAt(props.message.parts, folds.value, i);
+const stepsKey = (start: number) => `${key.value}:steps:${start}`;
 const groups = computed(() => fileGroups(props.message.parts));
-const stepsOpen = computed(() => shell.open[`${key.value}:steps`] ?? false);
+const stepsOpen = (i: number) => {
+  const f = foldOf(i);
+  return !f || (shell.open[stepsKey(f.start)] ?? false);
+};
 </script>
 
 <template>
@@ -29,16 +33,16 @@ const stepsOpen = computed(() => shell.open[`${key.value}:steps`] ?? false);
     <!-- Keyed by position: a streamed message and its persisted copy have the same parts. -->
     <template v-for="(part, i) in message.parts" :key="i">
       <button
-        v-if="fold && i === firstFolded"
+        v-if="foldOf(i)?.start === i"
         type="button"
-        class="flex w-fit items-center gap-1.5 rounded text-sm text-muted hover:text-default focus-visible:outline-2 focus-visible:outline-primary"
-        :aria-expanded="stepsOpen"
-        @click="shell.open[`${key}:steps`] = !stepsOpen"
+        class="flex w-full cursor-pointer items-center gap-1.5 rounded text-start text-sm text-muted hover:text-default focus-visible:outline-2 focus-visible:outline-primary"
+        :aria-expanded="stepsOpen(i)"
+        @click="shell.open[stepsKey(i)] = !stepsOpen(i)"
       >
-        <UIcon :name="stepsOpen ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4" />
-        {{ fold.summary }}
+        <UIcon :name="stepsOpen(i) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" class="size-4" />
+        {{ foldOf(i)!.summary }}
       </button>
-      <template v-if="stepsOpen || !folded(message.parts, fold, i)">
+      <template v-if="stepsOpen(i)">
       <!-- Thinking stays one line ("Thinking…") unless opened: opening it while it streams and
            closing it after shifted the chat. A closed block is not mounted: each measures its
            scroll shadow, which lays out the whole chat, so a long chat would open slowly. -->
@@ -51,7 +55,7 @@ const stepsOpen = computed(() => shell.open[`${key.value}:steps`] ?? false);
         :auto-close-delay="0"
         icon="i-lucide-brain"
         unmount-on-hide
-        :ui="{ body: 'max-h-72 text-sm' }"
+        :ui="{ trigger: 'w-full cursor-pointer', body: 'max-h-72 text-sm' }"
         @update:open="(v: boolean) => (shell.open[`${key}:${i}`] = v)"
       />
       <MarkdownText v-else-if="part.type === 'text'" :source="part.text" :class="part.state === 'streaming' && 'streaming'" />

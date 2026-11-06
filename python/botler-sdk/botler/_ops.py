@@ -302,6 +302,16 @@ def pin_chat(*, chat: str, pinned: bool) -> dict[str, Any]:
     return call("pin_chat", {"chat": chat, "pinned": pinned})
 
 
+def set_chat_context(*, chat: str, compact_at: int | None = None) -> dict[str, Any]:
+    """Set how large a chat's context grows before it is compacted (tokens), or reset it to its agent's default. A running agent is restarted after its turn to apply it.
+
+    Args:
+        chat: The chat (name or slug).
+        compact_at: Compact once its context passes this many tokens; null: its agent's default.
+    """
+    return call("set_chat_context", {"chat": chat, "compact_at": compact_at})
+
+
 def rename_chat(*, chat: str, title: str) -> dict[str, Any]:
     """Give a chat the user's own title; its agent keeps it from then on.
 

@@ -96,6 +96,7 @@ import type { ServiceRestarted } from "./ServiceRestarted";
 import type { SessionQuery } from "./SessionQuery";
 import type { SessionTree } from "./SessionTree";
 import type { SessionView } from "./SessionView";
+import type { SetChatContext } from "./SetChatContext";
 import type { Settings } from "./Settings";
 import type { SettingsEdit } from "./SettingsEdit";
 import type { SettingsSaved } from "./SettingsSaved";
@@ -182,6 +183,7 @@ export interface Routes {
   clear_chat: { method: "POST"; path: "/api/v1/ops/clear_chat"; params: Record<string, never>; query: never; body: ClearChat; response: ChatDone };
   raise_budget: { method: "POST"; path: "/api/v1/ops/raise_budget"; params: Record<string, never>; query: never; body: RaiseBudget; response: BudgetRaised };
   pin_chat: { method: "POST"; path: "/api/v1/ops/pin_chat"; params: Record<string, never>; query: never; body: PinChat; response: ChatDone };
+  set_chat_context: { method: "POST"; path: "/api/v1/ops/set_chat_context"; params: Record<string, never>; query: never; body: SetChatContext; response: ChatDone };
   rename_chat: { method: "POST"; path: "/api/v1/ops/rename_chat"; params: Record<string, never>; query: never; body: RenameChat; response: ChatDone };
   list_documents: { method: "POST"; path: "/api/v1/ops/list_documents"; params: Record<string, never>; query: never; body: ListDocuments; response: Array<DocumentSummary> };
   read_document: { method: "POST"; path: "/api/v1/ops/read_document"; params: Record<string, never>; query: never; body: ReadDocument; response: Document };
@@ -259,6 +261,7 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   clear_chat: { method: "POST", path: "/api/v1/ops/clear_chat" },
   raise_budget: { method: "POST", path: "/api/v1/ops/raise_budget" },
   pin_chat: { method: "POST", path: "/api/v1/ops/pin_chat" },
+  set_chat_context: { method: "POST", path: "/api/v1/ops/set_chat_context" },
   rename_chat: { method: "POST", path: "/api/v1/ops/rename_chat" },
   list_documents: { method: "POST", path: "/api/v1/ops/list_documents" },
   read_document: { method: "POST", path: "/api/v1/ops/read_document" },

@@ -61,6 +61,27 @@ export async function pinChat(chat: string, pinned: boolean): Promise<void> {
   }
 }
 
+/** Set how large the chat's context grows before it is compacted, in thousands of tokens. */
+export async function setChatContext(chat: string, current: number | null): Promise<void> {
+  const ok = await confirm({
+    title: "Context size",
+    description:
+      "The chat is compacted (older messages summarised) once its context passes this many thousand tokens. More keeps more detail at hand; every model call resends it. Empty: its agent's default.",
+    confirmLabel: "Save",
+    reason: { label: "Thousand tokens", placeholder: "e.g. 120", value: current ? String(current / 1000) : "" },
+  });
+  if (!ok) return;
+  const k = ok.reason.trim();
+  if (k && !/^\d+$/.test(k)) return notifyError("Not a number", new Error(`"${k}" is not a whole number of thousands`));
+  try {
+    const r = await call("set_chat_context", { body: { chat, compact_at: k ? Number(k) * 1000 : null } });
+    notifySuccess("Context size", r.note);
+    await refreshInstances();
+  } catch (e) {
+    notifyError("Could not set the context size", e);
+  }
+}
+
 export async function renameChat(chat: string, current: string): Promise<void> {
   const ok = await confirm({
     title: "Rename this chat",

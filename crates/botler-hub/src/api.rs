@@ -756,7 +756,9 @@ pub async fn session_view(
     file: Option<&str>,
     window: crate::sessions::Window<'_>,
 ) -> Result<SessionView, ApiError> {
-    let busy = hub.agents.get(&inst.name).await.is_some_and(|a| a.busy());
+    let live = hub.agents.get(&inst.name).await;
+    let busy = live.as_ref().is_some_and(|a| a.busy());
+    let compacting = live.as_ref().is_some_and(|a| a.compacting());
     let deliveries = hub.store.pending_deliveries(&inst.name).await?;
     let pending = deliveries.len();
     let mut handover = None;
@@ -778,6 +780,7 @@ pub async fn session_view(
     Ok(SessionView {
         instance: inst,
         busy,
+        compacting,
         pending,
         phase,
         items: page.items,

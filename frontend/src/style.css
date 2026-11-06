@@ -7,6 +7,17 @@
 @source not "./**/*.test.ts";
 @source not "./generated";
 
+/* Tailwind 4 leaves buttons with the default cursor: everything that acts on a click shows the
+   hand, the kit's collapsible and accordion triggers and selectable table rows included. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  summary,
+  tr[data-selectable="true"] {
+    cursor: pointer;
+  }
+}
+
 @theme {
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }

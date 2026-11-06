@@ -49,6 +49,7 @@ const suffix = computed(() => {
     @update:open="(v: boolean) => (shell.open[part.toolCallId] = v)"
     :ui="{
       root: 'my-0.5',
+      trigger: 'w-full cursor-pointer',
       leadingIcon: failed ? 'text-error' : undefined,
       label: 'font-mono text-xs',
       suffix: failed ? 'text-error' : undefined,

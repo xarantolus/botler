@@ -172,7 +172,11 @@ impl PiClient {
     }
 
     /// Send a command and wait for its response's `data`.
-    pub async fn command(&self, mut cmd: Value) -> Result<Value> {
+    pub async fn command(&self, cmd: Value) -> Result<Value> {
+        self.command_within(cmd, self.timeout).await
+    }
+
+    async fn command_within(&self, mut cmd: Value, timeout: Duration) -> Result<Value> {
         let command = cmd.get("type").and_then(Value::as_str).unwrap_or("?").to_string();
         let id = format!("hub-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         cmd["id"] = json!(id);
@@ -195,12 +199,12 @@ impl PiClient {
             self.pending.lock().await.remove(&id);
             return Err(e.into());
         }
-        let resp = match tokio::time::timeout(self.timeout, rx).await {
+        let resp = match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(v)) => v,
             Ok(Err(_)) => return Err(PiError::Closed),
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                return Err(PiError::Timeout { command, timeout: self.timeout });
+                return Err(PiError::Timeout { command, timeout });
             }
         };
         if resp.get("success").and_then(Value::as_bool) != Some(true) {
@@ -210,7 +214,9 @@ impl PiClient {
         Ok(resp.get("data").cloned().unwrap_or(Value::Null))
     }
 
-    /// Prompt the agent. `streaming` must be set when the agent may be busy.
+    /// Prompt the agent. `streaming` must be set when the agent may be busy. pi answers once the
+    /// prompt is in the session, after compacting first when the context is over its threshold,
+    /// which takes minutes on a large one: it gets ten times the usual wait.
     pub async fn prompt(&self, message: &str, images: &[Value], streaming: Option<Streaming>) -> Result<Disposition> {
         let mut cmd = json!({ "type": "prompt", "message": message });
         if !images.is_empty() {
@@ -219,7 +225,7 @@ impl PiClient {
         if let Some(s) = streaming {
             cmd["streamingBehavior"] = json!(s);
         }
-        let data = self.command(cmd).await?;
+        let data = self.command_within(cmd, self.timeout * 10).await?;
         match data.get("disposition").and_then(Value::as_str) {
             Some("started") => Ok(Disposition::Started),
             Some("queued") => Ok(Disposition::Queued),

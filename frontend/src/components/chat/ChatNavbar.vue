@@ -13,7 +13,7 @@ import { usd } from "../../lib/time";
 import { notifyError, notifySuccess } from "../../notify";
 import { inFlight, stageLabel } from "../../lib/proposals";
 import { frontDoorName, refreshInstances, refreshSession, state } from "../../store";
-import { handoverChat, stopChat } from "../../chatActions";
+import { handoverChat, setChatContext, stopChat } from "../../chatActions";
 import PhaseBadge from "../common/PhaseBadge.vue";
 import { shell } from "../../shell";
 import ConnectionsSlideover from "./ConnectionsSlideover.vue";
@@ -124,6 +124,10 @@ const menu = computed((): DropdownMenuItem[][] => {
   const actions: DropdownMenuItem[] = [];
   if (i?.persistent && i.state !== "archived") {
     actions.push({ label: "Start fresh session (handover)…", icon: "i-lucide-refresh-ccw-dot", onSelect: () => void handoverChat(props.name) });
+  }
+  if (i && i.state !== "archived") {
+    const label = i.compact_at ? `Context size: ${i.compact_at / 1000}k…` : "Context size…";
+    actions.push({ label, icon: "i-lucide-ruler", onSelect: () => void setChatContext(props.name, i.compact_at) });
   }
   if (i?.state === "archived") actions.push({ label: "Restore", icon: "i-lucide-archive-restore", onSelect: () => void restore() });
   else if (i && !isFrontDoor.value) {

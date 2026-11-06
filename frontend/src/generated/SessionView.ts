@@ -12,6 +12,10 @@ export type SessionView = { instance: Instance,
  */
 busy: boolean, 
 /**
+ * pi is compacting its session (the live stream's `compaction_start` came before the page).
+ */
+compacting: boolean, 
+/**
  * Deliveries waiting to be put into the session.
  */
 pending: number, 

@@ -30,6 +30,14 @@ pub struct AgentEnv {
     pub instructions: String,
     /// Hash of the rest of the definition and its model.
     pub definition: String,
+    /// Tokens at which it compacts.
+    pub compact_at: u64,
+}
+
+/// Tokens at which `instance` compacts: the user's setting for the chat, else its agent's, else
+/// the instance default.
+pub fn compact_at(instance: &Instance, def: &AgentDef, applied: &Applied) -> u64 {
+    instance.compact_at.or(def.spec.compact_at).unwrap_or(applied.defs.instance.defaults.compact_at)
 }
 
 fn hash(v: &impl Serialize) -> Result<String> {
@@ -79,6 +87,7 @@ pub async fn compute(
         pi: images::pi_export_name(hub, &applied.commit).await?,
         instructions: hash(&def.prompt)?,
         definition: hash(&(spec, applied.defs.model_for(&def.spec)))?,
+        compact_at: compact_at(instance, def, applied),
     })
 }
 

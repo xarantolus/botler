@@ -166,3 +166,22 @@ async fn a_burst_of_merges_restarts_once() {
     let note = e.fake.notes(&container(&e)).into_iter().find(|n| n.contains("environment.updated")).unwrap();
     assert!(note.contains("new tools: web.weather") && note.contains("AGENTS.md"), "{note}");
 }
+
+#[tokio::test]
+async fn a_chats_context_size_restarts_it_between_turns() {
+    let e = botler_awake().await;
+    let before = wake_id(&e).await.unwrap();
+    let user =
+        botler_hub::ops::Caller { principal: botler_hub::auth::Principal::User, capabilities: vec![], runnable: None };
+    let too_small =
+        botler_hub::ops::call(&e.hub, &user, "set_chat_context", json!({"chat": "botler", "compact_at": 5000}));
+    assert!(too_small.await.is_err());
+    botler_hub::ops::call(&e.hub, &user, "set_chat_context", json!({"chat": "botler", "compact_at": 120_000}))
+        .await
+        .unwrap();
+    assert_eq!(e.hub.store.instance("botler").await.unwrap().compact_at, Some(120_000));
+    refresh_after_debounce(&e).await;
+    agents::keep_always_on(&e.hub).await.unwrap();
+    settle().await;
+    assert_ne!(wake_id(&e).await, Some(before));
+}

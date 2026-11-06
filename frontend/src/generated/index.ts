@@ -263,6 +263,7 @@ export type * from "./SessionQuery";
 export type * from "./SessionStartedPayload";
 export type * from "./SessionTree";
 export type * from "./SessionView";
+export type * from "./SetChatContext";
 export type * from "./SetChatTitle";
 export type * from "./SetTimer";
 export type * from "./Settings";

@@ -32,6 +32,11 @@ pinned: boolean,
  */
 titled_by_user: boolean, 
 /**
+ * The user's context size for this chat (tokens): it compacts there instead of at its
+ * agent's `compact_at`.
+ */
+compact_at: number | null, 
+/**
  * When the user, another chat or the chat itself last wrote in it (the list's order); its
  * creation before that.
  */

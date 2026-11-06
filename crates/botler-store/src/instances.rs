@@ -41,6 +41,9 @@ pub struct Instance {
     pub pinned: bool,
     /// The user named it: agents keep its title.
     pub titled_by_user: bool,
+    /// The user's context size for this chat (tokens): it compacts there instead of at its
+    /// agent's `compact_at`.
+    pub compact_at: Option<u64>,
     /// When the user, another chat or the chat itself last wrote in it (the list's order); its
     /// creation before that.
     pub last_message_at: DateTime<Utc>,
@@ -135,6 +138,11 @@ fn row(r: &SqliteRow) -> Result<Instance> {
         last_active: parse_ts(T, r.get("last_active"))?,
         pinned: r.get::<i64, _>("pinned") != 0,
         titled_by_user: r.get::<i64, _>("titled_by_user") != 0,
+        compact_at: r
+            .get::<Option<i64>, _>("compact_at")
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|e| Error::Corrupt { table: T, detail: format!("bad compact_at: {e}") })?,
         last_message_at: match r.get::<Option<String>, _>("last_message_at") {
             Some(t) => parse_ts(T, &t)?,
             None => parse_ts(T, r.get("created_at"))?,
@@ -259,6 +267,19 @@ impl Store {
     pub async fn set_pinned(&self, name: &str, pinned: bool) -> Result<()> {
         sqlx::query("UPDATE instances SET pinned = ? WHERE name = ?")
             .bind(i64::from(pinned))
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_compact_at(&self, name: &str, tokens: Option<u64>) -> Result<()> {
+        let tokens = tokens
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|e| Error::Corrupt { table: "instances", detail: format!("bad compact_at: {e}") })?;
+        sqlx::query("UPDATE instances SET compact_at = ? WHERE name = ?")
+            .bind(tokens)
             .bind(name)
             .execute(&self.pool)
             .await?;
