@@ -100,6 +100,17 @@ async fn failures_open_one_incident_and_spawn_triage_once() {
     let d = e.hub.store.pending_deliveries(&triage[0].name).await.unwrap();
     assert_eq!(d.len(), 1);
     assert!(d[0].prompt.as_deref().unwrap().contains("flaky"));
+
+    // Resolved, then failing again: the same chat hears of it, while it is not archived.
+    e.hub.store.resolve_incident(&incidents[0].id, "flaked; retried").await.unwrap();
+    let run = jobs::start(&e.hub, "flaky", None, None).await.unwrap().unwrap();
+    let name = jobs::container_name(&e.hub, &run);
+    e.fake.exit(&name, 1);
+    supervisor::on_event(&e.hub, &ContainerEvent { name, status: "died".into(), exit_code: Some(1) }).await.unwrap();
+    let again: Vec<_> =
+        e.hub.store.live_instances().await.unwrap().into_iter().filter(|i| i.definition == "triage").collect();
+    assert_eq!(again.len(), 1, "no second triage chat");
+    assert_eq!(e.hub.store.pending_deliveries(&triage[0].name).await.unwrap().len(), 2);
 }
 
 #[tokio::test]

@@ -4,8 +4,16 @@ use botler_core::Source;
 use botler_core::payloads::{BuiltinPayload, RunnableFailedPayload};
 use botler_core::routing::{Action, Dispatch};
 
+use botler_store::{InstanceState, ProposalStatus};
+use chrono::{Duration, Utc};
+
 use crate::hub::{Hub, Result};
 use crate::router;
+
+/// kv: runnable → the chat spawned for its failures, which gets its later ones too.
+const ON_IT: &str = "hub:incident-chat";
+/// A runnable failing this soon after a merged proposal changed it goes to the proposing chat.
+const AFTER_MERGE_HOURS: i64 = 2;
 
 /// What went wrong with a runnable.
 #[derive(Clone, Debug)]
@@ -49,8 +57,42 @@ pub async fn report(hub: &Hub, f: Failure) -> Result<()> {
         a => a,
     };
     let prompt = format!("Job `{}` failed ({}). Investigate and resolve the incident.", f.runnable, f.kind);
+    // A chat already on it gets the failure instead of a new one: the chat whose merged change
+    // just broke it, or the one that handled its last failure.
+    let action = match action {
+        Action::Spawn(def) => match on_it(hub, &f.runnable).await? {
+            Some(chat) => Action::Deliver(chat),
+            None => {
+                let chat = router::new_instance(hub, &def, None, Some(&prompt)).await?;
+                hub.store.kv_set(ON_IT, &f.runnable, &chat).await?;
+                Action::Deliver(chat)
+            }
+        },
+        a => a,
+    };
     let d = Dispatch { trigger: None, action, prompt: Some(prompt), shadow: false, quiet: false };
     router::dispatch(hub, ev, vec![d]).await
+}
+
+/// The chat that should hear about `runnable`'s failure, if one is on it: whoever's proposal
+/// changing it was merged in the last two hours, else the chat its last failure went to, while
+/// neither is archived.
+async fn on_it(hub: &Hub, runnable: &str) -> Result<Option<String>> {
+    let since = Utc::now() - Duration::hours(AFTER_MERGE_HOURS);
+    let mut chats = Vec::new();
+    for p in hub.store.recent_proposals(50).await? {
+        let changed = p.summary.as_ref().is_some_and(|s| s.items.iter().any(|i| i.name == runnable));
+        if p.status == ProposalStatus::Merged && p.updated_at >= since && changed {
+            chats.push(p.instance);
+        }
+    }
+    chats.extend(hub.store.kv_get(ON_IT, runnable).await?);
+    for chat in chats {
+        if hub.store.find_instance(&chat).await?.is_some_and(|i| i.state != InstanceState::Archived) {
+            return Ok(Some(chat));
+        }
+    }
+    Ok(None)
 }
 
 /// The last `lines` lines of a log.
