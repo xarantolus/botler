@@ -224,8 +224,8 @@ pub async fn sweep(hub: &Arc<Hub>, now: DateTime<Utc>) -> Result<Option<DateTime
             continue; // its provider was held again meanwhile
         }
         let mut text = format!("The previous attempt failed ({}); trying again. Continue where you left off.", r.error);
-        if hub.store.instance(&r.instance).await?.archive_requested_at.is_some() {
-            text.push_str(" You were asked to hand over before being archived: finish that with `handover_ready`.");
+        if let Some(reminder) = crate::handover::reminder(hub, &r.instance).await? {
+            text.push_str(reminder);
         }
         let mut ev = builtin(
             BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None, via: None }),

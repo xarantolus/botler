@@ -370,6 +370,9 @@ pub struct Usage {
     pub today_by_instance: BTreeMap<String, UsageTotals>,
     /// The last 24 hours, whatever the day: what a chat costs now.
     pub last_day_by_instance: BTreeMap<String, UsageTotals>,
+    /// How busy each chat has been lately (decayed message count, `activity::score`): the
+    /// sidebar's order after pinned chats.
+    pub activity_by_instance: BTreeMap<String, f64>,
     pub total_by_instance: BTreeMap<String, UsageTotals>,
     /// The per-agent daily budget for agents that do not declare their own.
     pub default_budget: BudgetView,
@@ -467,6 +470,8 @@ routes! {
         raise_budget: crate::ops::RaiseBudget;
         pin_chat: crate::ops::PinChat;
         set_chat_context: crate::ops::SetChatContext;
+        list_timers: crate::ops::ListTimers;
+        cancel_timer: crate::ops::CancelTimer;
         rename_chat: crate::ops::RenameChat;
         list_documents: crate::ops::ListDocuments;
         read_document: crate::ops::ReadDocument;

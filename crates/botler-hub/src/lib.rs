@@ -1,6 +1,7 @@
 //! The botler hub.
 
 pub mod actions;
+pub mod activity;
 pub mod agent_env;
 pub mod agents;
 pub mod api;

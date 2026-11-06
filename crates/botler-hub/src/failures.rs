@@ -54,6 +54,15 @@ pub async fn report(hub: &Hub, f: Failure) -> Result<()> {
     // Without a triage agent the failure still reaches the user through the front door.
     let action = match Action::from(&target) {
         Action::Spawn(d) if !applied.defs.agents.contains_key(&d) => Action::Deliver(botler_core::FRONT_DOOR.into()),
+        // A turn the hub kept stopping during is nothing a code change in the monorepo fixes: the
+        // user (through the front door) decides, no triage chat. One about the front door itself
+        // stays an open incident, not a message that would wake it into the same turn.
+        _ if f.kind == "interrupted" => {
+            if f.runnable == format!("agent:{}", botler_core::FRONT_DOOR) {
+                return router::dispatch(hub, ev, Vec::new()).await;
+            }
+            Action::Deliver(botler_core::FRONT_DOOR.into())
+        }
         a => a,
     };
     let prompt = format!("Job `{}` failed ({}). Investigate and resolve the incident.", f.runnable, f.kind);

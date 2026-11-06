@@ -14,4 +14,10 @@ describe("chatOrder", () => {
     ];
     expect(chatOrder(chats, "botler", { asks: 1 }).map((c) => c.name)).toEqual(["botler", "starred", "asks", "new", "old"]);
   });
+
+  it("ranks a busy chat above one touched more recently", () => {
+    const chats = [chat("triage", "2026-11-01T10:00:00Z"), chat("curator", "2026-11-01T09:00:00Z")];
+    expect(chatOrder(chats, "botler", {}, { curator: 12, triage: 0.3 }).map((c) => c.name)).toEqual(["curator", "triage"]);
+    expect(chatOrder(chats, "botler", {}).map((c) => c.name)).toEqual(["triage", "curator"]);
+  });
 });

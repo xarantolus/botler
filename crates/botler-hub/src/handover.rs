@@ -35,6 +35,17 @@ pub async fn request(hub: &Hub, chat: &str, to: &str, reason: Option<String>) ->
     Ok(true)
 }
 
+/// What a chat resumed after a failed or cut-off turn is reminded of: the handover it was asked
+/// for (the request was in the turn that was lost, and the chat would otherwise never report).
+pub async fn reminder(hub: &Hub, chat: &str) -> Result<Option<&'static str>> {
+    if hub.store.instance(chat).await?.archive_requested_at.is_some() {
+        return Ok(Some(" You were asked to hand over before being archived: finish that with `handover_ready`."));
+    }
+    Ok(pending(hub, chat).await?.map(
+        |_| " You were asked for a handover report to continue in a fresh session: finish that with `handover_ready`.",
+    ))
+}
+
 /// Where `chat`'s pending handover goes, if one was requested.
 pub async fn pending(hub: &Hub, chat: &str) -> Result<Option<String>> {
     Ok(hub.store.kv_get(PENDING, chat).await?)

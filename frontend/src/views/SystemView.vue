@@ -12,6 +12,7 @@ import JobSlideover from "../components/system/JobSlideover.vue";
 import RunnableAction from "../components/system/RunnableAction.vue";
 import RunsTable from "../components/system/RunsTable.vue";
 import StoragePanel from "../components/system/StoragePanel.vue";
+import TimersPanel from "../components/system/TimersPanel.vue";
 import TriggerChips from "../components/system/TriggerChips.vue";
 import type { JobView, SystemView } from "../generated";
 import { portUrl, runDuration, runStatusColor } from "../lib/runs";
@@ -151,6 +152,8 @@ const tz = computed(() => view.value?.timezone ?? "UTC");
           </li>
         </ul>
       </section>
+
+      <TimersPanel :time-zone="tz" />
 
       <section aria-labelledby="sys-services" class="space-y-3">
         <h2 id="sys-services" class="flex items-center gap-2 font-semibold text-highlighted">

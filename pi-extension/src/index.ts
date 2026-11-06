@@ -42,6 +42,17 @@ const SUMMARY_BUDGET =
   "decisions and details the agent can look up again (files, memory, tools); keep open tasks, the " +
   "user's preferences and anything needed to continue.";
 
+// The hub's `--thinking` is a ceiling. pi moves a level the model lacks up to the next one it has
+// (DeepSeek V4.1 offers low, high and max: "medium" ran as "high"); this moves it down instead.
+const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+type Level = (typeof LEVELS)[number];
+
+function thinkingCeiling(): Level | undefined {
+  const i = process.argv.indexOf("--thinking");
+  const level = i < 0 ? undefined : process.argv[i + 1];
+  return LEVELS.find((l) => l === level);
+}
+
 const TOOLS_FILE = "/botler/agent-dir/tools.json";
 const TURN_TOOLS_FILE = "/botler/agent-dir/turn-tools.json";
 const MCP_SERVICES_FILE = "/botler/agent-dir/mcp-services.json";
@@ -197,7 +208,18 @@ export default function botler(pi: ExtensionAPI) {
     },
   });
 
+  const capThinking = (model: { reasoning?: boolean; thinkingLevelMap?: Partial<Record<Level, string | null>> } | undefined) => {
+    const ceiling = thinkingCeiling();
+    if (!ceiling || !model?.reasoning || LEVELS.indexOf(pi.getThinkingLevel()) <= LEVELS.indexOf(ceiling)) return;
+    const map = model.thinkingLevelMap ?? {};
+    const offered = (l: Level) => map[l] !== null && (l !== "xhigh" && l !== "max" ? true : map[l] !== undefined);
+    const below = LEVELS.slice(0, LEVELS.indexOf(ceiling) + 1).reverse().find(offered);
+    if (below) pi.setThinkingLevel(below);
+  };
+  pi.on("agent_start", async (_event, ctx) => capThinking(ctx.model));
+
   pi.on("session_start", async (_event, ctx) => {
+    capThinking(ctx.model);
     for (const op of loadJson<TurnTool[]>(TURN_TOOLS_FILE, [])) {
       if (registered.has(op.name)) continue;
       registered.add(op.name);

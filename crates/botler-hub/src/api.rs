@@ -347,6 +347,7 @@ pub async fn usage_view(hub: &Hub) -> Result<Usage, ApiError> {
         today: hub.store.usage_since(None, day_start).await?,
         today_by_instance: hub.store.usage_by_instance(day_start).await?,
         last_day_by_instance: hub.store.usage_by_instance(now - chrono::Duration::hours(24)).await?,
+        activity_by_instance: crate::activity::by_instance(hub, now).await?,
         total_by_instance: hub.store.usage_by_instance(chrono::DateTime::<Utc>::UNIX_EPOCH).await?,
         default_budget: BudgetView { usd_per_day: budget.usd_per_day, tokens_per_day: budget.tokens_per_day },
     })

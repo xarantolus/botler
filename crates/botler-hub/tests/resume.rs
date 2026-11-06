@@ -139,4 +139,12 @@ async fn a_turn_that_keeps_taking_the_hub_down_opens_an_incident() {
         incidents.iter().any(|i| i.runnable == format!("agent:{child}") && i.kind == "interrupted"),
         "{incidents:?}"
     );
+    // The user hears of it through the front door; no triage chat is started for it.
+    let chats = hub.store.live_instances().await.unwrap();
+    assert!(!chats.iter().any(|i| i.definition == "triage"), "{chats:?}");
+    let q = botler_store::EventQuery { kind: Some("runnable.failed".into()), limit: 5, ..Default::default() };
+    let failed = &hub.store.events(&q).await.unwrap()[0];
+    let to: Vec<String> =
+        hub.store.deliveries_for_event(&failed.id.to_string()).await.unwrap().into_iter().map(|d| d.instance).collect();
+    assert_eq!(to, [botler_core::FRONT_DOOR]);
 }

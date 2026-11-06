@@ -10,6 +10,7 @@ import type { BindingRevoked } from "./BindingRevoked";
 import type { BotlerEvent } from "./BotlerEvent";
 import type { BreakerCleared } from "./BreakerCleared";
 import type { BudgetRaised } from "./BudgetRaised";
+import type { CancelTimer } from "./CancelTimer";
 import type { Cancelled } from "./Cancelled";
 import type { CatalogView } from "./CatalogView";
 import type { ChannelsView } from "./ChannelsView";
@@ -54,6 +55,7 @@ import type { JobStarted } from "./JobStarted";
 import type { LabelEntry } from "./LabelEntry";
 import type { ListConnections } from "./ListConnections";
 import type { ListDocuments } from "./ListDocuments";
+import type { ListTimers } from "./ListTimers";
 import type { LoginCode } from "./LoginCode";
 import type { MemoryCommit } from "./MemoryCommit";
 import type { MemoryEntry } from "./MemoryEntry";
@@ -107,6 +109,8 @@ import type { StorageOverview } from "./StorageOverview";
 import type { StorageUsage } from "./StorageUsage";
 import type { Submission } from "./Submission";
 import type { SystemView } from "./SystemView";
+import type { Timer } from "./Timer";
+import type { TimerCancelled } from "./TimerCancelled";
 import type { Trace } from "./Trace";
 import type { Unsubscribe } from "./Unsubscribe";
 import type { Unsubscribed } from "./Unsubscribed";
@@ -184,6 +188,8 @@ export interface Routes {
   raise_budget: { method: "POST"; path: "/api/v1/ops/raise_budget"; params: Record<string, never>; query: never; body: RaiseBudget; response: BudgetRaised };
   pin_chat: { method: "POST"; path: "/api/v1/ops/pin_chat"; params: Record<string, never>; query: never; body: PinChat; response: ChatDone };
   set_chat_context: { method: "POST"; path: "/api/v1/ops/set_chat_context"; params: Record<string, never>; query: never; body: SetChatContext; response: ChatDone };
+  list_timers: { method: "POST"; path: "/api/v1/ops/list_timers"; params: Record<string, never>; query: never; body: ListTimers; response: Array<Timer> };
+  cancel_timer: { method: "POST"; path: "/api/v1/ops/cancel_timer"; params: Record<string, never>; query: never; body: CancelTimer; response: TimerCancelled };
   rename_chat: { method: "POST"; path: "/api/v1/ops/rename_chat"; params: Record<string, never>; query: never; body: RenameChat; response: ChatDone };
   list_documents: { method: "POST"; path: "/api/v1/ops/list_documents"; params: Record<string, never>; query: never; body: ListDocuments; response: Array<DocumentSummary> };
   read_document: { method: "POST"; path: "/api/v1/ops/read_document"; params: Record<string, never>; query: never; body: ReadDocument; response: Document };
@@ -262,6 +268,8 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   raise_budget: { method: "POST", path: "/api/v1/ops/raise_budget" },
   pin_chat: { method: "POST", path: "/api/v1/ops/pin_chat" },
   set_chat_context: { method: "POST", path: "/api/v1/ops/set_chat_context" },
+  list_timers: { method: "POST", path: "/api/v1/ops/list_timers" },
+  cancel_timer: { method: "POST", path: "/api/v1/ops/cancel_timer" },
   rename_chat: { method: "POST", path: "/api/v1/ops/rename_chat" },
   list_documents: { method: "POST", path: "/api/v1/ops/list_documents" },
   read_document: { method: "POST", path: "/api/v1/ops/read_document" },

@@ -1445,11 +1445,14 @@ pub async fn reconcile_on_boot(hub: &Hub) -> Result<()> {
 /// for it, so it starts the one turn and the rest follow.
 async fn resume_turn(hub: &Hub, t: &botler_store::InterruptedTurn) -> Result<()> {
     let at = botler_core::clock::format_local(Utc::now(), hub.applied().await.defs.timezone);
-    let text = format!(
+    let mut text = format!(
         "The botler hub restarted at {at} while you were working; your turn was cut off. Your last tool call may \
          not have finished, or its result is missing. Check where you were (e.g. git status, files, running jobs) \
          and continue your task."
     );
+    if let Some(reminder) = crate::handover::reminder(hub, &t.instance).await? {
+        text.push_str(reminder);
+    }
     let mut ev =
         builtin(BuiltinPayload::Message(MessagePayload { text, files: vec![], mode: None, via: None }), Source::Hub)?
             .to(t.instance.clone());

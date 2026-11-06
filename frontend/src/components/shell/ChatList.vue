@@ -21,7 +21,7 @@ const waitingChats = computed(() => Object.keys(waitingByInstance.value).length)
 const chats = computed(() => {
   const door = frontDoorName.value;
   const shown = state.instances.filter((i) => i.state !== "archived" || state.showArchived || i.name === selected.value);
-  return chatOrder(shown, door, waitingByInstance.value);
+  return chatOrder(shown, door, waitingByInstance.value, state.usage?.activity_by_instance);
 });
 
 function badge(i: Instance): Badge {

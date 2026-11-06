@@ -145,6 +145,21 @@ impl Store {
         rows.iter().map(row).collect()
     }
 
+    /// Every delivery since `since`: to which instance, when, and the source of its event
+    /// (`user`, `hub`, `agent:<name>`, `runnable:<name>`, ...).
+    pub async fn deliveries_since(&self, since: DateTime<Utc>) -> Result<Vec<(String, DateTime<Utc>, String)>> {
+        let rows = sqlx::query(
+            "SELECT d.instance, d.created_at, e.source FROM deliveries d JOIN events e ON e.id = d.event_id
+             WHERE d.created_at >= ?",
+        )
+        .bind(ts(since))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| Ok((r.get("instance"), parse_ts("deliveries", r.get("created_at"))?, r.get("source"))))
+            .collect()
+    }
+
     /// The most recently delivered delivery of an instance (what started its current turn).
     pub async fn last_delivered(&self, instance: &str) -> Result<Option<Delivery>> {
         let r = sqlx::query(
