@@ -352,6 +352,8 @@ fn is_queued_message(ev: &Event) -> Result<bool> {
 /// duplicate ids, and renders the header. `previous` is when the instance's last delivery
 /// arrived: the header notes a long gap since then. `open` are the chat's open requests: a
 /// user's message lists them, since a reply in the chat often answers one.
+/// Also returns the event's whole text when it is longer than [`MAX_BODY`]: the envelope then
+/// carries its start, and the rest is for the chat's inbox ([`event_file`]).
 pub fn envelope(
     d: &Delivery,
     ev: &Event,
@@ -359,7 +361,7 @@ pub fn envelope(
     now: DateTime<Utc>,
     previous: Option<DateTime<Utc>>,
     open: &[Dialog],
-) -> Result<String> {
+) -> Result<(String, Option<String>)> {
     let mut rendered = catalog::render(ev, d.prompt.as_deref());
     if ev.source == Source::User && !open.is_empty() {
         let list: Vec<String> = open.iter().map(|o| format!("- `{}`: {}", o.id, o.question)).collect();
@@ -367,6 +369,20 @@ pub fn envelope(
             "\n\n(Your requests still open:\n{}\nIf this message answers one or makes it moot, withdraw it with cancel_request.)",
             list.join("\n")
         ));
+    }
+    // The user's own words always go in whole; a large event (a trial's output, a digest of
+    // listings) would otherwise fill the context and be resent on every call until compacted.
+    let mut full = None;
+    if ev.source != Source::User && rendered.len() > MAX_BODY {
+        let cut = rendered.floor_char_boundary(MAX_BODY);
+        let rest = rendered.len() - cut;
+        let shown = format!(
+            "{}\n\n[… {rest} more characters: the whole event is in {}/{}]",
+            &rendered[..cut],
+            crate::uploads::INBOX,
+            event_file(ev)
+        );
+        full = Some(std::mem::replace(&mut rendered, shown));
     }
     let body = DeliveryEnvelope {
         id: d.id.clone(),
@@ -381,7 +397,15 @@ pub fn envelope(
         gap: botler_core::clock::gap_note(now, previous),
     };
     let json = serde_json::to_string(&body).map_err(|e| HubError::Io(std::io::Error::other(e)))?;
-    Ok(format!("botler:delivery {json}"))
+    Ok((format!("botler:delivery {json}"), full))
+}
+
+/// How much of an event's text goes into the context (about 2k tokens).
+pub const MAX_BODY: usize = 8_000;
+
+/// Where a large event's whole text is, under the chat's inbox.
+pub fn event_file(ev: &Event) -> String {
+    format!("events/{}.md", ev.id)
 }
 
 /// Hand one delivery to pi. Returns whether it started a turn; a queued message is left pending
@@ -398,7 +422,14 @@ async fn deliver_one(hub: &Hub, agent: &LiveAgent, d: &Delivery, turn_started: b
         Source::User => hub.store.open_dialogs().await?.into_iter().filter(|o| o.instance == d.instance).collect(),
         _ => Vec::new(),
     };
-    let text = envelope(d, &ev, hub.applied().await.defs.timezone, Utc::now(), previous, &open)?;
+    let (text, full) = envelope(d, &ev, hub.applied().await.defs.timezone, Utc::now(), previous, &open)?;
+    if let Some(full) = full {
+        let path = hub.paths.inbox(&d.instance).join(event_file(&ev));
+        if let Some(dir) = path.parent() {
+            tokio::fs::create_dir_all(dir).await?;
+        }
+        tokio::fs::write(&path, full).await?;
+    }
     let streaming = if busy {
         // The user and urgent events interrupt at the next turn boundary; everything else waits.
         Some(if ev.urgent || ev.source == Source::User { Streaming::Steer } else { Streaming::FollowUp })

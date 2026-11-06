@@ -494,3 +494,28 @@ async fn a_turn_the_user_started_in_a_child_tells_the_parent_quietly() {
     pump(&e).await;
     assert_eq!(notices().await, [true, false], "the user's own turn: a quiet note");
 }
+
+#[tokio::test]
+async fn a_large_event_goes_in_cut_with_the_whole_of_it_in_the_inbox() {
+    let e = setup().await;
+    let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
+    let long = format!("start {} end", "x".repeat(20_000));
+    let ev = Event::new(kinds::MESSAGE, Source::Agent("botler".into()), Provenance::Trusted, Utc::now())
+        .to(chat.clone())
+        .payload(json!({ "text": long }));
+    let id = ev.id;
+    e.hub.emit(ev).await.unwrap();
+    pump(&e).await;
+    let prompts = e.fake.prompts(&agents::container_name(&e.hub, &chat));
+    let p = prompts.last().unwrap();
+    assert!(p.len() < 10_000, "cut: {} characters", p.len());
+    assert!(p.contains(&format!("more characters: the whole event is in /inbox/files/events/{id}.md")), "{p}");
+    let whole = std::fs::read_to_string(e.hub.paths.inbox(&chat).join(format!("events/{id}.md"))).unwrap();
+    assert!(whole.contains(&long));
+
+    // The user's own message goes in whole.
+    user_says(&e, &chat, &long).await;
+    pump(&e).await;
+    let prompts = e.fake.prompts(&agents::container_name(&e.hub, &chat));
+    assert!(prompts.last().unwrap().contains(&long));
+}
