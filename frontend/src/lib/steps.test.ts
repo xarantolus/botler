@@ -50,4 +50,11 @@ describe("foldsOf", () => {
     const parts = [tool("read"), text("now testing"), tool("bash")];
     expect(hidden(parts)).toEqual([true, false, false]);
   });
+
+  it("folds all but the latest tool calls of the run still going", () => {
+    const parts = [text("on it"), think, tool("a"), tool("b"), tool("c"), tool("d"), tool("e")];
+    expect(foldsOf(parts).map((f) => f.summary)).toEqual(["Used 2 tools so far"]);
+    expect(hidden(parts)).toEqual([false, true, true, true, false, false, false]);
+    expect(foldsOf(parts.slice(0, 6))).toEqual([]);
+  });
 });

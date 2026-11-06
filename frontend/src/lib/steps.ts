@@ -1,7 +1,7 @@
 // How an agent turn folds: each run of thinking and tool calls the agent has moved on from (a
 // remark of its follows) becomes one line, "Used 3 tools, edited 2 files". What it says between
 // them stays in the flow, and so do cards (requests, files, errors). The run it is still in
-// stays open, so its tools show as they run.
+// shows its latest tool calls as they run, the earlier ones folded ("Used 5 tools so far").
 
 import type { TranscriptPart } from "./transcript";
 
@@ -36,6 +36,9 @@ function summary(steps: TranscriptPart[]): string {
   return s[0]!.toUpperCase() + s.slice(1);
 }
 
+/** Tool calls of the run still going that stay visible. */
+const LATEST = 3;
+
 /** The folds of a turn's parts: its runs of tool calls (with their thinking) that text follows.
  * A run of thinking alone is not folded: it is one line already. */
 export function foldsOf(parts: TranscriptPart[]): Fold[] {
@@ -53,6 +56,13 @@ export function foldsOf(parts: TranscriptPart[]): Fold[] {
     // Only text ends a run: a card between two tools does not split it.
     if (p.type === "text") start = -1;
   });
+  if (start >= 0) {
+    const tools = parts.flatMap((p, i) => (i >= start && p.type === "dynamic-tool" ? [i] : []));
+    if (tools.length > LATEST + 1) {
+      const end = tools[tools.length - LATEST]!;
+      folds.push({ start, end, summary: `${summary(parts.slice(start, end))} so far` });
+    }
+  }
   return folds;
 }
 
