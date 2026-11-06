@@ -476,6 +476,16 @@ impl Store {
         Ok(())
     }
 
+    /// `name`'s turn got somewhere (a tool call finished): restarts that cut it off before do not
+    /// count against resuming it again.
+    pub async fn turn_progressed(&self, name: &str) -> Result<()> {
+        sqlx::query("UPDATE instances SET turn_interruptions = 0 WHERE name = ? AND turn_interruptions > 0")
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// At boot: the instances that were mid-turn when the hub stopped. Their marker is cleared and
     /// their interruption count bumped.
     pub async fn take_interrupted_turns(&self) -> Result<Vec<InterruptedTurn>> {

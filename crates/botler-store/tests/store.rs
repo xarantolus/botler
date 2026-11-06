@@ -504,3 +504,27 @@ async fn grants_and_subscriptions_follow_the_chat() {
     assert!(s.delete_subscription(&sub.id).await.unwrap());
     assert!(s.active_subscriptions().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_turn_that_gets_somewhere_starts_its_interruption_count_again() {
+    let s = store().await;
+    let n = NewInstance {
+        name: "c".into(),
+        definition: "chat".into(),
+        persistent: false,
+        session_file: "c.jsonl".into(),
+        branch: None,
+        parent: None,
+        depth: 0,
+        task: None,
+    };
+    s.create_instance(&n).await.unwrap();
+    let cut_off = async || {
+        s.begin_turn("c").await.unwrap();
+        s.take_interrupted_turns().await.unwrap()[0].interruptions
+    };
+    assert_eq!(cut_off().await, 1);
+    assert_eq!(cut_off().await, 2);
+    s.turn_progressed("c").await.unwrap();
+    assert_eq!(cut_off().await, 1, "a tool call finished in between");
+}

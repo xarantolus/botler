@@ -1057,6 +1057,12 @@ async fn pump(hub: Arc<Hub>, agent: Arc<LiveAgent>, mut events: mpsc::Receiver<P
                 agent.turn().tool_started(tool);
                 agent.since().tool();
             }
+            // Only a turn that keeps getting cut off without getting anywhere is given up on.
+            PiEventKind::ToolEnd { .. } => {
+                if let Err(e) = hub.store.turn_progressed(&agent.instance).await {
+                    tracing::error!(instance = %agent.instance, error = %e, "could not record the turn's progress");
+                }
+            }
             _ => {}
         }
     }
@@ -1201,7 +1207,8 @@ async fn watch_exit(
             None
         }
     };
-    let deliberate = agent.stopping.load(Ordering::SeqCst);
+    // The hub going down takes its containers with it: no crash.
+    let deliberate = agent.stopping.load(Ordering::SeqCst) || hub.agents.shutting_down.load(Ordering::SeqCst);
     // Idle or crashed, every instance only goes to sleep: it is woken by its next message with
     // its session and workspace intact. Ending a chat is an explicit act (archiving). Recorded
     // while it is still listed as live (and so not woken again), so that no longer being live
