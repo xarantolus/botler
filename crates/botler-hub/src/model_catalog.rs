@@ -119,13 +119,14 @@ pub fn pi_model(choice: &ModelChoice, known: Option<&CatalogModel>) -> pi_config
 /// `reserveTokens`, so that is set to compact at `compact_at` (0, or an unknown window: pi's
 /// default). The window itself stays the model's: pi fits every request, the summary of an
 /// already larger context included, into it, so a cut window starves the summary and the chat
-/// never compacts. The user's messages sent mid-run (steers) all reach the model at the next
+/// never compacts. A compaction keeps the last sixth of `compact_at` as it is (pi's default is a
+/// fixed 20k, a third of a 60k threshold, and with the summary the chat soon compacts again). The user's messages sent mid-run (steers) all reach the model at the next
 /// pause together, not one per model call.
 pub fn pi_settings(known: Option<&CatalogModel>, compact_at: u64) -> pi_config::Settings {
     let compaction = known
         .and_then(|k| k.context_length)
         .filter(|&c| compact_at > 0 && c > compact_at)
-        .map(|c| pi_config::Compaction { reserve_tokens: c - compact_at });
+        .map(|c| pi_config::Compaction { reserve_tokens: c - compact_at, keep_recent_tokens: compact_at / 6 });
     pi_config::Settings { steering_mode: pi_config::SteeringMode::All, compaction }
 }
 
@@ -349,7 +350,10 @@ mod tests {
         assert_eq!(serde_json::to_value(pi_model(&choice, None)).unwrap(), serde_json::json!({ "maxTokens": 32768 }));
         // Compacting at 120k of a 1M window: pi reserves the rest.
         let s = serde_json::to_value(pi_settings(c.get(&choice.id), 120_000)).unwrap();
-        assert_eq!(s, serde_json::json!({ "steeringMode": "all", "compaction": { "reserveTokens": 880_000 } }));
+        assert_eq!(
+            s,
+            serde_json::json!({ "steeringMode": "all", "compaction": { "reserveTokens": 880_000, "keepRecentTokens": 20_000 } })
+        );
         assert_eq!(pi_settings(c.get(&choice.id), 0).compaction, None);
         assert_eq!(pi_settings(None, 120_000).compaction, None);
     }

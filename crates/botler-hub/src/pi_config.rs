@@ -29,6 +29,7 @@ pub enum SteeringMode {
 #[serde(rename_all = "camelCase")]
 pub struct Compaction {
     pub reserve_tokens: u64,
+    pub keep_recent_tokens: u64,
 }
 
 /// `models.json`. pi skips an invalid one silently (and `null` values make it invalid), so

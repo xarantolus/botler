@@ -29,9 +29,18 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { compact, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { DeliveryEnvelope as Envelope, McpService, ToolDecl, TurnTool } from "./generated/index.js";
+
+// pi's update prompt keeps everything the previous summary held, so a long-running chat's summary
+// only grows (the apartment curator's reached 100k characters, about as large as the threshold
+// itself, and it compacted every few calls). Compactions here run pi's own summarizer with a
+// budget that makes it drop what is done and stale.
+const SUMMARY_BUDGET =
+  "Keep the whole summary under 1,500 words. Drop finished work that no longer matters, superseded " +
+  "decisions and details the agent can look up again (files, memory, tools); keep open tasks, the " +
+  "user's preferences and anything needed to continue.";
 
 const TOOLS_FILE = "/botler/agent-dir/tools.json";
 const TURN_TOOLS_FILE = "/botler/agent-dir/turn-tools.json";
@@ -266,5 +275,24 @@ export default function botler(pi: ExtensionAPI) {
         pi.appendEntry(SEEN, { id, event: env.event, from: env.from });
       }
     }
+  });
+
+  pi.on("session_before_compact", async (event, ctx) => {
+    if (!ctx.model) return;
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+    if (!auth.ok) throw new Error(`no credentials for ${ctx.model.id}`);
+    const focus = event.customInstructions ? `${event.customInstructions}\n\n${SUMMARY_BUDGET}` : SUMMARY_BUDGET;
+    const compaction = await compact(
+      event.preparation,
+      ctx.model,
+      auth.apiKey,
+      auth.headers && Object.fromEntries(Object.entries(auth.headers).filter((h): h is [string, string] => h[1] != null)),
+      focus,
+      event.signal,
+      pi.getThinkingLevel(),
+      undefined,
+      auth.env,
+    );
+    return { compaction };
   });
 }
