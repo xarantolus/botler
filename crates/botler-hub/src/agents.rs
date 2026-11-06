@@ -282,9 +282,6 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
     if agent.pi.is_compacting().await? {
         return Ok(());
     }
-    if compact_if_idle(hub, &agent).await? {
-        return Ok(());
-    }
     // A turn this loop started may not show as busy yet: queued messages wait for it too.
     let mut started = false;
     let changes = std::mem::take(&mut *agent.changes.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
@@ -305,45 +302,37 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
 
 /// Below this, compacting saves next to nothing (pi keeps the recent ~20k tokens anyway).
 const IDLE_COMPACT_FLOOR: u64 = 40_000;
-/// The quiet spell (its last delivery's time) each chat's idle compaction was last tried for.
+/// The quiet spell (its last activity) each chat's warm compaction was last tried for.
 const IDLE_COMPACTED: &str = "hub:idle-compacted";
 
-/// Compact a chat that wakes for a turn after `defaults.compact_after_idle` without messages:
-/// that turn would resend its whole old context, no longer cached, on every call. Returns whether
-/// pi is still compacting (the deliveries then wait for it).
-async fn compact_if_idle(hub: &Hub, agent: &LiveAgent) -> Result<bool> {
-    let Some(after) = hub.applied().await.defs.instance.defaults.compact_after_idle else { return Ok(false) };
-    if !hub.store.pending_deliveries(&agent.instance).await?.iter().any(|d| !d.quiet) || agent.pi.is_busy().await? {
-        return Ok(false);
+/// Compact a chat quiet for `defaults.compact_when_idle` while its provider still has the context
+/// cached (reading it costs a fraction then): its next turn, maybe hours later, starts from a
+/// summary instead of sending the whole old context again, uncached. Once per quiet spell (a
+/// compaction that fails is not tried again), in the background: it can take minutes.
+async fn compact_warm(agent: &Arc<LiveAgent>, hub: &Hub) -> Result<()> {
+    let spell = agent.last_active().to_rfc3339();
+    if hub.store.kv_get(IDLE_COMPACTED, &agent.instance).await?.as_deref() == Some(spell.as_str()) {
+        return Ok(());
     }
-    let Some(last) = hub.store.last_delivered(&agent.instance).await?.and_then(|d| d.delivered_at) else {
-        return Ok(false);
-    };
-    if Utc::now() - last < after.as_chrono() {
-        return Ok(false);
+    hub.store.kv_set(IDLE_COMPACTED, &agent.instance, &spell).await?;
+    if agent.pi.is_busy().await? {
+        return Ok(());
     }
     let stats = agent.pi.session_stats().await?;
     let tokens = stats.pointer("/contextUsage/tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
     if tokens < IDLE_COMPACT_FLOOR {
-        return Ok(false);
+        return Ok(());
     }
-    // One attempt per quiet spell: a compaction that fails (or outlasts the command's timeout and
-    // then fails) is not started again on every dispatch, each a paid call over the whole context.
-    let spell = last.to_rfc3339();
-    if hub.store.kv_get(IDLE_COMPACTED, &agent.instance).await?.as_deref() == Some(spell.as_str()) {
-        return Ok(false);
-    }
-    hub.store.kv_set(IDLE_COMPACTED, &agent.instance, &spell).await?;
-    tracing::info!(instance = %agent.instance, tokens, %after, "idle chat: compacting before its next turn");
-    match agent.pi.compact().await {
-        Ok(()) => Ok(false),
-        Err(PiError::Timeout { .. }) => Ok(true),
-        // The turn goes ahead on the full context.
-        Err(e) => {
-            tracing::warn!(instance = %agent.instance, error = %e, "could not compact the idle chat");
-            Ok(false)
+    tracing::info!(instance = %agent.instance, tokens, "quiet chat: compacting while its context is cached");
+    let agent = agent.clone();
+    tokio::spawn(async move {
+        match agent.pi.compact().await {
+            // Still compacting: pi reports the end in the session.
+            Ok(()) | Err(PiError::Timeout { .. }) => {}
+            Err(e) => tracing::warn!(instance = %agent.instance, error = %e, "could not compact the quiet chat"),
         }
-    }
+    });
+    Ok(())
 }
 
 /// A message the user queued: held (pending, cancellable) until the agent's whole run ends. One
@@ -1292,6 +1281,17 @@ pub async fn reap_idle(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
             continue;
         }
         let idle_for = now - agent.last_active();
+        if let Some(after) = applied.defs.instance.defaults.compact_when_idle
+            && idle_for >= after.as_chrono()
+            && def.is_some_and(|d| d.spec.hands_over())
+            && instance.archive_requested_at.is_none()
+        {
+            compact_warm(&agent, hub).await?;
+        }
+        // Stopping it would cut a compaction short.
+        if agent.pi.is_compacting().await? {
+            continue;
+        }
         let waiting = !always_on
             && idle_for > Duration::seconds(WAITING_GRACE_SECS)
             && waiting_on_user(hub, &agent.instance).await?;

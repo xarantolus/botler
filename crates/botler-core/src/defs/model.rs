@@ -256,12 +256,13 @@ pub struct Defaults {
     /// what costs. 0 compacts only near the model's window.
     #[serde(default = "Defaults::compact_at")]
     pub compact_at: u64,
-    /// A chat whose last message is older than this is compacted before its next turn (its old
-    /// context is no longer cached, so every call of that turn would pay for it in full), or
-    /// `"never"`.
-    #[serde(default = "Defaults::compact_after_idle", with = "never_or_duration")]
+    /// A chat quiet this long (and holding over 40k tokens) is compacted while the provider still
+    /// has its context cached, or `"never"`: its next turn, maybe hours later, would otherwise
+    /// send the whole old context again at the uncached price. pi keeps the latest ~20k tokens
+    /// as they are.
+    #[serde(default = "Defaults::compact_when_idle", with = "never_or_duration")]
     #[schemars(with = "String")]
-    pub compact_after_idle: Option<HumanDuration>,
+    pub compact_when_idle: Option<HumanDuration>,
     /// ...or when their session has been compacted this many times; 0 turns it off.
     #[serde(default = "Defaults::rollover_compactions")]
     pub rollover_compactions: u32,
@@ -312,8 +313,8 @@ impl Defaults {
     fn compact_at() -> u64 {
         60_000
     }
-    fn compact_after_idle() -> Option<HumanDuration> {
-        Some(HumanDuration::from_secs(4 * 3600))
+    fn compact_when_idle() -> Option<HumanDuration> {
+        Some(HumanDuration::from_secs(10 * 60))
     }
     fn rollover_compactions() -> u32 {
         3
@@ -334,7 +335,7 @@ impl Default for Defaults {
             reply_within: Self::reply_within(),
             rollover_tokens: Self::rollover_tokens(),
             compact_at: Self::compact_at(),
-            compact_after_idle: Self::compact_after_idle(),
+            compact_when_idle: Self::compact_when_idle(),
             rollover_compactions: Self::rollover_compactions(),
             memory_checkpoint: Self::memory_checkpoint(),
         }

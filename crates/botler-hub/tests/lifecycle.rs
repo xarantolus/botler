@@ -409,28 +409,30 @@ async fn an_agent_waits_through_the_hub_instead_of_a_shell() {
 }
 
 #[tokio::test]
-async fn a_chat_that_was_quiet_for_long_is_compacted_before_its_next_turn() {
+async fn a_quiet_chat_is_compacted_once_while_its_context_is_cached() {
     let e = setup().await;
     let toml = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../template/botler.toml")).unwrap();
-    let toml = toml.replace("[defaults]\n", "[defaults]\ncompact_after_idle = \"1s\"\n");
+    let toml = toml.replace("[defaults]\n", "[defaults]\ncompact_when_idle = \"1s\"\n");
     e.commit(&[("botler.toml", toml.as_str())]).await;
     let chat = router::new_instance(&e.hub, "chat", None, None).await.unwrap();
     user_says(&e, &chat, "hi").await;
     pump(&e).await;
     e.fake.set_context_tokens(&chat, 100_000);
-    user_says(&e, &chat, "right away").await;
-    pump(&e).await;
+    agents::reap_idle(&e.hub, Utc::now()).await.unwrap();
     assert_eq!(e.fake.compactions(&chat), 0, "a chat in use is not compacted");
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    user_says(&e, &chat, "much later").await;
-    pump(&e).await;
+    let later = Utc::now() + chrono::Duration::seconds(5);
+    agents::reap_idle(&e.hub, later).await.unwrap();
+    settle().await;
     assert_eq!(e.fake.compactions(&chat), 1);
-    assert!(e.hub.store.pending_deliveries(&chat).await.unwrap().is_empty(), "the message went in after it");
+    agents::reap_idle(&e.hub, later + chrono::Duration::seconds(5)).await.unwrap();
+    settle().await;
+    assert_eq!(e.fake.compactions(&chat), 1, "once per quiet spell");
     // A small context is left alone.
-    e.fake.set_context_tokens(&chat, 10_000);
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     user_says(&e, &chat, "again").await;
     pump(&e).await;
+    e.fake.set_context_tokens(&chat, 10_000);
+    agents::reap_idle(&e.hub, Utc::now() + chrono::Duration::seconds(5)).await.unwrap();
+    settle().await;
     assert_eq!(e.fake.compactions(&chat), 1);
 }
 
