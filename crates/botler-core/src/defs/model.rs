@@ -77,6 +77,11 @@ pub struct Models {
     /// the model's full maximum, which spend-capped provider keys reject.
     #[serde(default = "Models::default_max_tokens")]
     pub max_tokens: u32,
+    /// pi thinking level for models that reason, unless the model's entry sets one: `off`,
+    /// `minimal`, `low`, `medium`, `high`. Reasoning is paid output, resent context, and the
+    /// share of the cap a compaction's summary has left.
+    #[serde(default = "Models::default_thinking")]
+    pub thinking: String,
     /// The models we typically use, with what each is good for: suggestions for the web app and
     /// agents, not a whitelist. Also where per-model overrides go.
     #[serde(default, rename = "model", skip_serializing_if = "Vec::is_empty")]
@@ -88,7 +93,11 @@ pub struct Models {
 
 impl Models {
     fn default_max_tokens() -> u32 {
-        16_384
+        32_768
+    }
+
+    fn default_thinking() -> String {
+        "medium".into()
     }
 
     /// What a model name (an id, or a deprecated route name) resolves to.
@@ -112,7 +121,7 @@ impl Models {
             api_key_secret: self.api_key_secret.clone(),
             max_tokens: entry.and_then(|e| e.max_tokens).unwrap_or(self.max_tokens),
             input: entry.and_then(|e| e.input.clone()),
-            thinking: entry.and_then(|e| e.thinking.clone()),
+            thinking: entry.and_then(|e| e.thinking.clone()).or_else(|| Some(self.thinking.clone())),
         }
     }
 
@@ -133,6 +142,7 @@ impl Default for Models {
             api_key_secret: None,
             base_url: None,
             max_tokens: Self::default_max_tokens(),
+            thinking: Self::default_thinking(),
             models: vec![],
             routes: BTreeMap::new(),
         }
@@ -300,7 +310,7 @@ impl Defaults {
         150_000
     }
     fn compact_at() -> u64 {
-        150_000
+        60_000
     }
     fn compact_after_idle() -> Option<HumanDuration> {
         Some(HumanDuration::from_secs(4 * 3600))

@@ -9,8 +9,12 @@ version = 1
 # model list. Defaults are deliberately cheap: an agent opts into a stronger model by naming it.
 default = "deepseek/deepseek-v4.1-flash"
 api_key_secret = "OPENROUTER_API_KEY"
-# Output token cap per model call (lowered to the model's own maximum).
-max_tokens = 16384
+# Output token cap per model call (lowered to the model's own maximum). Output is paid per token
+# written, not by the cap; a compaction's summary has to fit in it too.
+max_tokens = 32768
+# How hard models that reason think (`off`, `minimal`, `low`, `medium`, `high`): reasoning is paid
+# output. An entry below can set its own `thinking`.
+thinking = "medium"
 
 # The models we typically use, with what each is good for. Suggestions, not a whitelist; an entry
 # can also override `max_tokens`, `input` (e.g. ["text", "image"]) or `thinking` for its model.

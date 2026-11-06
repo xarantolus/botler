@@ -39,7 +39,7 @@ async fn message_wakes_botler_and_is_delivered_once() {
         c.spec.mounts.iter().any(|m| matches!(m, botler_runtime::Mount::Tmpfs { dst } if dst == "/botler/agent-dir"))
     );
     let models = std::fs::read_to_string(e.hub.paths.agent_dir("botler").join("models.json")).unwrap();
-    assert!(models.contains("\"$OPENROUTER_API_KEY\"") && models.contains("16384"), "{models}");
+    assert!(models.contains("\"$OPENROUTER_API_KEY\"") && models.contains("32768"), "{models}");
     assert!(!models.contains("null"), "pi ignores models.json containing nulls: {models}");
     assert!(!models.contains("sk-test"), "secret values never land in rendered files");
     // Turn-ending ops: registered by the extension from the hub's own schemas, hidden over MCP.

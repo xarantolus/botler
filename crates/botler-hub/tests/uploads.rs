@@ -321,12 +321,12 @@ async fn image_input_reaches_models_json() {
             .unwrap();
     let model = &models["providers"]["openrouter"]["modelOverrides"]["~anthropic/claude-sonnet-latest"];
     assert_eq!(model["input"], json!(["text", "image"]));
-    assert_eq!((model["maxTokens"].as_u64(), model["contextWindow"].as_u64()), (Some(16384), Some(1_000_000)));
+    assert_eq!((model["maxTokens"].as_u64(), model["contextWindow"].as_u64()), (Some(32768), Some(1_000_000)));
     // OpenRouter serves every call from the cheapest of the model's providers.
     assert_eq!(models["providers"]["openrouter"]["compat"], json!({ "openRouterRouting": { "sort": "price" } }));
-    // pi compacts at `defaults.compact_at` (150k) by reserving the rest of the window.
+    // pi compacts at `defaults.compact_at` (60k) by reserving the rest of the window.
     let settings: Value =
         serde_json::from_str(&std::fs::read_to_string(e.hub.paths.agent_dir("looker").join("settings.json")).unwrap())
             .unwrap();
-    assert_eq!(settings, json!({ "steeringMode": "all", "compaction": { "reserveTokens": 850_000 } }));
+    assert_eq!(settings, json!({ "steeringMode": "all", "compaction": { "reserveTokens": 940_000 } }));
 }

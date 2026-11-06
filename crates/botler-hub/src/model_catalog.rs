@@ -341,12 +341,12 @@ mod tests {
         assert_eq!(m, serde_json::json!({ "maxTokens": 8192, "input": ["text"] }));
         choice.id = "~anthropic/claude-sonnet-latest".into();
         let m = serde_json::to_value(pi_model(&choice, c.get(&choice.id))).unwrap();
-        assert_eq!(m["maxTokens"], 16384);
+        assert_eq!(m["maxTokens"], 32768);
         assert_eq!(m["input"], serde_json::json!(["text", "image"]));
         assert_eq!(m["contextWindow"], 1000000);
         assert_eq!(m["cost"], serde_json::json!({ "input": 2.0, "output": 10.0, "cacheRead": 0.1 }));
         // Offline: only the configured cap.
-        assert_eq!(serde_json::to_value(pi_model(&choice, None)).unwrap(), serde_json::json!({ "maxTokens": 16384 }));
+        assert_eq!(serde_json::to_value(pi_model(&choice, None)).unwrap(), serde_json::json!({ "maxTokens": 32768 }));
         // Compacting at 120k of a 1M window: pi reserves the rest.
         let s = serde_json::to_value(pi_settings(c.get(&choice.id), 120_000)).unwrap();
         assert_eq!(s, serde_json::json!({ "steeringMode": "all", "compaction": { "reserveTokens": 880_000 } }));
