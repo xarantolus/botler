@@ -257,8 +257,9 @@ async fn deliver_to(hub: &Arc<Hub>, name: &str) -> Result<()> {
         && drifted(hub, &agent).await?
     {
         // A merge or a grant changed what its container should be: restart it (once its turn is
-        // over) so the delivery reaches the new one. The exit wakes the dispatcher again.
-        if !agent.busy() {
+        // over) so the delivery reaches the new one. The exit wakes the dispatcher again. pi's
+        // own compaction before a prompt counts as busy: stopping it loses the prompt.
+        if !agent.busy() && !agent.pi.is_busy().await? {
             tracing::info!(instance = %name, "environment changed; restarting the container");
             agent.stop().await;
         }

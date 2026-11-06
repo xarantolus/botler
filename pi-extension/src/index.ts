@@ -149,6 +149,8 @@ export function header(env: Envelope): string {
 
 export default function botler(pi: ExtensionAPI) {
   let seen = new Set<string>();
+  /** Deliveries passed to pi whose message is not in the session yet. */
+  const unsaved = new Map<string, Envelope>();
   const registered = new Set<string>();
 
   const services = Object.entries(loadJson<Record<string, McpService>>(MCP_SERVICES_FILE, {}));
@@ -240,14 +242,29 @@ export default function botler(pi: ExtensionAPI) {
     }
     if (seen.has(env.id)) return { action: "handled" };
     seen.add(env.id);
-    pi.appendEntry(SEEN, { id: env.id, event: env.event, from: env.from });
     if (env.quiet) {
+      pi.appendEntry(SEEN, { id: env.id, event: env.event, from: env.from });
       pi.sendMessage(
         { customType: NOTE, content: `${header(env)}\n(note: delivered without waking you; no reply needed)\n${env.body}`, display: true },
         { triggerTurn: false },
       );
       return { action: "handled" };
     }
+    // Recorded once the message is in the session: pi may compact first, and a container stopped
+    // meanwhile must get the delivery again instead of dropping it as one it has seen.
+    unsaved.set(env.id, env);
     return { action: "transform", text: `${header(env)}\n${env.body}`, images: event.images };
+  });
+
+  pi.on("message_end", async (event) => {
+    if (event.message.role !== "user" || unsaved.size === 0) return;
+    const content = event.message.content;
+    const text = typeof content === "string" ? content : content.map((c) => (c.type === "text" ? c.text : "")).join("");
+    for (const [id, env] of unsaved) {
+      if (text.includes(`| delivery ${id} |`)) {
+        unsaved.delete(id);
+        pi.appendEntry(SEEN, { id, event: env.event, from: env.from });
+      }
+    }
   });
 }
