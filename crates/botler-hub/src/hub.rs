@@ -95,6 +95,8 @@ pub struct Hub {
     /// network name the hub creates, so hubs sharing one container runtime never touch each
     /// other's containers.
     pub id: String,
+    /// The owner label of everything the hub creates ([`Paths::owner`]).
+    pub owner: String,
     pub config: HubConfig,
     pub store: Store,
     pub repo: Repo,
@@ -173,10 +175,12 @@ impl Hub {
         let memory = crate::memory::Memory::open(paths.memory()).await?;
         let (live, _) = broadcast::channel(1024);
         let search = crate::search::Index::open(&paths.search_db()).await?;
-        let id = paths.hub_id();
+        let id = paths.hub_id()?;
+        let owner = paths.owner()?;
         let catalog = crate::model_catalog::load_cached(&paths.root);
         Ok(Arc::new(Self {
             id,
+            owner,
             paths,
             config,
             store,
@@ -304,7 +308,7 @@ impl Hub {
     pub fn labels(&self, role: &str) -> std::collections::BTreeMap<String, String> {
         std::collections::BTreeMap::from([
             (crate::jobs::ROLE_LABEL.to_string(), role.to_string()),
-            (crate::images::OWNER_LABEL.to_string(), crate::config::path_str(&self.paths.root)),
+            (crate::images::OWNER_LABEL.to_string(), self.owner.clone()),
         ])
     }
 

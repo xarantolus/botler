@@ -62,11 +62,21 @@ impl Paths {
     pub fn shared_home(&self, name: &str) -> PathBuf {
         self.root.join("shared-homes").join(name)
     }
-    /// Short id of this hub: a hash of its data directory. It is part of every container and
-    /// network name the hub creates, and of its runtime directory.
-    pub fn hub_id(&self) -> String {
+    /// Who this hub is: the path its data directory had when the hub first ran, kept in `owner`,
+    /// so a moved directory is still the same hub. Its containers, networks and images are
+    /// labelled with it. Not part of a backup: a restored copy is a hub of its own.
+    pub fn owner(&self) -> std::io::Result<String> {
+        match std::fs::read_to_string(self.root.join("owner")) {
+            Ok(s) => Ok(s.trim().to_owned()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(path_str(&self.root)),
+            Err(e) => Err(e),
+        }
+    }
+    /// Short id of this hub: a hash of its [owner](Self::owner). It is part of every container
+    /// and network name the hub creates, and of its runtime directory.
+    pub fn hub_id(&self) -> std::io::Result<String> {
         use sha2::Digest;
-        hex::encode(sha2::Sha256::digest(path_str(&self.root)))[..8].to_string()
+        Ok(hex::encode(sha2::Sha256::digest(self.owner()?))[..8].to_string())
     }
     /// The hub's Unix socket lives here: `$XDG_RUNTIME_DIR/botler-<hub id>`, else
     /// `/tmp/botler-<uid>-<hub id>`. Not in the data directory, whose path may be too long for a
@@ -75,7 +85,7 @@ impl Paths {
     /// visible to containers that outlive it.
     pub fn run_dir(&self) -> std::io::Result<PathBuf> {
         use std::os::unix::fs::MetadataExt;
-        let id = self.hub_id();
+        let id = self.hub_id()?;
         match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|d| d.is_absolute() && d.is_dir()) {
             Some(dir) => Ok(dir.join(format!("botler-{id}"))),
             None => Ok(PathBuf::from(format!("/tmp/botler-{}-{id}", std::fs::metadata("/proc/self")?.uid()))),
@@ -114,6 +124,10 @@ impl Paths {
             "inbox",
         ] {
             std::fs::create_dir_all(self.root.join(d))?;
+        }
+        let owner = self.root.join("owner");
+        if !owner.exists() {
+            std::fs::write(owner, format!("{}\n", path_str(&self.root)))?;
         }
         private_dir(&self.run_dir()?)
     }
@@ -170,4 +184,24 @@ fn private_dir(dir: &Path) -> std::io::Result<()> {
 
 pub fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_moved_data_directory_is_the_same_hub() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = Paths::new(tmp.path().join("old"));
+        old.ensure().unwrap();
+        let id = old.hub_id().unwrap();
+        std::fs::rename(&old.root, tmp.path().join("new")).unwrap();
+        let new = Paths::new(tmp.path().join("new"));
+        new.ensure().unwrap();
+        assert_eq!(new.hub_id().unwrap(), id);
+        assert_eq!(new.owner().unwrap(), path_str(&old.root));
+        assert_ne!(Paths::new(tmp.path().join("other")).hub_id().unwrap(), id);
+        std::fs::remove_dir(new.run_dir().unwrap()).unwrap();
+    }
 }

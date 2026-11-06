@@ -333,7 +333,7 @@ pub async fn ensure_with(
 }
 
 pub fn owner(hub: &Hub) -> String {
-    crate::config::path_str(&hub.paths.root)
+    hub.owner.clone()
 }
 
 pub async fn ensure_agent_image(hub: &Hub, image: &str, commit: &str) -> Result<String> {
