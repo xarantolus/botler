@@ -5,7 +5,11 @@ import type { UsageTotals } from "./UsageTotals";
 /**
  * Model spend: today (in the hub's timezone) and all time.
  */
-export type Usage = { day_start: string, timezone: string, today: UsageTotals, today_by_instance: { [key in string]: UsageTotals }, total_by_instance: { [key in string]: UsageTotals }, 
+export type Usage = { day_start: string, timezone: string, today: UsageTotals, today_by_instance: { [key in string]: UsageTotals }, 
+/**
+ * The last 24 hours, whatever the day: what a chat costs now.
+ */
+last_day_by_instance: { [key in string]: UsageTotals }, total_by_instance: { [key in string]: UsageTotals }, 
 /**
  * The per-agent daily budget for agents that do not declare their own.
  */

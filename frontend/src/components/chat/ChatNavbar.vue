@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { copyText } from "../../lib/clipboard";
 // The chat's title bar: its name and what it is doing, what it cost, and its actions.
 import type { DropdownMenuItem } from "@nuxt/ui";
 import { computed, ref } from "vue";
@@ -22,7 +23,9 @@ const props = defineProps<{
   name: string;
   instance: Instance | null;
   badge: Badge | null;
+  /** Its spend in the last 24 hours, and in all. */
   cost?: number;
+  totalCost?: number;
   pending?: number;
   /** The agent is working, or messages wait for it: it can be stopped. */
   stoppable?: boolean;
@@ -112,7 +115,7 @@ const menu = computed((): DropdownMenuItem[][] => {
       label: "Copy name",
       icon: "i-lucide-copy",
       onSelect: () =>
-        void navigator.clipboard.writeText(props.name).then(
+        void copyText(props.name).then(
           () => notifySuccess("Copied", props.name),
           (e: unknown) => notifyError("Could not copy", e),
         ),
@@ -163,8 +166,8 @@ const menu = computed((): DropdownMenuItem[][] => {
       <UTooltip v-if="pending" :text="`${pending} message(s) waiting to be delivered`">
         <UBadge color="info" variant="subtle" icon="i-lucide-inbox" :label="String(pending)" class="hidden sm:inline-flex" />
       </UTooltip>
-      <UTooltip v-if="cost" text="What this chat has cost so far">
-        <UBadge color="neutral" variant="outline" :label="usd(cost)" class="hidden tabular-nums sm:inline-flex" />
+      <UTooltip v-if="cost || totalCost" :text="`${usd(cost ?? 0)} in the last 24 hours, ${usd(totalCost ?? 0)} in all`">
+        <UBadge color="neutral" variant="outline" :label="usd(cost ?? 0)" class="hidden tabular-nums sm:inline-flex" />
       </UTooltip>
       <UButton
         v-if="instance?.state === 'archived'"

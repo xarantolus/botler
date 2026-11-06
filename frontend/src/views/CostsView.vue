@@ -60,13 +60,13 @@ const chatColumns: TableColumn<ChatCost>[] = [
   { accessorKey: "instance", header: "Chat or job", meta: { class: { td: "whitespace-normal break-words min-w-36" } } },
   { id: "cost", header: "Cost" },
   { id: "calls", header: "Calls" },
-  { id: "tokens", header: "Tokens" },
+  { id: "tokens", header: "New tokens" },
 ];
 const modelColumns: TableColumn<ModelCost>[] = [
   { accessorKey: "model", header: "Model", meta: { class: { td: "whitespace-normal break-all min-w-36" } } },
   { id: "cost", header: "Cost" },
   { id: "calls", header: "Calls" },
-  { id: "tokens", header: "Tokens" },
+  { id: "tokens", header: "New tokens" },
 ];
 </script>
 
@@ -99,7 +99,8 @@ const modelColumns: TableColumn<ModelCost>[] = [
       <div>
         <p class="text-3xl font-semibold tabular-nums text-highlighted">{{ usd(costs.total.cost_usd) }}</p>
         <p class="text-sm text-muted">
-          {{ costs.total.calls }} model calls · {{ tokens(costs.total.tokens) }} tokens · {{ dayLabel(costs.from) }} to {{ dayLabel(costs.to) }}
+          {{ costs.total.calls }} model calls · {{ tokens(costs.total.tokens - costs.total.cache_read) }} new tokens ·
+          {{ tokens(costs.total.cache_read) }} context reread from cache · {{ dayLabel(costs.from) }} to {{ dayLabel(costs.to) }}
           ({{ costs.timezone }})
         </p>
         <p class="mt-1 text-xs text-dimmed">
@@ -117,7 +118,7 @@ const modelColumns: TableColumn<ModelCost>[] = [
             <UTooltip
               v-for="d in days"
               :key="d.day"
-              :text="`${dayLabel(d.day)}: ${usd(d.totals.cost_usd)} · ${d.totals.calls} calls · ${tokens(d.totals.tokens)} tokens`"
+              :text="`${dayLabel(d.day)}: ${usd(d.totals.cost_usd)} · ${d.totals.calls} calls · ${tokens(d.totals.tokens - d.totals.cache_read)} new tokens`"
             >
               <button
                 type="button"
@@ -155,7 +156,7 @@ const modelColumns: TableColumn<ModelCost>[] = [
           </template>
           <template #cost-cell="{ row }"><span class="tabular-nums">{{ usd(row.original.totals.cost_usd) }}</span></template>
           <template #calls-cell="{ row }"><span class="tabular-nums">{{ row.original.totals.calls }}</span></template>
-          <template #tokens-cell="{ row }"><span class="tabular-nums">{{ tokens(row.original.totals.tokens) }}</span></template>
+          <template #tokens-cell="{ row }"><span class="tabular-nums">{{ tokens(row.original.totals.tokens - row.original.totals.cache_read) }}</span></template>
           <template #empty><UEmpty icon="i-lucide-receipt" title="No model calls" description="Nothing ran in these days." variant="naked" /></template>
         </UTable>
       </section>
@@ -166,7 +167,7 @@ const modelColumns: TableColumn<ModelCost>[] = [
           <template #model-cell="{ row }"><code class="font-mono text-xs">{{ row.original.model }}</code></template>
           <template #cost-cell="{ row }"><span class="tabular-nums">{{ usd(row.original.totals.cost_usd) }}</span></template>
           <template #calls-cell="{ row }"><span class="tabular-nums">{{ row.original.totals.calls }}</span></template>
-          <template #tokens-cell="{ row }"><span class="tabular-nums">{{ tokens(row.original.totals.tokens) }}</span></template>
+          <template #tokens-cell="{ row }"><span class="tabular-nums">{{ tokens(row.original.totals.tokens - row.original.totals.cache_read) }}</span></template>
         </UTable>
       </section>
     </div>

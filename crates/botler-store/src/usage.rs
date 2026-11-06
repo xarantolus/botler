@@ -7,7 +7,10 @@ use crate::{Result, Store, parse_ts, ts};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, ts_rs::TS)]
 pub struct UsageTotals {
+    /// All tokens of the calls, context read back from the provider's cache included.
     pub tokens: i64,
+    /// The share of `tokens` read from the cache: context resent, not new work.
+    pub cache_read: i64,
     pub cost_usd: f64,
     pub calls: i64,
 }
@@ -19,18 +22,24 @@ pub struct UsageRow {
     pub at: DateTime<Utc>,
     pub model: String,
     pub tokens: i64,
+    pub cache_read: i64,
     pub cost_usd: f64,
+}
+
+fn totals(r: &sqlx::sqlite::SqliteRow) -> UsageTotals {
+    UsageTotals { tokens: r.get("t"), cache_read: r.get("r"), cost_usd: r.get("c"), calls: r.get("n") }
 }
 
 impl Store {
     /// Every model call from `from` until before `to`, oldest first.
     pub async fn usage_between(&self, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<UsageRow>> {
-        let rows =
-            sqlx::query("SELECT instance, at, model, tokens, cost_usd FROM usage WHERE at >= ? AND at < ? ORDER BY at")
-                .bind(ts(from))
-                .bind(ts(to))
-                .fetch_all(&self.pool)
-                .await?;
+        let rows = sqlx::query(
+            "SELECT instance, at, model, tokens, cache_read, cost_usd FROM usage WHERE at >= ? AND at < ? ORDER BY at",
+        )
+        .bind(ts(from))
+        .bind(ts(to))
+        .fetch_all(&self.pool)
+        .await?;
         rows.into_iter()
             .map(|r| {
                 Ok(UsageRow {
@@ -38,6 +47,7 @@ impl Store {
                     at: parse_ts("usage", r.get("at"))?,
                     model: r.get("model"),
                     tokens: r.get("tokens"),
+                    cache_read: r.get("cache_read"),
                     cost_usd: r.get("cost_usd"),
                 })
             })
@@ -52,11 +62,25 @@ impl Store {
         tokens: i64,
         cost_usd: f64,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO usage (instance, at, model, tokens, cost_usd) VALUES (?, ?, ?, ?, ?)")
+        self.record_call(instance, at, model, tokens, 0, cost_usd).await
+    }
+
+    /// One model call, `cache_read` of its `tokens` read from the provider's cache.
+    pub async fn record_call(
+        &self,
+        instance: &str,
+        at: DateTime<Utc>,
+        model: &str,
+        tokens: i64,
+        cache_read: i64,
+        cost_usd: f64,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO usage (instance, at, model, tokens, cache_read, cost_usd) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(instance)
             .bind(ts(at))
             .bind(model)
             .bind(tokens)
+            .bind(cache_read)
             .bind(cost_usd)
             .execute(&self.pool)
             .await?;
@@ -90,8 +114,7 @@ impl Store {
 
     /// Totals since `since`, for one instance or (with `None`) for everything.
     pub async fn usage_since(&self, instance: Option<&str>, since: DateTime<Utc>) -> Result<UsageTotals> {
-        const SELECT: &str =
-            "SELECT COALESCE(SUM(tokens), 0) AS t, COALESCE(SUM(cost_usd), 0.0) AS c, COUNT(*) AS n FROM usage";
+        const SELECT: &str = "SELECT COALESCE(SUM(tokens), 0) AS t, COALESCE(SUM(cache_read), 0) AS r, COALESCE(SUM(cost_usd), 0.0) AS c, COUNT(*) AS n FROM usage";
         let r = match instance {
             Some(i) => {
                 sqlx::query(sqlx::AssertSqlSafe(format!("{SELECT} WHERE instance = ? AND at >= ?")))
@@ -107,7 +130,7 @@ impl Store {
                     .await?
             }
         };
-        Ok(UsageTotals { tokens: r.get("t"), cost_usd: r.get("c"), calls: r.get("n") })
+        Ok(totals(&r))
     }
 
     /// Totals since `since` for every instance that used a model, by instance name.
@@ -116,14 +139,11 @@ impl Store {
         since: DateTime<Utc>,
     ) -> Result<std::collections::BTreeMap<String, UsageTotals>> {
         let rows = sqlx::query(
-            "SELECT instance, SUM(tokens) AS t, SUM(cost_usd) AS c, COUNT(*) AS n FROM usage WHERE at >= ? GROUP BY instance",
+            "SELECT instance, SUM(tokens) AS t, SUM(cache_read) AS r, SUM(cost_usd) AS c, COUNT(*) AS n FROM usage WHERE at >= ? GROUP BY instance",
         )
         .bind(ts(since))
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| (r.get("instance"), UsageTotals { tokens: r.get("t"), cost_usd: r.get("c"), calls: r.get("n") }))
-            .collect())
+        Ok(rows.into_iter().map(|r| (r.get("instance"), totals(&r))).collect())
     }
 }

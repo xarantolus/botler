@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use botler_store::UsageTotals;
+use botler_store::{UsageRow, UsageTotals};
 use chrono::{DateTime, Days, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
@@ -59,9 +59,10 @@ fn midnight(tz: Tz, day: NaiveDate) -> DateTime<Utc> {
     tz.from_local_datetime(&t).earliest().map_or_else(|| t.and_utc(), |t| t.with_timezone(&Utc))
 }
 
-fn add(t: &mut UsageTotals, tokens: i64, cost: f64) {
-    t.tokens += tokens;
-    t.cost_usd += cost;
+fn add(t: &mut UsageTotals, r: &UsageRow) {
+    t.tokens += r.tokens;
+    t.cache_read += r.cache_read;
+    t.cost_usd += r.cost_usd;
     t.calls += 1;
 }
 
@@ -86,10 +87,10 @@ pub async fn costs(hub: &Hub, q: &CostsQuery) -> Result<Costs> {
     let mut chats: BTreeMap<String, UsageTotals> = BTreeMap::new();
     let mut models: BTreeMap<String, UsageTotals> = BTreeMap::new();
     for r in rows {
-        add(&mut total, r.tokens, r.cost_usd);
-        add(days.entry(r.at.with_timezone(&tz).date_naive()).or_default(), r.tokens, r.cost_usd);
-        add(chats.entry(r.instance).or_default(), r.tokens, r.cost_usd);
-        add(models.entry(r.model).or_default(), r.tokens, r.cost_usd);
+        add(&mut total, &r);
+        add(days.entry(r.at.with_timezone(&tz).date_naive()).or_default(), &r);
+        add(chats.entry(r.instance.clone()).or_default(), &r);
+        add(models.entry(r.model.clone()).or_default(), &r);
     }
 
     let mut chat_costs = Vec::with_capacity(chats.len());

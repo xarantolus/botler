@@ -366,6 +366,8 @@ pub struct Usage {
     pub timezone: String,
     pub today: UsageTotals,
     pub today_by_instance: BTreeMap<String, UsageTotals>,
+    /// The last 24 hours, whatever the day: what a chat costs now.
+    pub last_day_by_instance: BTreeMap<String, UsageTotals>,
     pub total_by_instance: BTreeMap<String, UsageTotals>,
     /// The per-agent daily budget for agents that do not declare their own.
     pub default_budget: BudgetView,

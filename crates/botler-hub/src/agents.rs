@@ -1156,7 +1156,9 @@ pub async fn budget_today(hub: &Hub, instance: &str) -> Result<(Budget, botler_s
 
 /// Record usage and stop the agent when it exceeds its budget (stop and report, never truncate).
 async fn meter(hub: &Hub, agent: &LiveAgent, u: &botler_runtime::Usage) -> Result<()> {
-    hub.store.record_usage(&agent.instance, Utc::now(), &u.model, u.total_tokens, u.cost_usd).await?;
+    hub.store
+        .record_call(&agent.instance, Utc::now(), &u.model, u.total_tokens, u.cache_read_tokens, u.cost_usd)
+        .await?;
     let (budget, today, _) = budget_today(hub, &agent.instance).await?;
     let over = match (budget.usd_per_day, budget.tokens_per_day) {
         (Some(usd), _) if today.cost_usd > usd => {

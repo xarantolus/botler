@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { copyText } from "../../lib/clipboard";
 // Preformatted text (tool arguments and results, JSON payloads, logs), syntax-highlighted (the
 // language given or detected, lib/highlight.ts), with a copy button.
 import { computed, ref } from "vue";
@@ -12,7 +13,7 @@ const html = computed(() => (props.error || !props.text ? null : highlight(props
 
 async function copy() {
   try {
-    await navigator.clipboard.writeText(props.text);
+    await copyText(props.text);
     copied.value = true;
     window.setTimeout(() => (copied.value = false), 1500);
   } catch (e) {

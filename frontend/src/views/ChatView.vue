@@ -89,7 +89,8 @@ function showSession(file: string) {
   void router.replace({ query: { ...route.query, file: current ? undefined : file } });
 }
 
-const cost = computed(() => (name.value ? state.usage?.total_by_instance[name.value]?.cost_usd : undefined));
+const cost = computed(() => (name.value ? state.usage?.last_day_by_instance[name.value]?.cost_usd : undefined));
+const totalCost = computed(() => (name.value ? state.usage?.total_by_instance[name.value]?.cost_usd : undefined));
 
 // Two steps: a streamed chunk rebuilds only the second, which shares the first's messages.
 const sessionMessages = computed(() =>
@@ -245,6 +246,7 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
         :instance="inst"
         :badge="badge"
         :cost="cost"
+        :total-cost="totalCost"
         :pending="session?.pending"
         :stoppable="!!session && (session.busy || session.queued.length > 0)"
       />

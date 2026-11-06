@@ -58,6 +58,8 @@ pub enum Streaming {
 pub struct Usage {
     pub model: String,
     pub total_tokens: i64,
+    /// Of `total_tokens`, the context read back from the provider's cache.
+    pub cache_read_tokens: i64,
     pub cost_usd: f64,
 }
 
@@ -105,6 +107,7 @@ impl PiEvent {
                 let usage = msg.get("usage").filter(|_| role == "assistant").map(|u| Usage {
                     model: msg.get("model").and_then(Value::as_str).unwrap_or("").to_string(),
                     total_tokens: u.get("totalTokens").and_then(Value::as_i64).unwrap_or(0),
+                    cache_read_tokens: u.get("cacheRead").and_then(Value::as_i64).unwrap_or(0),
                     cost_usd: u.pointer("/cost/total").and_then(Value::as_f64).unwrap_or(0.0),
                 });
                 // An aborted call (budget stop, kill switch) is not a model failure.

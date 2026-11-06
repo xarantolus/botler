@@ -120,9 +120,11 @@ pub async fn chat(hub: &Hub, caller: &Caller, mut body: Value) -> Result<(u16, V
 
     let usage = reply.get("usage");
     let tokens = usage.and_then(|u| u.get("total_tokens")).and_then(Value::as_i64).unwrap_or(0);
+    let cached =
+        usage.and_then(|u| u.pointer("/prompt_tokens_details/cached_tokens")).and_then(Value::as_i64).unwrap_or(0);
     let cost = usage.and_then(|u| u.get("cost")).and_then(Value::as_f64).unwrap_or(0.0);
     if tokens > 0 || cost > 0.0 {
-        hub.store.record_usage(&key, now, &choice.id, tokens, cost).await.map_err(HubError::from)?;
+        hub.store.record_call(&key, now, &choice.id, tokens, cached, cost).await.map_err(HubError::from)?;
     }
     tracing::info!(%job, model = %choice.id, status, tokens, cost, "model call");
     Ok((status, reply))
