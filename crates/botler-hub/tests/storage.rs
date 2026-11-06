@@ -335,3 +335,42 @@ async fn restoring_reconciles_grants_subscriptions_and_a_removed_definition() {
     // Restoring again changes nothing.
     assert!(restore::restore(&e.hub, &chat, false).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn helpers_without_a_handover_are_archived_once_done_and_never_asked_for_a_report() {
+    let e = env().await;
+    with_key(&e).await;
+    let triage = spawn(&e, "triage").await;
+    let asking = spawn(&e, "triage").await;
+    let dev = spawn(&e, "dev").await;
+    sleep_all(&e).await;
+    let q = botler_store::NewDialog {
+        instance: asking.clone(),
+        kind: botler_store::DialogKind::Question,
+        question: "restart it?".into(),
+        detail: None,
+        ctas: vec!["yes".into()],
+        about: vec![],
+        priority: botler_store::Priority::Normal,
+        proposal_id: None,
+        spec: None,
+        expires_at: None,
+    };
+    e.hub.store.create_dialog(&q).await.unwrap();
+
+    storage::auto_archive(&e.hub, Utc::now() + Duration::minutes(30)).await.unwrap();
+    assert_eq!(e.hub.store.instance(&triage).await.unwrap().state, InstanceState::Dormant, "not within the hour");
+    storage::auto_archive(&e.hub, Utc::now() + Duration::minutes(61)).await.unwrap();
+    let done = e.hub.store.instance(&triage).await.unwrap();
+    assert_eq!(done.state, InstanceState::Archived);
+    let record = done.archive_report.unwrap();
+    assert!(record.forced && record.report.is_none(), "no report asked for");
+    assert_eq!(e.hub.store.instance(&asking).await.unwrap().state, InstanceState::Dormant, "it waits for an answer");
+    assert_eq!(e.hub.store.instance(&dev).await.unwrap().state, InstanceState::Dormant, "others hand over, later");
+    let events = e.hub.store.events_after(None, 10_000).await.unwrap();
+    assert!(!events.iter().any(|ev| ev.kind == kinds::ARCHIVE_REQUESTED && ev.to.as_deref() == Some(triage.as_str())));
+
+    // Archiving one by hand skips the report too.
+    storage::request_archive(&e.hub, &asking, None, botler_core::Source::User).await.unwrap();
+    assert_eq!(e.hub.store.instance(&asking).await.unwrap().state, InstanceState::Archived);
+}

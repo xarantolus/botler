@@ -279,13 +279,22 @@ pub async fn delete_chat(hub: &Hub, instance: &str) -> Result<u64> {
     Ok(freed)
 }
 
-/// Ask a chat to hand over and archive itself (`archive.requested`; it wakes to answer).
+/// Ask a chat to hand over and archive itself (`archive.requested`; it wakes to answer). A chat
+/// whose agent writes no handover (reviewers, triage) is archived right away instead.
 pub async fn request_archive(hub: &Hub, instance: &str, reason: Option<String>, source: Source) -> Result<()> {
+    if !hands_over(hub, instance).await? {
+        return force_archive(hub, instance, reason).await;
+    }
     hub.store.request_archive(instance).await?;
     let ev = crate::hub::builtin(BuiltinPayload::ArchiveRequested(ArchiveRequestedPayload { reason }), source)?
         .to(instance.to_string());
     hub.emit(ev).await?;
     Ok(())
+}
+
+async fn hands_over(hub: &Hub, instance: &str) -> Result<bool> {
+    let inst = hub.store.instance(instance).await?;
+    Ok(hub.applied().await.defs.agents.get(&inst.definition).is_none_or(|d| d.spec.hands_over()))
 }
 
 /// Archive without the agent's handover.
@@ -306,6 +315,8 @@ pub async fn force_archive(hub: &Hub, instance: &str, reason: Option<String>) ->
 
 /// At most this many dormant chats are asked to hand over per hour.
 pub const AUTO_ARCHIVE_PER_HOUR: u32 = 4;
+/// A chat of an agent without a handover (a reviewer, triage) quiet this long is done.
+pub const DONE_AFTER: Duration = Duration::from_secs(3600);
 /// A handover asked for this long ago that never came is replaced by a forced archive.
 pub const HANDOVER_WAIT: Duration = Duration::from_secs(24 * 3600);
 
@@ -316,7 +327,6 @@ pub async fn auto_archive(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
         return Ok(());
     }
     let applied = hub.applied().await;
-    let Some(after) = applied.defs.instance.defaults.auto_archive_after else { return Ok(()) };
     let wait = chrono::Duration::from_std(HANDOVER_WAIT).unwrap_or(chrono::Duration::MAX);
     for inst in hub.store.stale_archive_requests(now - wait).await? {
         if hub.agents.get(&inst.name).await.is_some_and(|a| a.busy()) {
@@ -325,6 +335,21 @@ pub async fn auto_archive(hub: &Hub, now: DateTime<Utc>) -> Result<()> {
         tracing::info!(instance = %inst.name, "no handover within a day; archiving without it");
         force_archive(hub, &inst.name, Some("no handover within a day of the archive request".into())).await?;
     }
+    // Done helpers (no handover): quiet for an hour, asked nothing and owed no answer.
+    let quiet = chrono::Duration::from_std(DONE_AFTER).unwrap_or(chrono::Duration::MAX);
+    let open = hub.store.open_dialogs().await?;
+    for inst in hub.store.archivable_instances(now - quiet).await? {
+        if applied.defs.agents.get(&inst.definition).is_none_or(|d| d.spec.hands_over())
+            || open.iter().any(|d| d.instance == inst.name)
+            || !hub.store.expectations_on(&inst.name).await?.is_empty()
+            || !hub.store.pending_deliveries(&inst.name).await?.is_empty()
+        {
+            continue;
+        }
+        tracing::info!(instance = %inst.name, "done; archiving it (its agent writes no handover)");
+        force_archive(hub, &inst.name, Some("done: quiet for an hour".into())).await?;
+    }
+    let Some(after) = applied.defs.instance.defaults.auto_archive_after else { return Ok(()) };
     let limit = RateLimit::new(AUTO_ARCHIVE_PER_HOUR, 3600);
     for inst in hub.store.archivable_instances(now - after.as_chrono()).await? {
         if applied.defs.agents.get(&inst.definition).is_some_and(|d| d.spec.always_on) {

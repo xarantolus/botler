@@ -5,7 +5,7 @@
 //! fails or hangs never keeps an agent awake.
 
 use botler_core::Source;
-use botler_core::defs::{AgentDef, Capability};
+use botler_core::defs::AgentDef;
 use botler_core::payloads::{BuiltinPayload, MessagePayload};
 use chrono::{DateTime, Duration, Utc};
 
@@ -58,13 +58,11 @@ impl Since {
     }
 }
 
-/// Whether `agent` (of `def`) should get a checkpoint before it goes idle. Reviewers and triage
-/// are left out: their verdict or incident resolution already records what they found.
+/// Whether `agent` (of `def`) should get a checkpoint before it goes idle. Agents without a
+/// handover (reviewers, triage) are left out: their verdict or incident resolution records what
+/// they found.
 pub async fn due(hub: &Hub, agent: &LiveAgent, def: &AgentDef) -> Result<bool> {
-    if !hub.applied().await.defs.instance.defaults.memory_checkpoint
-        || def.spec.capabilities.iter().any(|c| matches!(c, Capability::Review | Capability::Incidents))
-        || !agent.since().due()
-    {
+    if !hub.applied().await.defs.instance.defaults.memory_checkpoint || !def.spec.hands_over() || !agent.since().due() {
         return Ok(false);
     }
     // A handover (archiving, rollover) asks for memory itself.

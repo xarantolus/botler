@@ -389,6 +389,11 @@ pub struct Agent {
     /// Keep this agent's pi session running at all times (persistent agents only), e.g. `botler`.
     #[serde(default)]
     pub always_on: bool,
+    /// Whether its chats write a handover report when archived. Default: not for agents with the
+    /// `review` or `incidents` capability (their verdict or the incident's resolution records what
+    /// they found; they are archived without a report once done), yes for every other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handover: Option<bool>,
     /// Extra hub capabilities beyond the base agent role.
     #[serde(default)]
     pub capabilities: Vec<Capability>,
@@ -398,6 +403,15 @@ pub struct Agent {
     pub limits: BTreeMap<String, RateLimit>,
     #[serde(default, rename = "trigger")]
     pub triggers: Vec<Trigger>,
+}
+
+impl Agent {
+    /// Whether its chats write a handover report when archived (see [`Agent::handover`]).
+    pub fn hands_over(&self) -> bool {
+        self.handover.unwrap_or_else(|| {
+            !self.capabilities.iter().any(|c| matches!(c, Capability::Review | Capability::Incidents))
+        })
+    }
 }
 
 /// An MCP server pi runs as a subprocess in the agent's container.
