@@ -6,7 +6,7 @@ import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { call } from "../../api/client";
 import { confirm } from "../../confirm";
-import type { Instance } from "../../generated";
+import type { ContextFill, Instance } from "../../generated";
 import { chatTitle } from "../../lib/events";
 import type { Badge } from "../../lib/phase";
 import { usd } from "../../lib/time";
@@ -23,14 +23,32 @@ const props = defineProps<{
   name: string;
   instance: Instance | null;
   badge: Badge | null;
-  /** Its spend in the last 24 hours, and in all. */
+  /** Its spend in the last 24 hours, since midnight, and in all. */
   cost?: number;
   totalCost?: number;
+  todayCost?: number;
   pending?: number;
+  /** How full its context is. */
+  context?: ContextFill;
   /** The agent is working, or messages wait for it: it can be stopped. */
   stoppable?: boolean;
 }>();
 const router = useRouter();
+
+const kTokens = (t: number) => `${Math.round(t / 1000)}k`;
+const fill = computed(() => {
+  const c = props.context;
+  if (!c?.compact_at) return null;
+  const used = c.tokens == null ? "–" : kTokens(c.tokens);
+  return {
+    label: `${used} / ${kTokens(c.compact_at)}`,
+    title:
+      c.tokens == null
+        ? `Context: just compacted (its size shows after the next model call); compacted at ${kTokens(c.compact_at)} tokens. Click to change.`
+        : `Context: ${kTokens(c.tokens)} tokens, compacted at ${kTokens(c.compact_at)}. Click to change.`,
+    high: c.tokens != null && c.tokens > c.compact_at * 0.8,
+  };
+});
 
 const title = computed(() => (props.instance ? chatTitle(props.instance, frontDoorName.value) : props.name));
 const isFrontDoor = computed(() => props.name === frontDoorName.value);
@@ -149,6 +167,15 @@ const menu = computed((): DropdownMenuItem[][] => {
     <template #title>
       <UIcon v-if="isFrontDoor" name="i-lucide-star" class="size-4 shrink-0 text-warning" />
       <span class="truncate" :title="name">{{ title }}</span>
+      <button
+        v-if="fill && instance && instance.state !== 'archived'"
+        type="button"
+        :title="fill.title"
+        :class="['shrink-0 text-xs font-normal tabular-nums', fill.high ? 'text-warning' : 'text-muted']"
+        @click="setChatContext(name, instance.compact_at)"
+      >
+        {{ fill.label }}
+      </button>
       <PhaseBadge v-if="badge" :badge="badge" />
     </template>
     <template #right>
@@ -170,7 +197,7 @@ const menu = computed((): DropdownMenuItem[][] => {
       <UTooltip v-if="pending" :text="`${pending} message(s) waiting to be delivered`">
         <UBadge color="info" variant="subtle" icon="i-lucide-inbox" :label="String(pending)" class="hidden sm:inline-flex" />
       </UTooltip>
-      <UTooltip v-if="cost || totalCost" :text="`${usd(cost ?? 0)} in the last 24 hours, ${usd(totalCost ?? 0)} in all`">
+      <UTooltip v-if="cost || totalCost" :text="`${usd(cost ?? 0)} in the last 24 hours, ${usd(todayCost ?? 0)} today, ${usd(totalCost ?? 0)} in all`">
         <UBadge color="neutral" variant="outline" :label="usd(cost ?? 0)" class="hidden tabular-nums sm:inline-flex" />
       </UTooltip>
       <UButton

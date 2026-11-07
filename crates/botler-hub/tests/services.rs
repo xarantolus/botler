@@ -468,3 +468,38 @@ async fn an_upstream_image_runs_as_it_is_and_the_hub_checks_its_health() {
     let reason = ended.reason.unwrap();
     assert!(reason.contains("`pg_isready` failed") && reason.contains("no response"), "{reason}");
 }
+
+/// An incident whose failure went away by itself is resolved: a service running again for ten
+/// minutes, a job whose next run succeeded. A crash loop stays open.
+#[tokio::test]
+async fn an_incident_that_went_away_by_itself_is_resolved() {
+    let e = with_service(SVC).await;
+    let store = &e.hub.store;
+    let (svc, _) = store.record_failure("web", "exit", None).await.unwrap();
+    let (job, _) = store.record_failure("nightly", "exit", None).await.unwrap();
+    let (looping, _) = store.record_failure("other", "crashloop", None).await.unwrap();
+    let new = |runnable: &str, kind| botler_store::NewRun {
+        runnable: runnable.into(),
+        kind,
+        trigger_id: None,
+        event_id: None,
+        commit_id: None,
+    };
+    let web = store.create_run(&new("web", RunKind::Service)).await.unwrap();
+    store.start_run(&web.id, "c1").await.unwrap();
+    let nightly = store.create_run(&new("nightly", RunKind::Oneshot)).await.unwrap();
+    store.start_run(&nightly.id, "c2").await.unwrap();
+    let status = |id: String| async move { store.incident(&id).await.unwrap().status };
+
+    // Up for a minute, and the job still running: not yet.
+    botler_hub::failures::recover(&e.hub, Utc::now() + Duration::minutes(1)).await.unwrap();
+    assert_eq!(status(svc.id.clone()).await, IncidentStatus::Open);
+    assert_eq!(status(job.id.clone()).await, IncidentStatus::Open);
+
+    store.finish_run(&nightly.id, RunStatus::Succeeded, Some(0), None).await.unwrap();
+    botler_hub::failures::recover(&e.hub, Utc::now() + Duration::minutes(11)).await.unwrap();
+    assert_eq!(status(svc.id.clone()).await, IncidentStatus::Resolved);
+    assert_eq!(status(job.id.clone()).await, IncidentStatus::Resolved);
+    assert_eq!(status(looping.id.clone()).await, IncidentStatus::Open);
+    assert!(store.incident(&svc.id).await.unwrap().resolution.unwrap().contains("by itself"));
+}

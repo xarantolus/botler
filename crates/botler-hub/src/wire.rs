@@ -236,12 +236,21 @@ pub struct Trace {
 }
 
 #[derive(Debug, Serialize, TS)]
+pub struct ContextFill {
+    pub tokens: Option<u64>,
+    pub compact_at: u64,
+}
+
+#[derive(Debug, Serialize, TS)]
 pub struct SessionView {
     pub instance: Instance,
     /// pi is working on a turn.
     pub busy: bool,
     /// pi is compacting its session (the live stream's `compaction_start` came before the page).
     pub compacting: bool,
+    /// How full the context is: its size after the latest call (null right after a compaction)
+    /// and the size it is compacted at.
+    pub context: ContextFill,
     /// Deliveries waiting to be put into the session.
     pub pending: usize,
     /// Waking progress, or why the last wake failed.

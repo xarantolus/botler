@@ -501,6 +501,9 @@ pub struct Page {
     pub continues: bool,
     /// The deliveries anywhere on the branch.
     pub delivered: std::collections::HashSet<String>,
+    /// The context's size after the latest model call (what pi compacts by); none before the
+    /// first call and after a compaction until the next.
+    pub context_tokens: Option<u64>,
 }
 
 /// Which items of the active branch to read.
@@ -521,7 +524,13 @@ pub async fn read_page(hub: &Hub, instance: &str, file: Option<&str>, window: Wi
     let raw = match tokio::fs::read_to_string(&path).await {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Page { items: Vec::new(), earlier: 0, continues: false, delivered: Default::default() });
+            return Ok(Page {
+                items: Vec::new(),
+                earlier: 0,
+                continues: false,
+                delivered: Default::default(),
+                context_tokens: None,
+            });
         }
         Err(e) => return Err(HubError::Io(e)),
     };
@@ -534,6 +543,17 @@ pub async fn read_page(hub: &Hub, instance: &str, file: Option<&str>, window: Wi
         branch.push(e);
         cur = e.get("parentId").and_then(Value::as_str).and_then(|p| by_id.get(p).copied());
     }
+    let context_tokens = branch
+        .iter()
+        .find_map(|e| {
+            if e["type"] == "compaction" {
+                return Some(None);
+            }
+            let u = e.pointer("/message/usage").filter(|_| e["message"]["role"] == "assistant")?;
+            let n = |k: &str| u[k].as_u64().unwrap_or(0);
+            Some(Some(n("input") + n("cacheRead") + n("cacheWrite") + n("output")))
+        })
+        .flatten();
     branch.reverse();
 
     let items: Vec<Item> = branch.into_iter().filter_map(parse_entry).collect();
@@ -607,7 +627,7 @@ pub async fn read_page(hub: &Hub, instance: &str, file: Option<&str>, window: Wi
         }
         out.push(item);
     }
-    Ok(Page { items: out, earlier, continues, delivered })
+    Ok(Page { items: out, earlier, continues, delivered, context_tokens })
 }
 
 #[cfg(test)]

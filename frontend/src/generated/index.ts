@@ -76,6 +76,7 @@ export type * from "./CompactChat";
 export type * from "./Connections";
 export type * from "./ContextAdvice";
 export type * from "./ContextAdviceView";
+export type * from "./ContextFill";
 export type * from "./Costs";
 export type * from "./CostsQuery";
 export type * from "./DayCost";

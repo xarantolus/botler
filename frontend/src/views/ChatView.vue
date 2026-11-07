@@ -91,6 +91,7 @@ function showSession(file: string) {
 
 const cost = computed(() => (name.value ? state.usage?.last_day_by_instance[name.value]?.cost_usd : undefined));
 const totalCost = computed(() => (name.value ? state.usage?.total_by_instance[name.value]?.cost_usd : undefined));
+const todayCost = computed(() => (name.value ? state.usage?.today_by_instance[name.value]?.cost_usd : undefined));
 
 // Two steps: a streamed chunk rebuilds only the second, which shares the first's messages.
 const sessionMessages = computed(() =>
@@ -247,6 +248,8 @@ const loading = computed(() => !!name.value && !session.value && !state.sessionE
         :badge="badge"
         :cost="cost"
         :total-cost="totalCost"
+        :today-cost="todayCost"
+        :context="session?.context"
         :pending="session?.pending"
         :stoppable="!!session && (session.busy || session.queued.length > 0)"
       />

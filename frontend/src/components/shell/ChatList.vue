@@ -58,6 +58,7 @@ const items = computed((): ChatItem[] =>
     // What it costs now (the last 24 hours); the total is in the tooltip.
     const cost = state.usage?.last_day_by_instance[i.name]?.cost_usd;
     const total = state.usage?.total_by_instance[i.name]?.cost_usd;
+    const today = state.usage?.today_by_instance[i.name]?.cost_usd;
     const door = i.name === frontDoorName.value;
     return {
       label: chatTitle(i, frontDoorName.value),
@@ -69,7 +70,7 @@ const items = computed((): ChatItem[] =>
       badgeInfo: b,
       // The definition only when it is not the usual one; the star marks the front door.
       sub: [door || i.definition === "chat" ? "" : i.definition, cost ? usd(cost) : ""].filter(Boolean).join(" · "),
-      costTitle: total ? `${usd(cost ?? 0)} in the last 24 hours, ${usd(total)} in all` : undefined,
+      costTitle: total ? `${usd(cost ?? 0)} in the last 24 hours, ${usd(today ?? 0)} today, ${usd(total)} in all` : undefined,
     };
   }),
 );

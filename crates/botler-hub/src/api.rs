@@ -778,7 +778,16 @@ pub async fn session_view(
     let tool_renders =
         hub.applied().await.defs.tools.values().filter_map(|t| Some((t.pi_name(), t.render.clone()?))).collect();
     let queued = queued(hub, &inst.name, &page.delivered).await?;
+    let applied = hub.applied().await;
+    let compact_at = applied
+        .defs
+        .agents
+        .get(&inst.definition)
+        .map_or(applied.defs.instance.defaults.compact_at, |d| crate::agent_env::compact_at(&inst, d, &applied));
+    // Another session file (an earlier one, before a handover) is not what the chat holds now.
+    let tokens = if file == inst.session_file { page.context_tokens } else { None };
     Ok(SessionView {
+        context: crate::wire::ContextFill { tokens, compact_at },
         instance: inst,
         busy,
         compacting,

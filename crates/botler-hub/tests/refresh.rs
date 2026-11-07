@@ -242,3 +242,29 @@ async fn a_chat_that_would_cost_less_at_another_context_size_is_suggested_it() {
     botler_hub::ops::answer_question(&e.hub, &open[0].id, set, None).await.unwrap();
     assert_eq!(e.hub.store.instance("botler").await.unwrap().compact_at, Some(best));
 }
+
+/// A chat's view says how full its context is: the latest call's size against its compact_at,
+/// unknown right after a compaction.
+#[tokio::test]
+async fn a_chats_view_says_how_full_its_context_is() {
+    let e = botler_awake().await;
+    let inst = e.hub.store.instance("botler").await.unwrap();
+    let path = e.hub.paths.sessions("botler").join(&inst.session_file);
+    let call = |id: &str, parent: &str, input: u64| {
+        json!({"type": "message", "id": id, "parentId": parent, "timestamp": "2026-11-07T10:00:00Z", "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "ok"}],
+            "usage": {"input": input, "cacheRead": 40_000, "cacheWrite": 0, "output": 500}}})
+        .to_string()
+    };
+    let lines = [call("a", "", 1_000), call("b", "a", 2_000)];
+    std::fs::write(&path, lines.join("\n")).unwrap();
+    let view = |inst| botler_hub::api::session_view(&e.hub, inst, None, botler_hub::sessions::Window::default());
+    let v = view(inst.clone()).await.unwrap();
+    assert_eq!(v.context.tokens, Some(42_500));
+    assert_eq!(v.context.compact_at, e.hub.applied().await.defs.instance.defaults.compact_at);
+
+    let compaction =
+        json!({"type": "compaction", "id": "c", "parentId": "b", "timestamp": "2026-11-07T10:01:00Z", "summary": "s"});
+    std::fs::write(&path, [lines[0].clone(), lines[1].clone(), compaction.to_string()].join("\n")).unwrap();
+    assert_eq!(view(inst).await.unwrap().context.tokens, None);
+}

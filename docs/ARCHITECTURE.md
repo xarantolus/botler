@@ -123,7 +123,7 @@ Agents reach the same hub endpoints via MCP. Scripts the agent writes inside its
   - `replay_event`;
   - `propose_change`.
 
-  It then decides to fix (proposal), retry, silence or ask you. Incident resolution is recorded, and a recurrence reopens the incident with history.
+  It then decides to fix (proposal), retry, silence or ask you. Incident resolution is recorded, and a recurrence reopens the incident with history. An incident that went away by itself is resolved by the hub (`failures::recover`): a service running again for ten minutes since it last failed (heartbeating, if it has `[health]`), or a job whose next run succeeded; the chat on it gets a quiet note. A crash loop, a build, a held provider and an interrupted turn are never resolved this way.
 - **Hub self-failures** (the image build failed, the definition for a commit is invalid, the Podman socket is gone) go through the same incident path. Things like the daily digest, the email channel and voice are *not* built in. The core gives agents enough primitives to build them as monorepo content:
 - **See other agents**: `list_agents`, `get_events(filter)`, and `read_session(instance, since)` (a capability that `botler` holds by default). Plus `send_message` with correlated replies, so "ask each agent what it did today" works.
 - **Self-scheduling**: `set_timer(at, target)` and proposing a trigger file (cron → `resume botler` with a prompt). For example, the "daily digest" is an agent-written trigger and prompt.
