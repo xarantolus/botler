@@ -185,3 +185,52 @@ async fn a_chats_context_size_restarts_it_between_turns() {
     settle().await;
     assert_ne!(wake_id(&e).await, Some(before));
 }
+
+/// A chat whose last week would clearly have cost less at another context size is suggested it
+/// once; answering `set <N>k` applies it.
+#[tokio::test]
+async fn a_chat_that_would_cost_less_at_another_context_size_is_suggested_it() {
+    let e = botler_awake().await;
+    let user =
+        botler_hub::ops::Caller { principal: botler_hub::auth::Principal::User, capabilities: vec![], runnable: None };
+    botler_hub::ops::call(&e.hub, &user, "set_chat_context", json!({"chat": "botler", "compact_at": 500_000}))
+        .await
+        .unwrap();
+    // 400 calls, each adding 1.5k tokens to a context that never compacts at 500k.
+    let start = chrono::Utc::now() - chrono::Duration::hours(10);
+    let lines: Vec<String> = (0..400u64)
+        .map(|i| {
+            let context = 20_000 + i * 1_500;
+            json!({"type": "message", "timestamp": (start + chrono::Duration::minutes(i as i64)).to_rfc3339(), "message": {
+                "role": "assistant", "content": [{"type": "text", "text": "ok"}],
+                "usage": {"input": 500, "cacheRead": context - 500, "output": 300, "reasoning": 100,
+                          "cost": {"input": 2.5e-5, "cacheRead": (context - 500) as f64 * 1.5e-8, "output": 1.5e-4}}}})
+            .to_string()
+        })
+        .collect();
+    let inst = e.hub.store.instance("botler").await.unwrap();
+    std::fs::write(e.hub.paths.sessions("botler").join(&inst.session_file), lines.join("\n")).unwrap();
+
+    let view = botler_hub::ops::call(&e.hub, &user, "context_advice", json!({"chat": "botler"})).await.unwrap();
+    assert_eq!(view["suggested"], true, "{view}");
+    let best = view["advice"]["best"].as_u64().unwrap();
+    assert!(best < 500_000, "{view}");
+
+    let now = chrono::Utc::now();
+    botler_hub::context_advice::sweep(&e.hub, now).await.unwrap();
+    botler_hub::context_advice::sweep(&e.hub, now + chrono::Duration::days(2)).await.unwrap();
+    let asked: Vec<_> = e
+        .hub
+        .store
+        .open_dialogs()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|d| botler_hub::context_advice::chat_of(d) == Some("botler"))
+        .collect();
+    assert_eq!(asked.len(), 1, "asked once: {asked:?}");
+    let set = format!("set {}k", best / 1000);
+    assert!(asked[0].ctas.contains(&set), "{:?}", asked[0].ctas);
+    botler_hub::ops::answer_question(&e.hub, &asked[0].id, set, None).await.unwrap();
+    assert_eq!(e.hub.store.instance("botler").await.unwrap().compact_at, Some(best));
+}

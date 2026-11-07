@@ -183,6 +183,10 @@ pub async fn answer_question(
         crate::holds::release(hub, provider, "the user answered retry").await?;
         return Ok(d);
     }
+    if crate::context_advice::chat_of(&d).is_some() {
+        crate::context_advice::answered(hub, &d, &answer).await?;
+        return Ok(d);
+    }
     let payload = botler_core::payloads::BuiltinPayload::DialogAnswered(botler_core::payloads::DialogAnsweredPayload {
         dialog_id: d.id.clone(),
         question: d.question.clone(),

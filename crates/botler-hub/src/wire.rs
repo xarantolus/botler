@@ -470,6 +470,7 @@ routes! {
         raise_budget: crate::ops::RaiseBudget;
         pin_chat: crate::ops::PinChat;
         set_chat_context: crate::ops::SetChatContext;
+        context_advice: crate::ops::GetContextAdvice;
         list_timers: crate::ops::ListTimers;
         cancel_timer: crate::ops::CancelTimer;
         rename_chat: crate::ops::RenameChat;

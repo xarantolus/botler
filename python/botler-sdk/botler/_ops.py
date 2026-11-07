@@ -312,6 +312,15 @@ def set_chat_context(*, chat: str, compact_at: int | None = None) -> dict[str, A
     return call("set_chat_context", {"chat": chat, "compact_at": compact_at})
 
 
+def context_advice(*, chat: str) -> dict[str, Any]:
+    """What the chat's model calls of the last week would have cost at each context size.
+
+    Args:
+        chat: The chat (name or slug).
+    """
+    return call("context_advice", {"chat": chat})
+
+
 def rename_chat(*, chat: str, title: str) -> dict[str, Any]:
     """Give a chat the user's own title; its agent keeps it from then on.
 

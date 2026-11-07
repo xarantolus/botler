@@ -274,6 +274,10 @@ pub struct Defaults {
     /// told to condense it when it writes it, and its index lists it until it does. 0 turns it off.
     #[serde(default = "Defaults::memory_file_limit")]
     pub memory_file_limit: u64,
+    /// Once a day the hub replays each busy chat's last week of model calls at other context
+    /// sizes, and asks the user to change one that would clearly have cost less.
+    #[serde(default = "Defaults::suggest_context_size")]
+    pub suggest_context_size: bool,
 }
 
 /// `"never"` or a duration.
@@ -329,6 +333,9 @@ impl Defaults {
     fn memory_file_limit() -> u64 {
         16 * 1024
     }
+    fn suggest_context_size() -> bool {
+        true
+    }
 }
 
 impl Default for Defaults {
@@ -346,6 +353,7 @@ impl Default for Defaults {
             rollover_compactions: Self::rollover_compactions(),
             memory_checkpoint: Self::memory_checkpoint(),
             memory_file_limit: Self::memory_file_limit(),
+            suggest_context_size: Self::suggest_context_size(),
         }
     }
 }

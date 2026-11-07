@@ -263,6 +263,35 @@ impl Op for SetChatContext {
 }
 
 #[derive(Debug, Deserialize, JsonSchema, TS)]
+pub struct GetContextAdvice {
+    /// The chat (name or slug).
+    pub chat: String,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct ContextAdviceView {
+    /// Null while the chat has too few recent calls to say.
+    pub advice: Option<crate::context_advice::ContextAdvice>,
+    /// Whether the best size beats the current one clearly enough to suggest it.
+    pub suggested: bool,
+}
+
+impl Op for GetContextAdvice {
+    const NAME: &'static str = "context_advice";
+    const DESCRIPTION: &'static str =
+        "What the chat's model calls of the last week would have cost at each context size.";
+    const WHO: Who = Who::User;
+    type Output = ContextAdviceView;
+
+    async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<ContextAdviceView, OpError> {
+        let inst = chat_named(hub, &self.chat).await?;
+        let advice = crate::context_advice::for_chat(hub, &inst.name).await?;
+        let suggested = advice.as_ref().and_then(crate::context_advice::suggestion).is_some();
+        Ok(ContextAdviceView { advice, suggested })
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, TS)]
 pub struct RenameChat {
     /// The chat (name or slug).
     pub chat: String,

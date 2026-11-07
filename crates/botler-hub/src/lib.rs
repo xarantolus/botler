@@ -12,6 +12,7 @@ pub mod bindings;
 pub mod channels;
 pub mod checkpoint;
 pub mod config;
+pub mod context_advice;
 pub mod control;
 pub mod costs;
 pub mod embedded;

@@ -284,6 +284,7 @@ pub static OPS: &[OpSpec] = &[
     op::<RaiseBudget>(),
     op::<PinChat>(),
     op::<SetChatContext>(),
+    op::<GetContextAdvice>(),
     op::<RenameChat>(),
     op::<GetSessionTree>(),
     op::<GotoEntry>(),

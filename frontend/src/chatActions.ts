@@ -63,10 +63,26 @@ export async function pinChat(chat: string, pinned: boolean): Promise<void> {
 
 /** Set how large the chat's context grows before it is compacted, in thousands of tokens. */
 export async function setChatContext(chat: string, current: number | null): Promise<void> {
+  // What the chat's last week would have cost at each size, when it ran enough calls to say.
+  let priced = "";
+  try {
+    const { advice } = await call("context_advice", { body: { chat } });
+    if (advice) {
+      const k = (t: number) => `${Math.round(t / 1000)}k`;
+      const sizes = advice.sizes.map(
+        (s) =>
+          `${k(s.compact_at)} $${s.cost_usd.toFixed(2)}${s.compact_at === advice.best ? " (cheapest)" : ""}${s.compact_at === advice.current ? " (now)" : ""}`,
+      );
+      priced = ` Its ${advice.calls} model calls of the last ${Math.max(1, Math.round(advice.days))} days, replayed at each size: ${sizes.join(" · ")}.`;
+    }
+  } catch (e) {
+    notifyError("Could not price the context sizes", e);
+  }
   const ok = await confirm({
     title: "Context size",
     description:
-      "The chat is compacted (older messages summarised) once its context passes this many thousand tokens. More keeps more detail at hand; every model call resends it. Empty: its agent's default.",
+      "The chat is compacted (older messages summarised) once its context passes this many thousand tokens. More keeps more detail at hand; every model call resends it. Empty: its agent's default." +
+      priced,
     confirmLabel: "Save",
     reason: { label: "Thousand tokens", placeholder: "e.g. 120", value: current ? String(current / 1000) : "" },
   });

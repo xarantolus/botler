@@ -25,6 +25,7 @@ import type { ClearChatCaches } from "./ClearChatCaches";
 import type { CollectGarbage } from "./CollectGarbage";
 import type { CompactChat } from "./CompactChat";
 import type { Connections } from "./Connections";
+import type { ContextAdviceView } from "./ContextAdviceView";
 import type { Costs } from "./Costs";
 import type { CostsQuery } from "./CostsQuery";
 import type { DeleteChat } from "./DeleteChat";
@@ -42,6 +43,7 @@ import type { EventPosted } from "./EventPosted";
 import type { EventsQuery } from "./EventsQuery";
 import type { ForkChat } from "./ForkChat";
 import type { Freed } from "./Freed";
+import type { GetContextAdvice } from "./GetContextAdvice";
 import type { GetProposal } from "./GetProposal";
 import type { GetRunLogs } from "./GetRunLogs";
 import type { GetSessionTree } from "./GetSessionTree";
@@ -188,6 +190,7 @@ export interface Routes {
   raise_budget: { method: "POST"; path: "/api/v1/ops/raise_budget"; params: Record<string, never>; query: never; body: RaiseBudget; response: BudgetRaised };
   pin_chat: { method: "POST"; path: "/api/v1/ops/pin_chat"; params: Record<string, never>; query: never; body: PinChat; response: ChatDone };
   set_chat_context: { method: "POST"; path: "/api/v1/ops/set_chat_context"; params: Record<string, never>; query: never; body: SetChatContext; response: ChatDone };
+  context_advice: { method: "POST"; path: "/api/v1/ops/context_advice"; params: Record<string, never>; query: never; body: GetContextAdvice; response: ContextAdviceView };
   list_timers: { method: "POST"; path: "/api/v1/ops/list_timers"; params: Record<string, never>; query: never; body: ListTimers; response: Array<Timer> };
   cancel_timer: { method: "POST"; path: "/api/v1/ops/cancel_timer"; params: Record<string, never>; query: never; body: CancelTimer; response: TimerCancelled };
   rename_chat: { method: "POST"; path: "/api/v1/ops/rename_chat"; params: Record<string, never>; query: never; body: RenameChat; response: ChatDone };
@@ -268,6 +271,7 @@ export const ROUTES: { [K in keyof Routes]: { method: Routes[K]["method"]; path:
   raise_budget: { method: "POST", path: "/api/v1/ops/raise_budget" },
   pin_chat: { method: "POST", path: "/api/v1/ops/pin_chat" },
   set_chat_context: { method: "POST", path: "/api/v1/ops/set_chat_context" },
+  context_advice: { method: "POST", path: "/api/v1/ops/context_advice" },
   list_timers: { method: "POST", path: "/api/v1/ops/list_timers" },
   cancel_timer: { method: "POST", path: "/api/v1/ops/cancel_timer" },
   rename_chat: { method: "POST", path: "/api/v1/ops/rename_chat" },
