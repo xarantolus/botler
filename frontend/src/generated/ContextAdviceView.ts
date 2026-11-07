@@ -7,6 +7,6 @@ export type ContextAdviceView = {
  */
 advice: ContextAdvice | null, 
 /**
- * Whether the best size beats the current one clearly enough to suggest it.
+ * Whether the best size saves enough (`[defaults] suggest_context_savings`) to suggest it.
  */
 suggested: boolean, };

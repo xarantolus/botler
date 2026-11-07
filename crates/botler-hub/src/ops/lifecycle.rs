@@ -252,6 +252,7 @@ impl Op for SetChatContext {
         }
         let inst = chat_named(hub, &self.chat).await?;
         hub.store.set_compact_at(&inst.name, self.compact_at).await?;
+        crate::context_advice::changed(hub, &inst.name).await?;
         crate::agents::write_pi_settings(hub, &inst.name).await?;
         hub.dispatch_notify.notify_one();
         let note = match self.compact_at {
@@ -272,7 +273,7 @@ pub struct GetContextAdvice {
 pub struct ContextAdviceView {
     /// Null while the chat has too few recent calls to say.
     pub advice: Option<crate::context_advice::ContextAdvice>,
-    /// Whether the best size beats the current one clearly enough to suggest it.
+    /// Whether the best size saves enough (`[defaults] suggest_context_savings`) to suggest it.
     pub suggested: bool,
 }
 
@@ -286,7 +287,8 @@ impl Op for GetContextAdvice {
     async fn call(self, hub: &Arc<Hub>, _: &Caller) -> Result<ContextAdviceView, OpError> {
         let inst = chat_named(hub, &self.chat).await?;
         let advice = crate::context_advice::for_chat(hub, &inst.name).await?;
-        let suggested = advice.as_ref().and_then(crate::context_advice::suggestion).is_some();
+        let savings = hub.applied().await.defs.instance.defaults.suggest_context_savings;
+        let suggested = advice.as_ref().and_then(|a| crate::context_advice::suggestion(a, savings)).is_some();
         Ok(ContextAdviceView { advice, suggested })
     }
 }

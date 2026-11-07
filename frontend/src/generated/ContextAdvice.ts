@@ -6,7 +6,7 @@ import type { SizeCost } from "./SizeCost";
  */
 export type ContextAdvice = { current: number, 
 /**
- * The cheapest size.
+ * The size to suggest: the cheapest, or one within 5% of it nearer the current size.
  */
 best: number, 
 /**

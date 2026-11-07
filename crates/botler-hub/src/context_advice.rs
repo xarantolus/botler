@@ -4,11 +4,15 @@
 //! apartment curator read the same listing photos again). Which wins depends on the chat: how fast
 //! its context grows, how long its turns are, what it repeats. The hub replays the chat's calls of
 //! the last week under each candidate size, with their real growth and prices, and suggests the
-//! cheapest when it beats the current size clearly (`[defaults] suggest_context_size`).
+//! cheapest when it beats the current size clearly (`[defaults] suggest_context_savings`).
+//!
+//! Sizes do not flip back and forth: the suggestion is the size nearest the current one among
+//! those within 5% of the cheapest (neighbouring sizes differ by about that much, which is noise),
+//! it must save the configured share (20%), a chat whose size changed is left alone for two weeks
+//! so its new size gets calls of its own, and one the user answered `keep` for a month.
 
 use std::sync::Arc;
 
-use botler_core::FRONT_DOOR;
 use botler_store::{Dialog, DialogKind, NewDialog, Priority};
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
@@ -20,10 +24,12 @@ use crate::hub::{Hub, Result};
 const SIZES: [u64; 9] = [40_000, 60_000, 80_000, 100_000, 150_000, 200_000, 300_000, 500_000, 800_000];
 /// Too few calls say nothing about a chat.
 const MIN_CALLS: usize = 100;
-/// Suggested only when the best size would have cost at most this share of the current one.
-const WORTH: f64 = 0.8;
-/// kv: chat → when it was last looked at (RFC 3339).
+/// Sizes within this share of the cheapest count as the cheapest: the nearest to the current wins.
+const NOISE: f64 = 1.05;
+/// kv: chat → when it is looked at next (RFC 3339).
 const CHECKED: &str = "hub:context-advice";
+/// kv: chat → when its context size last changed.
+const CHANGED: &str = "hub:context-changed";
 const ABOUT: &str = "context:";
 /// Output tokens of a summary call (the summary, ~1,500 words, and its thinking).
 const SUMMARY_OUTPUT: f64 = 4_000.0;
@@ -40,7 +46,7 @@ pub struct SizeCost {
 #[derive(Clone, Debug, Serialize, ts_rs::TS)]
 pub struct ContextAdvice {
     pub current: u64,
-    /// The cheapest size.
+    /// The size to suggest: the cheapest, or one within 5% of it nearer the current size.
     pub best: u64,
     /// The calls replayed, and over how many days.
     pub calls: u32,
@@ -234,8 +240,10 @@ pub fn analyse(session: &str, since: DateTime<Utc>, current: u64, window: Option
         candidates.sort_unstable();
     }
     let sizes: Vec<SizeCost> = candidates.into_iter().map(|s| simulate(&h, calls, s, base, summary, again)).collect();
+    let cheapest = sizes.iter().map(|s| s.cost_usd).min_by(f64::total_cmp)?;
+    let distance = |s: &SizeCost| (s.compact_at as f64 / current.max(1) as f64).ln().abs();
     let best =
-        sizes.iter().filter(|s| SIZES.contains(&s.compact_at)).min_by(|a, b| a.cost_usd.total_cmp(&b.cost_usd))?;
+        sizes.iter().filter(|s| s.cost_usd <= cheapest * NOISE).min_by(|a, b| distance(a).total_cmp(&distance(b)))?;
     let days = (calls[calls.len() - 1].at - calls[0].at).num_minutes() as f64 / (24.0 * 60.0);
     Some(ContextAdvice {
         current,
@@ -269,31 +277,44 @@ pub async fn for_chat(hub: &Hub, chat: &str) -> Result<Option<ContextAdvice>> {
         .map_err(|e| crate::hub::HubError::Io(std::io::Error::other(e)))
 }
 
-/// The suggestion an advice makes, if the best size beats the current one clearly.
-pub fn suggestion(a: &ContextAdvice) -> Option<(f64, f64)> {
+/// The suggestion an advice makes, if the best size saves at least `savings` percent.
+pub fn suggestion(a: &ContextAdvice, savings: u32) -> Option<(f64, f64)> {
     let (now, best) = (a.current_cost()?, a.cost(a.best)?);
-    (a.best != a.current && best <= now * WORTH).then_some((now, best))
+    let worth = 1.0 - f64::from(savings) / 100.0;
+    (savings > 0 && a.best != a.current && best <= now * worth).then_some((now, best))
+}
+
+/// `chat`'s context size changed (by the user or an answered suggestion): no suggestion until its
+/// new size has two weeks of calls.
+pub async fn changed(hub: &Hub, chat: &str) -> Result<()> {
+    hub.store.kv_set(CHANGED, chat, &Utc::now().to_rfc3339()).await?;
+    Ok(())
+}
+
+fn at(map: &std::collections::HashMap<String, String>, chat: &str) -> Option<DateTime<Utc>> {
+    map.get(chat).and_then(|t| DateTime::parse_from_rfc3339(t).ok()).map(|t| t.with_timezone(&Utc))
 }
 
 /// Once a day, look at each chat that ran enough calls; suggest a size where one would have cost
-/// clearly less. A chat is asked at most once a week.
+/// clearly less, on the chat. A chat is asked at most once a week.
 pub async fn sweep(hub: &Arc<Hub>, now: DateTime<Utc>) -> Result<()> {
-    if !hub.applied().await.defs.instance.defaults.suggest_context_size {
+    let savings = hub.applied().await.defs.instance.defaults.suggest_context_savings;
+    if savings == 0 {
         return Ok(());
     }
     let checked: std::collections::HashMap<String, String> = hub.store.kv_list(CHECKED).await?.into_iter().collect();
+    let changed: std::collections::HashMap<String, String> = hub.store.kv_list(CHANGED).await?.into_iter().collect();
     let open: Vec<Dialog> = hub.store.open_dialogs().await?;
     for instance in hub.store.live_instances().await? {
-        let last = checked.get(&instance.name).and_then(|t| DateTime::parse_from_rfc3339(t).ok());
-        if last.is_some_and(|t| now - t.with_timezone(&Utc) < Duration::days(1)) {
+        if at(&checked, &instance.name).is_some_and(|t| now < t)
+            || at(&changed, &instance.name).is_some_and(|t| now - t < Duration::days(14))
+            || open.iter().any(|d| chat_of(d) == Some(instance.name.as_str()))
+        {
             continue;
         }
-        hub.store.kv_set(CHECKED, &instance.name, &now.to_rfc3339()).await?;
-        if open.iter().any(|d| chat_of(d) == Some(instance.name.as_str())) {
-            continue;
-        }
+        hub.store.kv_set(CHECKED, &instance.name, &(now + Duration::days(1)).to_rfc3339()).await?;
         let Some(advice) = for_chat(hub, &instance.name).await? else { continue };
-        let Some((now_cost, best_cost)) = suggestion(&advice) else { continue };
+        let Some((now_cost, best_cost)) = suggestion(&advice, savings) else { continue };
         let k = |t: u64| format!("{}k", t / 1000);
         let rows: Vec<String> = advice
             .sizes
@@ -306,7 +327,8 @@ pub async fn sweep(hub: &Arc<Hub>, now: DateTime<Utc>) -> Result<()> {
         let d = hub
             .store
             .create_dialog(&NewDialog {
-                instance: FRONT_DOOR.into(),
+                // On the chat itself: it is about that chat.
+                instance: instance.name.clone(),
                 kind: DialogKind::Question,
                 question: format!(
                     "{} would cost about {:.0}% less with a context size of {}",
@@ -333,8 +355,8 @@ pub async fn sweep(hub: &Arc<Hub>, now: DateTime<Utc>) -> Result<()> {
                 expires_at: Some(now + Duration::days(3)),
             })
             .await?;
-        // Not asked again for a week, whatever the answer.
-        hub.store.kv_set(CHECKED, &instance.name, &(now + Duration::days(6)).to_rfc3339()).await?;
+        // Not asked again for a week, whatever the answer (`keep`: a month).
+        hub.store.kv_set(CHECKED, &instance.name, &(now + Duration::days(7)).to_rfc3339()).await?;
         crate::notify::dialog_opened(hub, &d).await;
     }
     Ok(())
@@ -345,14 +367,18 @@ pub fn chat_of(d: &Dialog) -> Option<&str> {
     d.about.iter().find_map(|a| a.strip_prefix(ABOUT))
 }
 
-/// The user answered a context-size request: `set <N>k` applies it.
+/// The user answered a context-size request: `set <N>k` applies it, anything else keeps the size
+/// and the chat is not asked again for a month.
 pub async fn answered(hub: &Hub, d: &Dialog, answer: &str) -> Result<()> {
     let Some(chat) = chat_of(d) else { return Ok(()) };
     let Some(k) = answer.trim().strip_prefix("set ").and_then(|s| s.trim().trim_end_matches('k').parse::<u64>().ok())
     else {
+        let later = Utc::now() + Duration::days(30);
+        hub.store.kv_set(CHECKED, chat, &later.to_rfc3339()).await?;
         return Ok(());
     };
     hub.store.set_compact_at(chat, Some(k * 1000)).await?;
+    changed(hub, chat).await?;
     crate::agents::write_pi_settings(hub, chat).await?;
     hub.dispatch_notify.notify_one();
     Ok(())
@@ -403,7 +429,7 @@ pub(crate) mod tests {
     fn a_chat_that_repeats_nothing_is_cheapest_small() {
         let a = advise(&session(600, 3, 1_500, 500_000, 0), 500_000);
         assert!(a.best <= 100_000, "{a:?}");
-        let (now, best) = suggestion(&a).unwrap();
+        let (now, best) = suggestion(&a, 20).unwrap();
         assert!(best < now * 0.6, "{now} {best}");
     }
 

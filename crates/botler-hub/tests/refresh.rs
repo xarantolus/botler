@@ -216,21 +216,29 @@ async fn a_chat_that_would_cost_less_at_another_context_size_is_suggested_it() {
     let best = view["advice"]["best"].as_u64().unwrap();
     assert!(best < 500_000, "{view}");
 
-    let now = chrono::Utc::now();
-    botler_hub::context_advice::sweep(&e.hub, now).await.unwrap();
-    botler_hub::context_advice::sweep(&e.hub, now + chrono::Duration::days(2)).await.unwrap();
-    let asked: Vec<_> = e
-        .hub
-        .store
-        .open_dialogs()
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|d| botler_hub::context_advice::chat_of(d) == Some("botler"))
-        .collect();
-    assert_eq!(asked.len(), 1, "asked once: {asked:?}");
+    let asked = || async {
+        let open = e.hub.store.open_dialogs().await.unwrap();
+        open.into_iter().filter(|d| botler_hub::context_advice::chat_of(d) == Some("botler")).collect::<Vec<_>>()
+    };
+    let sweep =
+        |days: i64| botler_hub::context_advice::sweep(&e.hub, chrono::Utc::now() + chrono::Duration::days(days));
+    // The size was just set: it gets two weeks of its own calls first.
+    sweep(0).await.unwrap();
+    assert!(asked().await.is_empty());
+    sweep(15).await.unwrap();
+    sweep(17).await.unwrap();
+    let open = asked().await;
+    assert_eq!(open.len(), 1, "asked once: {open:?}");
+    assert_eq!(open[0].instance, "botler", "shown on the chat");
+    // `keep`: not asked again for a month.
+    botler_hub::ops::answer_question(&e.hub, &open[0].id, "keep".into(), None).await.unwrap();
+    sweep(25).await.unwrap();
+    assert!(asked().await.is_empty());
+    assert_eq!(e.hub.store.instance("botler").await.unwrap().compact_at, Some(500_000));
+    sweep(50).await.unwrap();
+    let open = asked().await;
     let set = format!("set {}k", best / 1000);
-    assert!(asked[0].ctas.contains(&set), "{:?}", asked[0].ctas);
-    botler_hub::ops::answer_question(&e.hub, &asked[0].id, set, None).await.unwrap();
+    assert!(open[0].ctas.contains(&set), "{:?}", open[0].ctas);
+    botler_hub::ops::answer_question(&e.hub, &open[0].id, set, None).await.unwrap();
     assert_eq!(e.hub.store.instance("botler").await.unwrap().compact_at, Some(best));
 }
