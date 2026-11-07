@@ -189,6 +189,13 @@ export function withoutOldThinking<M extends Message>(messages: M[]): M[] {
   });
 }
 
+/** A reply that ended with neither text nor a tool call (the hub's `unanswered`). */
+export function thinkingOnly(m: { stopReason?: string; content?: unknown }): boolean {
+  if (m.stopReason !== "stop" && m.stopReason !== "length") return false;
+  const parts = Array.isArray(m.content) ? (m.content as { type?: string; text?: string }[]) : [];
+  return !parts.some((p) => p.type === "toolCall" || (p.type === "text" && !!p.text?.trim()));
+}
+
 export function header(env: Envelope): string {
   const when = env.at ? `${env.at}${env.gap ? ` (${env.gap})` : ""} | ` : "";
   return `[${when}from ${env.from} | provenance: ${env.provenance} | ${env.kind} | delivery ${env.id} | event ${env.event}]`;
@@ -243,7 +250,27 @@ export default function botler(pi: ExtensionAPI) {
     const below = LEVELS.slice(0, LEVELS.indexOf(ceiling) + 1).reverse().find(offered);
     if (below) pi.setThinkingLevel(below);
   };
-  pi.on("agent_start", async (_event, ctx) => capThinking(ctx.model));
+  // A reply of thinking only (the hub fails such a turn and retries it) is a model caught in its
+  // reasoning: DeepSeek V4.1 Flash repeated a name ("phd, phd, ...") on every retry. The next
+  // attempt runs without thinking, so it answers; the turn after gets its level back.
+  let unthinking = false;
+  pi.on("agent_start", async (_event, ctx) => {
+    const replies = ctx.sessionManager
+      .getBranch()
+      .flatMap((e) => (e.type === "message" && e.message.role === "assistant" ? [e.message] : []));
+    const last = replies[replies.length - 1];
+    if (last && thinkingOnly(last as { stopReason?: string; content?: unknown })) {
+      unthinking = true;
+      pi.setThinkingLevel("off");
+      return;
+    }
+    if (unthinking) {
+      unthinking = false;
+      const ceiling = thinkingCeiling();
+      if (ceiling) pi.setThinkingLevel(ceiling);
+    }
+    capThinking(ctx.model);
+  });
   pi.on("context", async (event) => ({ messages: withoutOldThinking(event.messages) }));
 
   pi.on("session_start", async (_event, ctx) => {
