@@ -167,6 +167,28 @@ function parse(text: string): Envelope | undefined {
   }
 }
 
+// Earlier turns' thinking is not sent again: pi replays it with every call, so it stayed in the
+// context until compaction (about half of the curator's context growth). The turn still running,
+// from the last user message, keeps it, as reasoning models need while they call tools; like
+// Anthropic's and DeepSeek's own APIs. The prefix up to the previous turn stays cached, the
+// previous turn is read once more without its thinking.
+type Message = { role: string; content?: unknown };
+
+export function withoutOldThinking<M extends Message>(messages: M[]): M[] {
+  let current = messages.length;
+  while (current > 0 && messages[current - 1]!.role !== "user") current--;
+  current = Math.max(current - 1, 0);
+  return messages.map((m, i) => {
+    if (i >= current || m.role !== "assistant" || !Array.isArray(m.content)) return m;
+    const parts = m.content as { type?: string; thoughtSignature?: string }[];
+    if (!parts.some((p) => p.type === "thinking" || p.thoughtSignature)) return m;
+    const content = parts
+      .filter((p) => p.type !== "thinking")
+      .map((p) => (p.thoughtSignature ? { ...p, thoughtSignature: undefined } : p));
+    return { ...m, content };
+  });
+}
+
 export function header(env: Envelope): string {
   const when = env.at ? `${env.at}${env.gap ? ` (${env.gap})` : ""} | ` : "";
   return `[${when}from ${env.from} | provenance: ${env.provenance} | ${env.kind} | delivery ${env.id} | event ${env.event}]`;
@@ -222,6 +244,7 @@ export default function botler(pi: ExtensionAPI) {
     if (below) pi.setThinkingLevel(below);
   };
   pi.on("agent_start", async (_event, ctx) => capThinking(ctx.model));
+  pi.on("context", async (event) => ({ messages: withoutOldThinking(event.messages) }));
 
   pi.on("session_start", async (_event, ctx) => {
     capThinking(ctx.model);
