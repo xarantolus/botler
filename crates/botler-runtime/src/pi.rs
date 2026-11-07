@@ -112,7 +112,12 @@ impl PiEvent {
                 });
                 // An aborted call (budget stop, kill switch) is not a model failure.
                 let aborted = msg.get("stopReason").and_then(Value::as_str) == Some("aborted");
-                let error = msg.get("errorMessage").and_then(Value::as_str).filter(|_| !aborted).map(String::from);
+                let error = msg
+                    .get("errorMessage")
+                    .and_then(Value::as_str)
+                    .filter(|_| !aborted)
+                    .map(String::from)
+                    .or_else(|| (role == "assistant" && unanswered(&msg)).then(|| UNANSWERED.to_string()));
                 let field = |k: &str| msg.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
                 let called = match (field("model"), field("provider")) {
                     (Some(m), Some(p)) => Some(format!("calling {m} via {p}")),
@@ -132,6 +137,22 @@ impl PiEvent {
         };
         Self { kind, raw }
     }
+}
+
+/// A reply that ended with neither text nor a tool call: the model stopped after thinking only
+/// (DeepSeek V4.1 Flash once looped in its reasoning, "philipph, philipph, ...", and stopped), so
+/// the user got no answer. It fails the turn, which is retried like a transient error.
+const UNANSWERED: &str = "the model ended its reply without an answer (it only thought)";
+
+fn unanswered(msg: &Value) -> bool {
+    let stopped = matches!(msg.get("stopReason").and_then(Value::as_str), Some("stop" | "length"));
+    let parts = msg.get("content").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    let answered = parts.iter().any(|p| match p.get("type").and_then(Value::as_str) {
+        Some("text") => p.get("text").and_then(Value::as_str).is_some_and(|t| !t.trim().is_empty()),
+        Some("toolCall") => true,
+        _ => false,
+    });
+    stopped && !answered
 }
 
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>;
@@ -313,6 +334,23 @@ async fn read_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reply_of_thinking_only_is_an_error() {
+        let end = |content: Value, stop: &str| {
+            let raw = json!({"type": "message_end", "message": {"role": "assistant", "stopReason": stop, "content": content}});
+            match PiEvent::parse(raw).kind {
+                PiEventKind::MessageEnd { error, .. } => error,
+                k => panic!("{k:?}"),
+            }
+        };
+        let thought = json!({"type": "thinking", "thinking": "philipph, philipph"});
+        assert_eq!(end(json!([thought]), "stop").as_deref(), Some(UNANSWERED));
+        assert_eq!(end(json!([thought, {"type": "text", "text": " "}]), "length").as_deref(), Some(UNANSWERED));
+        assert_eq!(end(json!([thought, {"type": "text", "text": "Hi"}]), "stop"), None);
+        assert_eq!(end(json!([thought, {"type": "toolCall", "name": "bash"}]), "toolUse"), None);
+        assert_eq!(end(json!([thought]), "aborted"), None);
+    }
 
     /// A scripted fake pi: answers commands from a closure, emits extra lines.
     fn fake(respond: impl Fn(&Value) -> Vec<Value> + Send + 'static) -> (PiClient, mpsc::Receiver<PiEvent>) {

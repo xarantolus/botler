@@ -598,7 +598,7 @@ impl Fake {
                     let error = st.fail_turns.get_mut(instance).and_then(VecDeque::pop_front);
                     (st.hold_turns, error)
                 };
-                let mut message = json!({"role": "assistant", "model": "fake/model", "provider": "openrouter", "stopReason": "stop", "usage": {"totalTokens": 100, "cost": {"total": 0.001}}});
+                let mut message = json!({"role": "assistant", "model": "fake/model", "provider": "openrouter", "stopReason": "stop", "content": [{"type": "text", "text": "Done."}], "usage": {"totalTokens": 100, "cost": {"total": 0.001}}});
                 if let Some(e) = error {
                     message["stopReason"] = json!("error");
                     message["errorMessage"] = json!(e);
