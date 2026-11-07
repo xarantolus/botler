@@ -141,4 +141,30 @@ async fn a_chat_that_woke_while_its_service_was_down_reconnects_when_it_is_back(
     let stopped = out["stopped"].as_str().unwrap().to_string();
     let run = e.hub.store.run(&stopped).await.unwrap();
     assert_eq!(run.reason.as_deref(), Some(format!("restarted by {chat}").as_str()));
+
+    // A chat that woke while it ran reconnects once a restart (a deploy) brought other tools.
+    services::reconcile(&e.hub).await.unwrap();
+    let ev = Event::new(kinds::MESSAGE, Source::User, Provenance::Trusted, Utc::now())
+        .to(chat.clone())
+        .payload(json!({"text": "again"}));
+    e.hub.emit(ev).await.unwrap();
+    e.route().await;
+    agents::dispatch_pending(&e.hub).await.unwrap();
+    let listed: Value = serde_json::from_str(&std::fs::read_to_string(&services_json).unwrap()).unwrap();
+    assert!(listed[0]["run"].is_string(), "{listed}");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    agents::reconnect_services(&e.hub).await.unwrap();
+    assert!(e.hub.agents.get(&chat).await.is_some(), "restarted though its service did not");
+    botler_hub::ops::call(&e.hub, &agent, "restart_service", json!({"service": "browser"})).await.unwrap();
+    services::reconcile(&e.hub).await.unwrap();
+    agents::reconnect_services(&e.hub).await.unwrap();
+    let mut reconnected = false;
+    for _ in 0..100 {
+        if e.hub.agents.get(&chat).await.is_none() {
+            reconnected = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(reconnected, "the chat kept the tools of the service's previous run");
 }

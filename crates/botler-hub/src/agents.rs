@@ -956,6 +956,9 @@ struct ServiceAddress {
     /// restarts, and is refreshed when this agent wakes.
     ip: Option<String>,
     port: u16,
+    /// The service's run while this agent woke: a later run may serve other tools and has
+    /// another IP, so the agent is restarted when idle ([`reconnect_services`]).
+    run: Option<String>,
 }
 
 async fn service_addresses(hub: &Hub, applied: &crate::hub::Applied, env: &Environment) -> Result<Vec<ServiceAddress>> {
@@ -964,8 +967,10 @@ async fn service_addresses(hub: &Hub, applied: &crate::hub::Applied, env: &Envir
         // Validation guarantees a service with a port.
         let Some(port) = applied.defs.jobs.get(&svc).and_then(|j| j.spec.env.port) else { continue };
         let info = hub.containers.inspect(&crate::services::container_name(hub, &svc)).await?;
-        let ip = info.filter(|c| c.running).and_then(|c| c.ips.get(&hub.network()).cloned());
-        out.push(ServiceAddress { host: svc.clone(), name: svc, ip, port });
+        let running = info.filter(|c| c.running);
+        let ip = running.as_ref().and_then(|c| c.ips.get(&hub.network()).cloned());
+        let run = running.and_then(|c| c.labels.get(crate::jobs::RUN_LABEL).cloned());
+        out.push(ServiceAddress { host: svc.clone(), name: svc, ip, port, run });
     }
     Ok(out)
 }
@@ -1551,12 +1556,14 @@ pub async fn keep_always_on(hub: &Arc<Hub>) -> Result<()> {
 }
 
 /// A chat that woke while a service it uses was down has none of that service's tools: pi
-/// connects its MCP servers once, at start, and `services.json` has no address for it. Once the
-/// service is back (running, and heartbeating if it declares `[health]`), restart such a chat
-/// when it is idle; always-on ones come right back, others with their next message.
+/// connects its MCP servers once, at start, and `services.json` has no address for it. One that
+/// woke before the service restarted (a deploy) has its old tools and IP: pi lists a server's
+/// tools once, as it connects. Once the service is back (running, and heartbeating if it declares
+/// `[health]`), restart such a chat when it is idle; always-on ones come right back, others with
+/// their next message.
 pub async fn reconnect_services(hub: &Hub) -> Result<()> {
     let applied = hub.applied().await;
-    let ready: Vec<String> = hub
+    let ready: Vec<(String, String)> = hub
         .store
         .active_runs()
         .await?
@@ -1565,7 +1572,7 @@ pub async fn reconnect_services(hub: &Hub) -> Result<()> {
         .filter(|r| {
             applied.defs.jobs.get(&r.runnable).is_some_and(|j| j.spec.health.is_none()) || r.heartbeat_at.is_some()
         })
-        .map(|r| r.runnable)
+        .map(|r| (r.runnable, r.id))
         .collect();
     for agent in hub.agents.all().await {
         if agent.busy() || agent.stopping() {
@@ -1578,13 +1585,12 @@ pub async fn reconnect_services(hub: &Hub) -> Result<()> {
             Err(e) => return Err(e.into()),
         };
         let listed: Vec<serde_json::Value> = serde_json::from_str(&text).map_err(|e| HubError::Io(e.into()))?;
-        let back = listed
-            .iter()
-            .filter(|s| s["ip"].is_null())
-            .filter_map(|s| s["name"].as_str())
-            .find(|n| ready.iter().any(|r| r == n));
+        let back = listed.iter().find_map(|s| {
+            let (name, run) = ready.iter().find(|(n, _)| s["name"].as_str() == Some(n))?;
+            (s["ip"].is_null() || s["run"].as_str() != Some(run)).then_some(name)
+        });
         if let Some(service) = back {
-            tracing::info!(instance = %agent.instance, service, "a service it uses is back; restarting it to connect");
+            tracing::info!(instance = %agent.instance, service, "a service it uses is back or restarted; restarting it to connect");
             agent.stop().await;
         }
     }
