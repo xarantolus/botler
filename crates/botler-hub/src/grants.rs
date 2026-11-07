@@ -71,17 +71,36 @@ pub fn check(defs: &Definitions, def: &AgentDef, r: &Resource, mode: Option<Moun
 
 /// The environment `instance`'s grants add to its definition's, and the ids of those grants (to
 /// notice when they change).
+/// A granted secret group still missing a value is left out (the container would not start
+/// otherwise); the user was asked for it when it was granted, and it enters once entered.
 pub async fn environment(hub: &Hub, instance: &str) -> Result<(Environment, Vec<String>), HubError> {
-    let grants: Vec<Grant> = hub.store.live_grants(instance).await?.into_iter().filter(|g| g.stale.is_none()).collect();
+    let applied = hub.applied().await;
+    let with_values = hub.store.secret_names().await?;
+    let grants: Vec<Grant> = hub
+        .store
+        .live_grants(instance)
+        .await?
+        .into_iter()
+        .filter(|g| g.stale.is_none() && unfilled(&applied.defs, &with_values, &g.resource()).is_empty())
+        .collect();
     let held: Vec<(Resource, Option<MountMode>)> = grants.iter().map(|g| (g.resource(), g.mode)).collect();
     let mut env = botler_core::defs::environment_of(held.iter().map(|(r, m)| (r, *m)));
     // A granted service that serves MCP gives the chat its tools.
-    let applied = hub.applied().await;
     let (mcp, plain) =
         env.services.into_iter().partition(|s| applied.defs.jobs.get(s).is_some_and(|j| j.spec.serves_mcp));
     env.services = plain;
     env.mcp.extend::<Vec<String>>(mcp);
     Ok((env, grants.into_iter().map(|g| g.id).collect()))
+}
+
+/// The secrets of group `r` that have no value yet (none for other resources).
+fn unfilled(defs: &Definitions, with_values: &[String], r: &Resource) -> Vec<String> {
+    match defs.secret_groups.get(&r.name) {
+        Some(g) if r.kind == ResourceKind::Secret => {
+            g.secrets.iter().filter(|s| !with_values.contains(s)).cloned().collect()
+        }
+        _ => vec![],
+    }
 }
 
 /// Whether `instance` (its definition or a live grant) has `r` (a mount at least in `mode`).
@@ -107,6 +126,19 @@ pub async fn give(
 ) -> Result<Grant, HubError> {
     let g = hub.store.add_grant(holder, r, mode, by).await?;
     tracing::info!(holder, resource = %r, by, "granted");
+    let missing = unfilled(&hub.applied().await.defs, &hub.store.secret_names().await?, r);
+    if !missing.is_empty() {
+        let req = crate::secret_requests::SecretRequest {
+            group: r.name.clone(),
+            reason: format!("`{holder}` was given `{r}`, which has no value for {} yet.", missing.join(", ")),
+            description: None,
+            class: None,
+            add: vec![],
+            fill: missing,
+            remove: vec![],
+        };
+        crate::secret_requests::open(hub, holder, &req).await.map_err(|e| HubError::Io(std::io::Error::other(e)))?;
+    }
     if notify {
         changed(
             hub,

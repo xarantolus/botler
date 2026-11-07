@@ -32,6 +32,12 @@ class = "container"
 [[group.secret]]
 name = "GITHUB_SSH_KEY"
 file = "/home/agent/.ssh/id_ed25519"
+
+[[group]]
+name = "gh"
+class = "container"
+[[group.secret]]
+name = "GH_TOKEN"
 "#;
 
 const EVENTS: &str = r#"[[event]]
@@ -229,6 +235,26 @@ async fn request_access_asks_then_wakes_with_the_grant_and_always_writes_policy(
         op(&e, &agent(&other), "request_access", json!({"resource": "secret:imap", "reason": "mail"})).await.unwrap();
     grants::answer(&e.hub, ask["request_id"].as_str().unwrap(), grants::DENY).await.unwrap();
     assert!(e.hub.store.live_grants(&other).await.unwrap().iter().all(|g| g.resource != "imap"));
+}
+
+#[tokio::test]
+async fn a_granted_secret_without_a_value_does_not_stop_the_chat_and_is_asked_for() {
+    let e = setup().await;
+    let dev = router::new_instance(&e.hub, "dev", Some("botler"), Some("t")).await.unwrap();
+    message(&e, &dev, "hi").await;
+    run(&e).await;
+    let asked =
+        op(&e, &agent(&dev), "request_access", json!({"resource": "secret:gh", "reason": "api"})).await.unwrap();
+    grants::answer(&e.hub, asked["request_id"].as_str().unwrap(), grants::ALLOW_CHAT).await.unwrap();
+    run(&e).await;
+    assert!(!container_env(&e, &dev).contains_key("GH_TOKEN"), "running without it");
+    let fill = e.hub.store.open_dialogs().await.unwrap().into_iter().find(|d| d.kind == DialogKind::Credentials);
+    assert!(fill.unwrap().spec.unwrap()["fill"] == json!(["GH_TOKEN"]), "the user is asked for the value");
+
+    e.hub.store.set_secret(&e.hub.secret_key, "GH_TOKEN", "ghp").await.unwrap();
+    message(&e, &dev, "again").await;
+    run(&e).await;
+    assert_eq!(container_env(&e, &dev)["GH_TOKEN"], "ghp", "it enters once entered");
 }
 
 #[tokio::test]
