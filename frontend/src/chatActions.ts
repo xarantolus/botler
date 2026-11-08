@@ -1,6 +1,9 @@
 // Actions on a chat used from more than one place (its title bar, the command palette).
 
+import { useOverlay } from "@nuxt/ui/composables/useOverlay";
 import { call } from "./api/client";
+import ContextSizeModal from "./components/chat/ContextSizeModal.vue";
+import type { ContextAdvice } from "./generated/ContextAdvice";
 import { confirm } from "./confirm";
 import { notifyError, notifySuccess } from "./notify";
 import { refreshInstances, refreshSession } from "./store";
@@ -64,39 +67,25 @@ export async function pinChat(chat: string, pinned: boolean): Promise<void> {
 /** Set how large the chat's context grows before it is compacted, in thousands of tokens. */
 export async function setChatContext(chat: string, current: number | null): Promise<void> {
   // What the chat's last week would have cost at each size, when it ran enough calls to say.
-  let priced = "";
+  let advice: ContextAdvice | null = null;
   try {
-    const { advice } = await call("context_advice", { body: { chat } });
-    if (advice) {
-      const k = (t: number) => `${Math.round(t / 1000)}k`;
-      const sizes = advice.sizes.map(
-        (s) =>
-          `${k(s.compact_at)} $${s.cost_usd.toFixed(2)}${s.compact_at === advice.best ? " (cheapest)" : ""}${s.compact_at === advice.current ? " (now)" : ""}`,
-      );
-      priced = ` Its ${advice.calls} model calls of the last ${Math.max(1, Math.round(advice.days))} days, replayed at each size: ${sizes.join(" · ")}.`;
-    }
+    advice = (await call("context_advice", { body: { chat } })).advice;
   } catch (e) {
     notifyError("Could not price the context sizes", e);
   }
-  const ok = await confirm({
-    title: "Context size",
-    description:
-      "The chat is compacted (older messages summarised) once its context passes this many thousand tokens. More keeps more detail at hand; every model call resends it. Empty: its agent's default." +
-      priced,
-    confirmLabel: "Save",
-    reason: { label: "Thousand tokens", placeholder: "e.g. 120", value: current ? String(current / 1000) : "" },
-  });
-  if (!ok) return;
-  const k = ok.reason.trim();
-  if (k && !/^\d+$/.test(k)) return notifyError("Not a number", new Error(`"${k}" is not a whole number of thousands`));
+  contextModal ??= useOverlay().create(ContextSizeModal);
+  const ok: unknown = await contextModal.open({ current, advice });
+  if (!ok || typeof ok !== "object") return;
   try {
-    const r = await call("set_chat_context", { body: { chat, compact_at: k ? Number(k) * 1000 : null } });
+    const { compactAt } = ok as { compactAt: number | null };
+    const r = await call("set_chat_context", { body: { chat, compact_at: compactAt } });
     notifySuccess("Context size", r.note);
     await refreshInstances();
   } catch (e) {
     notifyError("Could not set the context size", e);
   }
 }
+let contextModal: ReturnType<ReturnType<typeof useOverlay>["create"]> | null = null;
 
 export async function renameChat(chat: string, current: string): Promise<void> {
   const ok = await confirm({
