@@ -97,6 +97,8 @@ pub struct Hub {
     pub id: String,
     /// The owner label of everything the hub creates ([`Paths::owner`]).
     pub owner: String,
+    /// When this hub process started: services cannot report heartbeats while it is down.
+    pub started: chrono::DateTime<chrono::Utc>,
     pub config: HubConfig,
     pub store: Store,
     pub repo: Repo,
@@ -181,6 +183,7 @@ impl Hub {
         Ok(Arc::new(Self {
             id,
             owner,
+            started: chrono::Utc::now(),
             paths,
             config,
             store,

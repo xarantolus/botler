@@ -100,7 +100,8 @@ async fn alive(hub: &Hub, run: &Run) -> Result<bool> {
 
 async fn check_heartbeat(hub: &Hub, def: &JobDef, run: &Run, now: DateTime<Utc>) -> Result<()> {
     let (Some(h), Some(started)) = (&def.spec.health, run.started_at) else { return Ok(()) };
-    let last = (started + h.grace.as_chrono()).max(run.heartbeat_at.unwrap_or(started));
+    // Nor while the hub was down: a service is due one from the hub's start at the earliest.
+    let last = (started + h.grace.as_chrono()).max(run.heartbeat_at.unwrap_or(started)).max(hub.started);
     let overdue = now > last + h.heartbeat.as_chrono();
     if h.command.is_empty() {
         if overdue {

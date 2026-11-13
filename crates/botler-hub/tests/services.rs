@@ -135,6 +135,26 @@ async fn missing_or_failed_heartbeats_are_unhealthy() {
 }
 
 #[tokio::test]
+async fn a_heartbeat_missed_while_the_hub_was_down_is_not_unhealthy() {
+    let e = with_service(&format!("{SVC}[health]\nheartbeat = \"1m\"\ngrace = \"1s\"\n")).await;
+    services::reconcile(&e.hub).await.unwrap();
+    let run = current(&e).await;
+    // It started and last beat long before this hub did: nobody was there to take the next.
+    let before = e.hub.started - Duration::minutes(20);
+    sqlx::query("UPDATE runs SET started_at = ? WHERE id = ?")
+        .bind(before.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        .bind(&run.id)
+        .execute(e.hub.store.pool())
+        .await
+        .unwrap();
+    e.hub.store.heartbeat(&run.id, before).await.unwrap();
+    services::reconcile_at(&e.hub, e.hub.started + Duration::seconds(50)).await.unwrap();
+    assert_eq!(e.hub.store.run(&run.id).await.unwrap().status, RunStatus::Running, "due one from the hub's start");
+    services::reconcile_at(&e.hub, e.hub.started + Duration::seconds(70)).await.unwrap();
+    assert_eq!(e.hub.store.run(&run.id).await.unwrap().status, RunStatus::Failed, "but then due");
+}
+
+#[tokio::test]
 async fn pause_stops_and_resume_restarts() {
     let e = with_service(SVC).await;
     services::reconcile(&e.hub).await.unwrap();
